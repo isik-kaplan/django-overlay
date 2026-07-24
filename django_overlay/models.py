@@ -34,6 +34,11 @@ _BASE_ONLY_META_OPTIONS = ("constraints", "indexes", "unique_together", "index_t
 # app code should reference. Reject instead of picking a bad default.
 _UNSUPPORTED_META_OPTIONS = ("permissions", "default_permissions")
 
+# Both models must agree on which app they belong to — Django can usually
+# infer this from the module either model is defined in, but an explicit
+# override needs to reach both, not just whichever side it happened to land on.
+_BOTH_META_OPTIONS = ("app_label",)
+
 
 def _split_meta_options(model_name: str, user_meta) -> tuple[dict, dict]:
     if user_meta is None:
@@ -45,7 +50,7 @@ def _split_meta_options(model_name: str, user_meta) -> tuple[dict, dict]:
             f"{model_name}.Meta.{unsupported[0]} isn't supported on an OverlayModel — there's no "
             "model to attach it to that makes sense (see _UNSUPPORTED_META_OPTIONS)."
         )
-    base_options = {k: v for k, v in options.items() if k in _BASE_ONLY_META_OPTIONS}
+    base_options = {k: v for k, v in options.items() if k in _BASE_ONLY_META_OPTIONS + _BOTH_META_OPTIONS}
     view_options = {k: v for k, v in options.items() if k not in _BASE_ONLY_META_OPTIONS}
     return base_options, view_options
 

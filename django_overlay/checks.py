@@ -39,9 +39,10 @@ def check_no_plain_fk_to_overlay_models(app_configs, **kwargs):
                 )
                 continue
 
+            # Every concrete, non-M2M relation field Django has is a
+            # ForeignKey or OneToOneField (or a subclass), so this is
+            # already effectively "is a plain FK/O2O".
             if not getattr(field, "concrete", False):
-                continue
-            if not (getattr(field, "many_to_one", False) or getattr(field, "one_to_one", False)):
                 continue
             if isinstance(field, OverlayForeignKey):
                 continue

@@ -313,3 +313,12 @@ a separate invocation, not part of the command above:
 DJANGO_SETTINGS_MODULE=tests.django_tenants_settings POSTGRES_USER=postgres \
   uv run pytest tests/test_tenants -o addopts="" --create-db
 ```
+
+The main suite (not `test_tenants`, which needs its own separate coverage
+run) is 100% line+branch coverage, enforced automatically:
+
+```bash
+POSTGRES_USER=postgres uv run pytest --cov=django_overlay --cov-report=term-missing
+```
+
+Fails if coverage drops below 100% (`fail_under` in `pyproject.toml`).

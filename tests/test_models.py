@@ -1,5 +1,6 @@
 import pytest
 from django.core.exceptions import ImproperlyConfigured
+from django.db import models
 from django.test import override_settings
 
 from django_overlay.models import (
@@ -139,6 +140,39 @@ def test_meta_default_permissions_is_rejected():
 
 def test_base_model_gets_no_default_permissions():
     assert Person.base_table()._meta.default_permissions == ()
+
+
+def test_a_user_declared_id_field_is_not_overridden_by_the_strategy_default():
+    class HasCustomId(OverlayModel):
+        id = models.CharField(primary_key=True, max_length=20)
+
+        class Meta:
+            app_label = "testapp"
+
+        class OverlayMeta(OverlayMeta):  # defaults to UUID4, which would inject a UUIDField
+            table_name = "has_custom_id"
+
+            @staticmethod
+            def get_source():
+                return None
+
+    assert isinstance(HasCustomId._meta.get_field("id"), models.CharField)
+
+
+def test_meta_app_label_reaches_both_the_base_and_view_model():
+    class HasExplicitAppLabel(OverlayModel):
+        class Meta:
+            app_label = "testapp"
+
+        class OverlayMeta(OverlayMeta):
+            table_name = "has_explicit_app_label"
+
+            @staticmethod
+            def get_source():
+                return None
+
+    assert HasExplicitAppLabel._meta.app_label == "testapp"
+    assert HasExplicitAppLabel.base_table()._meta.app_label == "testapp"
 
 
 def test_abstract_overlaymodel_subclass_is_not_split():

@@ -2,7 +2,8 @@ import pytest
 from django.core.management import call_command
 from django.db import connection
 
-from tests.testapp.models import RemovableFkTest, ReservedWord, UniqueTest
+from tests.testapp.models import RemovableFkTest, RemovableUniqueTest, ReservedWord, UniqueTest
+from tests.testapp_shared.models import RemovableUniqueTestSource
 
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -53,3 +54,23 @@ def test_reversing_a_field_removal_does_not_restore_its_trigger():
         call_command("migrate", "testapp", verbosity=0)
 
     assert RemovableFkTest.objects.create(label="forward-again").label == "forward-again"
+
+
+def test_reversing_a_constraint_removal_does_not_restore_its_trigger():
+    # Same as above, but for RemoveOverlayUniqueConstraint.backward().
+    try:
+        call_command("migrate", "testapp", "0012_removableuniquetest", verbosity=0)
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT conname FROM pg_constraint WHERE conname = 'removableuniquetest_ssn_unique'",
+            )
+            assert cursor.fetchone() is not None
+
+            cursor.execute("SELECT tgname FROM pg_trigger WHERE tgname LIKE 'overlayunique_removableuniquetest%%'")
+            assert cursor.fetchone() is None
+    finally:
+        call_command("migrate", "testapp", verbosity=0)
+
+    RemovableUniqueTestSource.objects.create(ssn="777-77-7777")
+    assert RemovableUniqueTest.objects.create(ssn="777-77-7777").ssn == "777-77-7777"

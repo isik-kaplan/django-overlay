@@ -1,5 +1,6 @@
 import pytest
 from django.core.management import call_command
+from django.core.management.base import CommandError
 
 from django_overlay.sync import resync_view
 from tests.testapp.models import CURRENT_PROVIDER, SwitchableSourceTest
@@ -39,7 +40,10 @@ def test_resync_overlay_views_management_command_does_the_same():
 
 
 def test_resync_overlay_views_rejects_a_malformed_label():
-    from django.core.management.base import CommandError
-
     with pytest.raises(CommandError):
         call_command("resync_overlay_views", "not-a-valid-label")
+
+
+def test_resync_overlay_views_rejects_an_unknown_model():
+    with pytest.raises(CommandError):
+        call_command("resync_overlay_views", "testapp.NotARealModel")

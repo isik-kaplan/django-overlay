@@ -25,6 +25,7 @@ Repository = "https://github.com/isik-kaplan/django-overlay"
 dev-dependencies = [
     "pytest>=8.0.0",
     "pytest-django>=4.9.0",
+    "pytest-cov>=5.0.0",
     "psycopg[binary]>=3.2.0",
     "pre-commit>=3.0.0",
     "ruff>=0.9.0",
@@ -62,10 +63,15 @@ addopts = "--ignore=tests/test_tenants"
 [tool.coverage.run]
 source = ["django_overlay"]
 branch = true
-omit = ["*/migrations/*"]
+# sql_templates/*.sql.j2 isn't Python, but Jinja compiles templates with
+# their real filename attached (for tracebacks), so a couple of the
+# simplest ones happen to also parse as valid Python expressions and would
+# otherwise show up in the report by accident.
+omit = ["*/migrations/*", "*/sql_templates/*"]
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 100
 exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",

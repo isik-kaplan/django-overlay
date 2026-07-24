@@ -402,6 +402,20 @@ class RemovableFkTest(models.Model):
         app_label = "testapp"
 
 
+class RemovableUniqueTest(OverlayModel):
+    """The ssn OverlayUniqueConstraint existed in migration 0012 and was
+    removed in 0013 — exercises RemoveOverlayUniqueConstraint."""
+
+    ssn = models.CharField(max_length=20)
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "removableuniquetest"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_removableuniquetestsource")
+
+
 # Mutable on purpose: stands in for however a real app resolves the
 # current tenant's vendor (settings, a config table, connection.schema_name...).
 CURRENT_PROVIDER = {"value": "provider_a"}

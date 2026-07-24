@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import patch
 
 from django_overlay.uuid7 import uuid7
 
@@ -20,3 +21,9 @@ def test_consecutive_uuid7_calls_have_non_decreasing_timestamp_prefixes():
     first = uuid7()
     second = uuid7()
     assert (first.int >> 80) <= (second.int >> 80)
+
+
+def test_uuid7_uses_the_stdlib_implementation_when_available():
+    sentinel = uuid.uuid4()
+    with patch("uuid.uuid7", return_value=sentinel, create=True):
+        assert uuid7() is sentinel

@@ -121,3 +121,10 @@ class FilteredSourceTestSource(models.Model):
 
     class Meta:
         app_label = "testapp_shared"
+
+
+class RemovableUniqueTestSource(models.Model):
+    ssn = models.CharField(max_length=20)
+
+    class Meta:
+        app_label = "testapp_shared"

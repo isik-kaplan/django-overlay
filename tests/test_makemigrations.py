@@ -1,7 +1,11 @@
-from django.db import migrations
+from unittest.mock import patch
+
+from django.db import migrations, models
 
 from django_overlay.constraints import OverlayUniqueConstraint
+from django_overlay.fields import OverlayForeignKey
 from django_overlay.management.commands.makemigrations import (
+    Command,
     _overlay_base_to_view,
     _overlay_foreign_key_fields,
     extra_ops_for_migration,
@@ -83,8 +87,6 @@ def test_adding_an_overlay_unique_constraint_to_an_existing_model_is_detected():
 
 
 def test_a_plain_unique_constraint_is_not_detected():
-    from django.db import models
-
     base_to_view = _overlay_base_to_view("testapp")
     constraint = models.UniqueConstraint(fields=["ssn"], name="plain_constraint")
     op = migrations.AddConstraint(model_name="UniqueTestBase", constraint=constraint)
@@ -132,3 +134,119 @@ def test_removing_a_constraint_on_a_non_overlay_model_is_ignored():
     extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
 
     assert not any(isinstance(o, RemoveOverlayUniqueConstraint) for o in extra_ops)
+
+
+def test_adding_a_field_to_an_existing_model_triggers_a_constraint():
+    op = migrations.AddField(
+        model_name="AddressNote",
+        name="address",
+        field=OverlayForeignKey("Address", on_delete=models.CASCADE),
+    )
+
+    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+
+    assert any(
+        isinstance(o, AddOverlayConstraint) and o.model_name == "AddressNote" and o.field_name == "address"
+        for o in extra_ops
+    )
+
+
+def test_creating_a_model_with_an_overlay_foreign_key_field_triggers_a_constraint():
+    op = migrations.CreateModel(
+        name="AddressNote",
+        fields=[
+            ("id", models.AutoField(primary_key=True)),
+            ("address", OverlayForeignKey("Address", on_delete=models.CASCADE)),
+        ],
+    )
+
+    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+
+    assert any(
+        isinstance(o, AddOverlayConstraint) and o.model_name == "AddressNote" and o.field_name == "address"
+        for o in extra_ops
+    )
+
+
+def test_adding_an_overlay_unique_constraint_to_a_brand_new_model_is_detected():
+    base_to_view = _overlay_base_to_view("testapp")
+    constraint = OverlayUniqueConstraint(fields=["ssn"], name="fake_constraint")
+    op = migrations.CreateModel(
+        name="UniqueTestBase",
+        fields=[("ssn", models.CharField(max_length=20))],
+        options={"constraints": [constraint]},
+    )
+
+    extra_ops = extra_ops_for_migration("testapp", [op], base_to_view, set())
+
+    assert any(
+        isinstance(o, AddOverlayUniqueConstraint)
+        and o.model_name == "UniqueTest"
+        and o.constraint_name == "fake_constraint"
+        for o in extra_ops
+    )
+
+
+def test_adding_a_unique_constraint_on_a_non_overlay_model_is_ignored():
+    constraint = OverlayUniqueConstraint(fields=["ssn"], name="fake_constraint")
+    op = migrations.AddConstraint(model_name="SomeUnrelatedModel", constraint=constraint)
+
+    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+
+    assert not any(isinstance(o, AddOverlayUniqueConstraint) for o in extra_ops)
+
+
+# The next three are contrived (a real migration wouldn't duplicate an
+# operation like this), but they're valid input to the pure function and
+# exercise the dedup guards directly: whichever operation notices a given
+# key first wins, later ones for the same key are no-ops.
+def test_the_same_fk_field_added_twice_only_adds_one_constraint():
+    ops = [
+        migrations.AddField(
+            model_name="AddressNote", name="address", field=OverlayForeignKey("Address", on_delete=models.CASCADE)
+        ),
+        migrations.AddField(
+            model_name="AddressNote", name="address", field=OverlayForeignKey("Address", on_delete=models.CASCADE)
+        ),
+    ]
+
+    extra_ops = extra_ops_for_migration("testapp", ops, {}, set())
+
+    assert len([o for o in extra_ops if isinstance(o, AddOverlayConstraint)]) == 1
+
+
+def test_an_fk_field_added_and_then_seen_again_via_create_model_only_adds_one_constraint():
+    ops = [
+        migrations.AddField(model_name="Foo", name="bar", field=OverlayForeignKey("Address", on_delete=models.CASCADE)),
+        migrations.CreateModel(name="Foo", fields=[("bar", OverlayForeignKey("Address", on_delete=models.CASCADE))]),
+    ]
+
+    extra_ops = extra_ops_for_migration("testapp", ops, {}, set())
+
+    assert len([o for o in extra_ops if isinstance(o, AddOverlayConstraint)]) == 1
+
+
+def test_the_same_new_unique_constraint_appearing_twice_only_adds_it_once():
+    base_to_view = _overlay_base_to_view("testapp")
+    constraint = OverlayUniqueConstraint(fields=["ssn"], name="fake_constraint")
+    ops = [
+        migrations.AddConstraint(model_name="UniqueTestBase", constraint=constraint),
+        migrations.AddConstraint(model_name="UniqueTestBase", constraint=constraint),
+    ]
+
+    extra_ops = extra_ops_for_migration("testapp", ops, base_to_view, set())
+
+    assert len([o for o in extra_ops if isinstance(o, AddOverlayUniqueConstraint)]) == 1
+
+
+def test_command_write_migration_files_appends_extra_ops_before_delegating():
+    op = migrations.RenameField(model_name="MetaTestBase", old_name="name", new_name="full_name")
+    migration = migrations.Migration("some_migration", "testapp")
+    migration.operations = [op]
+    changes = {"testapp": [migration]}
+
+    with patch("django.core.management.commands.makemigrations.Command.write_migration_files") as base_write:
+        Command().write_migration_files(changes)
+
+    assert any(isinstance(o, SyncOverlayView) and o.model_name == "MetaTest" for o in migration.operations)
+    base_write.assert_called_once_with(changes)
