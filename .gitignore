@@ -1,0 +1,21 @@
+# Python
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+.hypothesis
+
+# IDEs & Editors
+.idea
+
+# Frameworks & Libraries
+dist
+poetry.lock
+
+# venv
+.venv
+
+# Project Specific
+# ETC

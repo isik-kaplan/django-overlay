@@ -1,0 +1,19 @@
+CREATE OR REPLACE FUNCTION "{{ tenant_schema }}".{{ function_name }}() RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.{{ column_ident }} IS NOT NULL AND NOT ({{ checks }}) THEN
+    -- %% is doubled: this string passes through psycopg's placeholder scanner
+    -- even with no bound params. ERRCODE 23503 makes Django raise
+    -- IntegrityError here, same as a real FK violation would.
+    RAISE EXCEPTION 'overlay FK violation: %%.%% = %% not found in any target table',
+      TG_TABLE_NAME, '{{ column }}', NEW.{{ column_ident }}
+      USING ERRCODE = '23503';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS {{ trigger_name }} ON "{{ tenant_schema }}"."{{ referencing_table }}";
+CREATE CONSTRAINT TRIGGER {{ trigger_name }}
+AFTER INSERT OR UPDATE ON "{{ tenant_schema }}"."{{ referencing_table }}"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION "{{ tenant_schema }}".{{ function_name }}();
