@@ -19,9 +19,8 @@ def check_no_plain_fk_to_overlay_models(app_configs, **kwargs):
             if related_model is None or not getattr(related_model, "_is_overlay_view_model", False):
                 continue
 
-            # M2M fields are never "concrete", even the declaring side, so
-            # unlike FK/O2O that can't be used to skip the reverse
-            # accessor — isinstance does, since that's a ManyToManyRel.
+            # M2M fields are never "concrete" (even the declaring side), so
+            # check the type directly instead.
             if isinstance(field, models.ManyToManyField):
                 if not field.remote_field.through._meta.auto_created:
                     continue

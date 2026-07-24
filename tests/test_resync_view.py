@@ -26,10 +26,8 @@ def test_resync_view_repoints_the_view_at_a_newly_selected_source():
     resync_view(SwitchableSourceTest)
     ProviderBPersonSource.objects.create(first_name="From Provider B")
 
-    # Same view id as before (both tables' first row) — now resolves
-    # through the newly selected source instead, proving the view was
-    # actually rebuilt against it, not just additively unioned, with no
-    # migration involved.
+    # Same view id, now resolving through the new source — proves the view
+    # was rebuilt against it, not just unioned with the old one.
     assert SwitchableSourceTest.objects.get(id=view_id).first_name == "From Provider B"
 
 

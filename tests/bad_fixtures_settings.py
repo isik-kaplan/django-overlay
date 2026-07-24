@@ -1,9 +1,6 @@
-"""Same as tests.django_settings, plus tests.bad_fixtures_app — a plain
-ForeignKey and a plain ManyToManyField pointing at overlay view models.
-Booting Django under this settings module is expected to fail: importing it
-triggers django_overlay.apps.DjangoOverlayConfig.ready(), which raises
-ImproperlyConfigured rather than let the process start. Used from
-tests/test_checks.py via a subprocess, not as a normal pytest invocation."""
+"""Same as tests.django_settings, plus tests.bad_fixtures_app. Booting
+under this settings module is expected to fail — see test_checks.py,
+which uses it via a subprocess, not as a normal pytest invocation."""
 
 import os
 

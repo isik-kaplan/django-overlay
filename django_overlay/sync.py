@@ -1,6 +1,7 @@
 from django.db import connections
 
 from . import sql as overlay_sql
+from ._templating import render
 
 
 def _columns_for(model) -> list:
@@ -13,17 +14,20 @@ def resolve_schema(connection) -> str:
     if schema_name:
         return schema_name
     with connection.cursor() as cursor:
-        cursor.execute("SELECT current_schema()")
+        cursor.execute(render("introspection/current_schema.sql.j2"))
         return cursor.fetchone()[0]
 
 
-def sync_view(model, tenant_schema: str, execute) -> None:
-    """Regenerates `model`'s view + its three INSTEAD OF triggers by calling
-    `execute(sql)` for each, using the model's current field list and
-    get_source(). Shared by the SyncOverlayView migration operation and
-    resync_view() — the only difference between them is what `execute` is
-    (a schema_editor's, or a plain cursor's)."""
-    columns = _columns_for(model)
+def sync_view(model, tenant_schema: str, execute, columns=None) -> None:
+    """Regenerates `model`'s view + its three INSTEAD OF triggers. Shared by
+    SyncOverlayView and resync_view() — they just differ in what `execute`
+    is (a schema_editor's or a plain cursor's).
+
+    SyncOverlayView passes `columns` from migration-historical state rather
+    than the live model: replaying migrations on a fresh database re-runs
+    every past SyncOverlayView call, and each has to reflect the columns
+    that existed at that point in history, not today's field list."""
+    columns = columns if columns is not None else _columns_for(model)
     base_table = model._base_model._meta.db_table
     view_name = model._meta.db_table
     source = model.get_source()

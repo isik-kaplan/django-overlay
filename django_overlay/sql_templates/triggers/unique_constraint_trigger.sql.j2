@@ -1,0 +1,38 @@
+CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}() RETURNS TRIGGER AS $$
+BEGIN
+  -- Only re-check on UPDATE if a constrained column actually changed.
+  IF (TG_OP = 'INSERT' OR (
+        {% for c in columns -%}
+        NEW.{{ c | qi }} IS DISTINCT FROM OLD.{{ c | qi }}{% if not loop.last %} OR {% endif %}
+        {%- endfor %}
+      ))
+     AND (
+       {% for c in columns -%}
+       NEW.{{ c | qi }} IS NOT NULL{% if not loop.last %} AND {% endif %}
+       {%- endfor %}
+     )
+     -- Exclude this row's own source origin, or it'd conflict with itself.
+     AND EXISTS (
+       SELECT 1 FROM {{ source.schema | qi }}.{{ source.table | qi }}
+       WHERE (
+         {% for c in columns -%}
+         {{ c | qi }} = NEW.{{ c | qi }}{% if not loop.last %} AND {% endif %}
+         {%- endfor %}
+       )
+       AND {{ source.id_column | qi }} != {{ "-" if negate }}NEW.{{ pk_column | qi }}
+     )
+  THEN
+    -- %% doubled so psycopg doesn't treat it as a bind placeholder.
+    RAISE EXCEPTION 'overlay unique violation: a value in %% already exists in the source data',
+      TG_TABLE_NAME
+      USING ERRCODE = '23505';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS {{ trigger_name }} ON {{ tenant_schema | qi }}.{{ base_table | qi }};
+CREATE CONSTRAINT TRIGGER {{ trigger_name }}
+AFTER INSERT OR UPDATE ON {{ tenant_schema | qi }}.{{ base_table | qi }}
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}();

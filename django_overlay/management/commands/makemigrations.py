@@ -5,15 +5,19 @@ from django.db import migrations
 from ...constraints import OverlayUniqueConstraint
 from ...fields import OverlayForeignKey
 from ...models import OverlayModelBase
-from ...operations import AddOverlayConstraint, AddOverlayUniqueConstraint, SyncOverlayView
+from ...operations import (
+    AddOverlayConstraint,
+    AddOverlayUniqueConstraint,
+    RemoveOverlayConstraint,
+    RemoveOverlayUniqueConstraint,
+    SyncOverlayView,
+)
 
 
-# Operation types whose `references_model`/`references_field` are actually
-# implemented (as opposed to the `Operation` base class default, which
-# unconditionally returns True) — verified against the installed Django
-# version; re-check on upgrade. `IndexOperation` subclasses (AddConstraint,
-# RemoveConstraint, ...) fall in the "always True" bucket, so they're
-# handled separately below by direct attribute access instead.
+# Operation types whose references_model/references_field are actually
+# implemented (the Operation base class default just returns True always).
+# IndexOperation subclasses (AddConstraint, RemoveConstraint) fall in that
+# "always True" bucket, so they're handled separately below.
 _FIELD_SHAPE_OPS = (
     migrations.AddField,
     migrations.RemoveField,
@@ -59,12 +63,14 @@ def _new_overlay_unique_constraints(op):
 
 
 def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
-    """The SyncOverlayView/AddOverlayConstraint/AddOverlayUniqueConstraint
-    operations one migration's operations should get appended, given this
-    app's current OverlayModel registry (`base_to_view`, `fk_fields` — see
-    `_overlay_base_to_view`/`_overlay_foreign_key_fields`). Split out from
-    `Command.write_migration_files` so it's directly testable without
-    driving Django's file-writing/interactive-questioner machinery."""
+    """The extra operations one migration should get, given this app's
+    OverlayModel registry (see _overlay_base_to_view/_overlay_foreign_key_fields).
+    Split out of Command.write_migration_files so it's directly testable.
+
+    RemoveField/RemoveConstraint are handled unconditionally, not keyed
+    against the registry: the removed field/constraint is already gone from
+    live code by the time this runs, so there's nothing to check its type
+    against. DROP TRIGGER IF EXISTS makes appending them speculatively safe."""
     extra_ops = []
     synced_views = set()
     added_constraints = set()
@@ -76,6 +82,14 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
                 if view_name not in synced_views and op.references_model(base_name, app_label):
                     synced_views.add(view_name)
                     extra_ops.append(SyncOverlayView(app_label, view_name))
+
+        if isinstance(op, migrations.RemoveField):
+            extra_ops.append(RemoveOverlayConstraint(app_label, op.model_name, op.name))
+
+        if isinstance(op, migrations.RemoveConstraint):
+            view_name = base_to_view.get(op.model_name.lower())
+            if view_name is not None:
+                extra_ops.append(RemoveOverlayUniqueConstraint(app_label, view_name, op.name))
 
         if isinstance(op, migrations.AddField) and isinstance(op.field, OverlayForeignKey):
             key = (op.model_name.lower(), op.name)
@@ -110,14 +124,9 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
 
 class Command(BaseCommand):
     """Same as Django's makemigrations, except any operation touching an
-    OverlayModel's base table gets a SyncOverlayView appended, any
-    OverlayForeignKey field gets an AddOverlayConstraint appended, and any
-    OverlayUniqueConstraint gets an AddOverlayUniqueConstraint appended.
-
-    Uses `Operation.references_model`/`references_field` where they're
-    correctly implemented (covers renames, not just field add/remove/alter),
-    keyed against the app's actual OverlayModel registry rather than a
-    hand-maintained operation-type list — re-check on a Django upgrade."""
+    OverlayModel's base table gets a SyncOverlayView appended, and any
+    OverlayForeignKey/OverlayUniqueConstraint add/rename/remove gets its
+    matching Add/RemoveOverlay(Unique)Constraint appended."""
 
     def write_migration_files(self, changes, *args, **kwargs):
         for app_label, app_migrations in changes.items():

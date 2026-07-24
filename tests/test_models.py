@@ -105,3 +105,47 @@ def test_default_strategy_rejects_a_non_strategy_value():
     with override_settings(DJANGO_OVERLAY_DEFAULT_STRATEGY="negative_id"):
         with pytest.raises(ImproperlyConfigured, match="DJANGO_OVERLAY_DEFAULT_STRATEGY"):
             _default_strategy()
+
+
+def test_meta_permissions_is_rejected():
+    with pytest.raises(OverlayConfigurationError, match="permissions"):
+
+        class HasPermissions(OverlayModel):
+            class Meta:
+                permissions = [("can_do_x", "Can do x")]
+
+            class OverlayMeta(OverlayMeta):
+                table_name = "has_permissions"
+
+                @staticmethod
+                def get_source():
+                    return None
+
+
+def test_meta_default_permissions_is_rejected():
+    with pytest.raises(OverlayConfigurationError, match="default_permissions"):
+
+        class HasDefaultPermissions(OverlayModel):
+            class Meta:
+                default_permissions = ()
+
+            class OverlayMeta(OverlayMeta):
+                table_name = "has_default_permissions"
+
+                @staticmethod
+                def get_source():
+                    return None
+
+
+def test_base_model_gets_no_default_permissions():
+    assert Person.base_table()._meta.default_permissions == ()
+
+
+def test_abstract_overlaymodel_subclass_is_not_split():
+    class AbstractOverlay(OverlayModel):
+        class Meta:
+            abstract = True
+
+    assert AbstractOverlay._meta.abstract is True
+    assert not hasattr(AbstractOverlay, "_base_model")
+    assert not hasattr(AbstractOverlay, "_overlay_meta")

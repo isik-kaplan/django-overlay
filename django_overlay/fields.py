@@ -21,18 +21,23 @@ class OverlayForeignKey(models.ForeignKey):
     def trigger_name(self, model) -> str:
         return f"overlayfk_{model._meta.db_table}_{self.column}"[:63]
 
-    def target_tables(self):
-        """[(table, id column, negate), ...]: the target's base table
-        (never negated) plus its configured source, if any (negated for a
-        NEGATIVE_ID target, since the referencing row stores the negated,
-        view-presented id)."""
-        target = self.remote_field.model
-        tables = [(target._base_model._meta.db_table, "id", False)]
-        source = target.get_source()
-        if source is not None:
-            negate = negates_source_ids(target._overlay_meta.strategy)
-            tables.append((source.qualified_name, source.id_column, negate))
-        return tables
+    def target_tables(self, tenant_schema: str) -> list[dict]:
+        """The target's base table plus its source, if any — see target_tables_for()."""
+        return target_tables_for(self.remote_field.model, tenant_schema)
+
+
+def target_tables_for(target, tenant_schema: str) -> list[dict]:
+    """[{"schema", "table", "id_column", "negate"}, ...] for `target`'s base
+    table (never negated) plus its source, if any (negated for a
+    NEGATIVE_ID target). Takes the target model directly, not `self`, so a
+    migration operation can call it against a *live* model even when the
+    referencing field only exists in migration-historical state."""
+    tables = [{"schema": tenant_schema, "table": target._base_model._meta.db_table, "id_column": "id", "negate": False}]
+    source = target.get_source()
+    if source is not None:
+        negate = negates_source_ids(target._overlay_meta.strategy)
+        tables.append({"schema": source.schema, "table": source.table, "id_column": source.id_column, "negate": negate})
+    return tables
 
 
 class OverlayOneToOneField(OverlayForeignKey, models.OneToOneField):

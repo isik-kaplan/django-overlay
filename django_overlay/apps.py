@@ -8,16 +8,10 @@ class DjangoOverlayConfig(AppConfig):
     default_auto_field = "django.db.models.AutoField"
 
     def ready(self):
-        from . import checks  # registers the system check (manage.py check) too
+        from . import checks  # also registers the manage.py check
 
-        # By the time any app's ready() runs, every app's models module has
-        # already been imported (Django populates apps in two full passes —
-        # models, then ready() — before either pass moves to the next app),
-        # so this sees the complete model graph regardless of INSTALLED_APPS
-        # order. Raising here means an unsafe FK/M2M against an overlay view
-        # model fails the moment django.setup() runs — runserver, migrate, a
-        # gunicorn/uwsgi worker, a Celery worker, manage.py shell, all of it —
-        # not just when someone remembers to run manage.py check.
+        # Runs on every process boot, not just `manage.py check` — a bad
+        # FK/M2M against an overlay model should fail loudly right away.
         errors = checks.check_no_plain_fk_to_overlay_models(None)
         if errors:
             raise ImproperlyConfigured(

@@ -286,6 +286,9 @@ class MetaTest(OverlayModel):
         ordering = ["name"]
         verbose_name = "meta test"
         constraints = [models.CheckConstraint(condition=models.Q(name__gt=""), name="metatest_name_not_empty")]
+        indexes = [models.Index(fields=["name"], name="metatest_name_idx")]
+        unique_together = [("name",)]
+        db_table_comment = "Meta forwarding test fixture"
 
     class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
         table_name = "metatest"
@@ -295,8 +298,53 @@ class MetaTest(OverlayModel):
             return None
 
 
+class MetaTestNote(models.Model):
+    """Bonus FK table pointing at a source-less overlay model."""
+
+    meta_test = OverlayForeignKey(MetaTest, on_delete=models.CASCADE, related_name="notes")
+    text = models.TextField()
+
+    class Meta:
+        app_label = "testapp"
+
+
+class NullableFkTest(models.Model):
+    address = OverlayForeignKey(Address, on_delete=models.SET_NULL, null=True, related_name="nullable_fk_tests")
+
+    class Meta:
+        app_label = "testapp"
+
+
+class UniqueTestNoSource(OverlayModel):
+    """OverlayUniqueConstraint with no source — native UNIQUE only, no trigger."""
+
+    ssn = models.CharField(max_length=20)
+
+    class Meta:
+        constraints = [OverlayUniqueConstraint(fields=["ssn"], name="uniquetestnosource_ssn_unique")]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "uniquetestnosource"
+
+        @staticmethod
+        def get_source():
+            return None
+
+
+class FilteredSourceTest(OverlayModel):
+    first_name = models.CharField(max_length=100)
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "filteredsourcetest"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_filteredsourcetestsource", extra_where="active")
+
+
 class UniqueTest(OverlayModel):
     ssn = models.CharField(max_length=20)
+    notes = models.CharField(max_length=100, blank=True, default="")
 
     class Meta:
         constraints = [OverlayUniqueConstraint(fields=["ssn"], name="uniquetest_ssn_unique")]
@@ -344,10 +392,18 @@ class RenameFkTest(models.Model):
         app_label = "testapp"
 
 
-# Module-level, mutable on purpose: stands in for "however a real app
-# resolves which vendor a tenant is currently provisioned against" (a
-# settings lookup, a config table, connection.schema_name under
-# django_tenants, ...) — get_source() itself doesn't care how.
+class RemovableFkTest(models.Model):
+    """`address` existed in migration 0010 and was removed in 0011 —
+    exercises RemoveOverlayConstraint."""
+
+    label = models.CharField(max_length=100, default="x")
+
+    class Meta:
+        app_label = "testapp"
+
+
+# Mutable on purpose: stands in for however a real app resolves the
+# current tenant's vendor (settings, a config table, connection.schema_name...).
 CURRENT_PROVIDER = {"value": "provider_a"}
 
 _PROVIDER_TABLES = {

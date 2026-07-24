@@ -1,0 +1,4 @@
+# Bare SQL expressions (not full statements) spliced into a larger
+# statement elsewhere — there's no standalone statement here for sqlfluff
+# to parse on its own.
+django_overlay/sql_templates/pk_defaults/

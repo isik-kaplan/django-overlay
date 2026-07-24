@@ -87,6 +87,7 @@ class ReservedWordSource(models.Model):
 
 class UniqueTestSource(models.Model):
     ssn = models.CharField(max_length=20)
+    notes = models.CharField(max_length=100, blank=True, default="")
 
     class Meta:
         app_label = "testapp_shared"
@@ -109,6 +110,14 @@ class ProviderAPersonSource(models.Model):
 
 class ProviderBPersonSource(models.Model):
     first_name = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "testapp_shared"
+
+
+class FilteredSourceTestSource(models.Model):
+    first_name = models.CharField(max_length=100)
+    active = models.BooleanField(default=True)
 
     class Meta:
         app_label = "testapp_shared"

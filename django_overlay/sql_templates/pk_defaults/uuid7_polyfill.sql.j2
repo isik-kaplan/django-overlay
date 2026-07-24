@@ -1,0 +1,8 @@
+(SELECT (
+    lpad(to_hex(floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint), 12, '0') ||
+    '7' ||
+    substr(src, 1, 3) ||
+    substr(src, 17, 1) ||
+    substr(src, 4, 1) ||
+    substr(src, 18, 14)
+)::uuid FROM (SELECT replace(gen_random_uuid()::text, '-', '') AS src) AS s)

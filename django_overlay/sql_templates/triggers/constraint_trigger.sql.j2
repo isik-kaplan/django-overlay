@@ -1,0 +1,26 @@
+CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}() RETURNS TRIGGER AS $$
+BEGIN
+  -- Only re-check on UPDATE if this column actually changed.
+  IF (TG_OP = 'INSERT' OR NEW.{{ column | qi }} IS DISTINCT FROM OLD.{{ column | qi }})
+     AND NEW.{{ column | qi }} IS NOT NULL
+     AND NOT (
+       {% for t in target_tables -%}
+       EXISTS (SELECT 1 FROM {{ t.schema | qi }}.{{ t.table | qi }} WHERE {{ t.id_column | qi }} = {{ "-" if t.negate }}NEW.{{ column | qi }})
+       {%- if not loop.last %} OR {% endif %}
+       {% endfor -%}
+     )
+  THEN
+    -- %% doubled so psycopg doesn't treat it as a bind placeholder.
+    RAISE EXCEPTION 'overlay FK violation: %%.%% = %% not found in any target table',
+      TG_TABLE_NAME, '{{ column }}', NEW.{{ column | qi }}
+      USING ERRCODE = '23503';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS {{ trigger_name }} ON {{ tenant_schema | qi }}.{{ referencing_table | qi }};
+CREATE CONSTRAINT TRIGGER {{ trigger_name }}
+AFTER INSERT OR UPDATE ON {{ tenant_schema | qi }}.{{ referencing_table | qi }}
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}();

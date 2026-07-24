@@ -1,0 +1,13 @@
+CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}() RETURNS TRIGGER AS $$
+BEGIN
+  -- Hard delete. Swap for a re-materialize-from-source step if deletes
+  -- should instead revert to showing the untouched source row.
+  DELETE FROM {{ tenant_schema | qi }}.{{ base_table | qi }} WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS {{ view_name }}_delete_trigger ON {{ tenant_schema | qi }}.{{ view_name | qi }};
+CREATE TRIGGER {{ view_name }}_delete_trigger
+INSTEAD OF DELETE ON {{ tenant_schema | qi }}.{{ view_name | qi }}
+FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}();

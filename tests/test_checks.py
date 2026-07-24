@@ -9,11 +9,9 @@ from django_overlay.checks import check_no_plain_fk_to_overlay_models
 
 @pytest.fixture(scope="module")
 def bad_fixtures_boot_result():
-    """Actually boots Django with tests.bad_fixtures_app installed, in a
-    subprocess so its expected ImproperlyConfigured crash doesn't take out
-    this test process too — proves DjangoOverlayConfig.ready() itself
-    refuses to start, not just that the check function can detect the
-    problem if something remembers to call it."""
+    """Boots Django with tests.bad_fixtures_app installed, in a subprocess
+    so its expected ImproperlyConfigured crash doesn't take out this test
+    process too."""
     env = {**os.environ, "DJANGO_SETTINGS_MODULE": "tests.bad_fixtures_settings"}
     return subprocess.run(
         [sys.executable, "-c", "import django; django.setup()"],

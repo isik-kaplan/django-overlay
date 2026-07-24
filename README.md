@@ -81,15 +81,17 @@ Three `INSTEAD OF` triggers on the view make it writable:
 - **INSERT** — assigns an id, inserts into the base table
 - **UPDATE** — updates the base table row if it exists there already,
   otherwise inserts one built from the new values (copy-up)
-- **DELETE** — deletes the base table row (see `sql_templates/instead_of_delete.sql.j2`
+- **DELETE** — deletes the base table row (see `sql_templates/triggers/instead_of_delete.sql.j2`
   if you'd rather deletes revert to the source row instead)
 
 `OverlayForeignKey` sets `db_constraint=False` (Postgres can't FK a view)
 and instead ships a `CREATE CONSTRAINT TRIGGER`, deferred to commit like a
 real FK, checking the referenced id exists in the base table or a source.
 
-All the raw SQL lives in `django_overlay/sql_templates/*.sql.j2`, rendered
-by `django_overlay/sql.py`.
+Every statement lives as a `.sql.j2` template under `django_overlay/sql_templates/`
+(`view/`, `triggers/`, `ddl/`, `pk_defaults/`, `introspection/`) — `sql.py`
+only computes context data (column lists, booleans, table names) and
+renders; no SQL text is assembled with Python string formatting anywhere.
 
 ## Many-to-many relations
 
@@ -194,13 +196,60 @@ you want Postgres to be the sole id authority, matching how
 back onto the object it returns; you'd need `obj.refresh_from_db()` to see
 it.
 
+## Uniqueness across the whole view
+
+A plain `models.UniqueConstraint` in `Meta.constraints` only ever guards the
+base table against itself — it can't stop a base row from colliding with a
+value that already exists in the source table, since Postgres can't put a
+`UNIQUE` constraint across a view's `UNION ALL`. `OverlayUniqueConstraint`
+(same `fields=[...]`/`name=` signature as `UniqueConstraint`, since it *is*
+one) adds that missing half:
+
+```python
+from django_overlay.constraints import OverlayUniqueConstraint
+
+
+class Person(OverlayModel):
+    ssn = models.CharField(max_length=11)
+
+    class Meta:
+        constraints = [OverlayUniqueConstraint(fields=["ssn"], name="person_ssn_unique")]
+```
+
+Base-vs-base is enforced for free by Postgres's own real `UNIQUE` constraint
+(forwarded to the base model like any other `Meta.constraints` entry) —
+the *new* part is a deferred constraint trigger that also rejects a base row
+whose value already exists, untouched, in the source table. It's a snapshot
+check at write time, not a standing guarantee: a source row that starts
+colliding with an already-materialized base row *after* the fact (vendor
+data drifting post-hoc) isn't retroactively caught — same class of
+limitation as the FK-safety trigger only checking at write time.
+
+**Index the source table's constrained column(s) yourself.** The trigger's
+existence check queries a table django-overlay doesn't own the DDL for, so
+it can't create that index for you the way it creates one automatically for
+the base table (a `UniqueConstraint` is backed by a real unique index;
+`OverlayForeignKey` defaults to `db_index=True` same as a plain
+`ForeignKey`) — both sides *we* control are already indexed without you
+doing anything. Benchmarked on a 500k-row source table on the same
+machine: with an index on the constrained column, an insert into the
+overlay model runs about **1.2x** the time of the same insert into a plain
+table with just a native `UniqueConstraint` (~0.07ms vs ~0.06ms). Without
+that index, the same insert took **~150x** longer (~10ms) — the trigger's
+`EXISTS` degrades to a sequential scan of the whole source table on every
+write.
+
 ## Migrations
 
 `makemigrations` is overridden: whenever a migration changes an
-OverlayModel's fields, or adds an `OverlayForeignKey` (including one inside
-an `OverlayManyToManyField`'s through model), it appends the operation that
-regenerates the view/triggers or the constraint trigger. The view can't
-drift out of sync with the model.
+OverlayModel's fields, or adds/renames/removes an `OverlayForeignKey`
+(including one inside an `OverlayManyToManyField`'s through model) or an
+`OverlayUniqueConstraint`, it appends the operation that regenerates the
+view/triggers or adds/drops the constraint trigger. The view can't drift
+out of sync with the model — including cleanup: removing an
+`OverlayForeignKey` field or an `OverlayUniqueConstraint` drops its trigger
+too, not just leaves it silently checking against a column/constraint that
+no longer exists.
 
 One thing none of this can catch: if which source a tenant is configured to
 use changes (e.g. moved from one vendor's table to another's) without a
@@ -229,6 +278,16 @@ from your own command or a signal handler — or run the bundled
 - **Delete semantics** — hard delete is the default.
 - **Multi-tenancy** — uses `connection.schema_name` if `django_tenants` is
   installed, otherwise falls back to Postgres's own `current_schema()`.
+
+`Meta.permissions`/`Meta.default_permissions` aren't supported at all —
+declaring either raises `OverlayConfigurationError` at class-definition
+time. Neither side is a sound place to forward them: the view model is
+`managed=False`, so Django's `create_permissions()` silently skips it and
+never creates the `Permission` rows at all; the hidden base model would
+create them, but under a codename tied to a model application code should
+never touch directly. The base model's own default permissions are always
+suppressed (`default_permissions = ()`), so it doesn't clutter permission
+lists with entries for a table nobody's supposed to reference.
 
 ## Running the tests
 

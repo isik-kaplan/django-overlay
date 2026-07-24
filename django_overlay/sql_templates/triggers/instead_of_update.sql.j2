@@ -1,0 +1,30 @@
+{% macro merge(proposed_prefix) -%}
+{%- for c in columns | reject("equalto", pk_column) | list -%}
+{{ c | qi }} = CASE WHEN NEW.{{ c | qi }} IS DISTINCT FROM OLD.{{ c | qi }} THEN {{ proposed_prefix }}.{{ c | qi }} ELSE {{ base_table | qi }}.{{ c | qi }} END
+{%- if not loop.last %}, {% endif -%}
+{%- endfor -%}
+{%- endmacro -%}
+CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}() RETURNS TRIGGER AS $$
+BEGIN
+  -- Only overwrite a column if this UPDATE actually changed it, so a
+  -- concurrent write to a different column doesn't get clobbered. The
+  -- base_table qualifier is required: bare `col` is ambiguous once
+  -- EXCLUDED is in scope below.
+  UPDATE {{ tenant_schema | qi }}.{{ base_table | qi }} SET {{ merge("NEW") }} WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
+  IF NOT FOUND THEN
+    INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
+      {%- for c in columns -%}{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}
+    )
+    VALUES (
+      {%- for c in columns -%}NEW.{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}
+    )
+    ON CONFLICT ({{ pk_column | qi }}) DO UPDATE SET {{ merge("EXCLUDED") }};
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS {{ view_name }}_update_trigger ON {{ tenant_schema | qi }}.{{ view_name | qi }};
+CREATE TRIGGER {{ view_name }}_update_trigger
+INSTEAD OF UPDATE ON {{ tenant_schema | qi }}.{{ view_name | qi }}
+FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}();

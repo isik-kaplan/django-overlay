@@ -1,0 +1,15 @@
+{% macro select_list(id_expr) -%}
+{%- for c in columns -%}
+{%- if c == pk_column -%}{{ id_expr }} AS {{ pk_column | qi }}{%- else -%}{{ c | qi }}{%- endif -%}
+{%- if not loop.last %}, {% endif -%}
+{%- endfor -%}
+{%- endmacro -%}
+CREATE OR REPLACE VIEW {{ tenant_schema | qi }}.{{ view_name | qi }} AS
+SELECT {{ select_list(pk_column | qi) }} FROM {{ tenant_schema | qi }}.{{ base_table | qi }}
+{% if source -%}
+UNION ALL
+SELECT {{ select_list(("-" if source.negate else "") ~ (source.id_column | qi)) }} FROM {{ source.schema | qi }}.{{ source.table | qi }}
+WHERE {% if source.extra_where %}{{ source.extra_where }} AND {% endif -%}
+{{ "-" if source.negate }}{{ source.id_column | qi }} NOT IN (SELECT {{ pk_column | qi }} FROM {{ tenant_schema | qi }}.{{ base_table | qi }} WHERE {{ pk_column | qi }} IS NOT NULL)
+{% endif -%}
+;
