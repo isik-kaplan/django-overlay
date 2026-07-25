@@ -60,6 +60,37 @@ class SyncOverlayView(migrations.RunPython):
         )
 
 
+class DropOverlayView(migrations.RunPython):
+    """Drops a model's view before a DeleteModel in the same migration
+    drops its base table — Postgres refuses `DROP TABLE` while a dependent
+    view still exists. Runs unconditionally for every DeleteModel, not just
+    overlay ones: `DROP VIEW IF EXISTS` is a no-op for a plain model that
+    never had a view. `model_name` is whatever DeleteModel names."""
+
+    def __init__(self, app_label: str, model_name: str):
+        self.app_label = app_label
+        self.model_name = model_name
+
+        def forward(apps, schema_editor):
+            # The model is about to be deleted (or already gone from live
+            # code) — historical state is the only place left to find it.
+            historical = apps.get_model(app_label, model_name)
+            tenant_schema = _resolve_schema(schema_editor)
+            _drop_view(schema_editor, tenant_schema, f"{historical._meta.db_table}_view")
+
+        def backward(apps, schema_editor):
+            pass  # the deleted model no longer exists to re-derive the view from
+
+        super().__init__(forward, backward, elidable=False)
+
+    def deconstruct(self):
+        return (
+            self.__class__.__qualname__,
+            [self.app_label, self.model_name],
+            {},
+        )
+
+
 class AddOverlayConstraint(migrations.RunPython):
     """Creates the constraint trigger backing one OverlayForeignKey, since
     db_constraint=False means Django emits no FK DDL for it."""

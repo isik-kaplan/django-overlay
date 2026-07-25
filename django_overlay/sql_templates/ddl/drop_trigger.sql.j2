@@ -1,1 +1,1 @@
-DROP TRIGGER IF EXISTS {{ trigger_name }} ON {{ tenant_schema | qi }}.{{ table_name | qi }};
+DROP TRIGGER IF EXISTS {{ trigger_name | qi }} ON {{ tenant_schema | qi }}.{{ table_name | qi }};

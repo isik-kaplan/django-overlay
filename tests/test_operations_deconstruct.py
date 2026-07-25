@@ -1,6 +1,7 @@
 from django_overlay.operations import (
     AddOverlayConstraint,
     AddOverlayUniqueConstraint,
+    DropOverlayView,
     RemoveOverlayConstraint,
     RemoveOverlayUniqueConstraint,
     SyncOverlayView,
@@ -11,6 +12,13 @@ def test_sync_overlay_view_deconstructs_to_its_constructor_args():
     name, args, kwargs = SyncOverlayView("testapp", "Person").deconstruct()
     assert name == "SyncOverlayView"
     assert args == ["testapp", "Person"]
+    assert kwargs == {}
+
+
+def test_drop_overlay_view_deconstructs_to_its_constructor_args():
+    name, args, kwargs = DropOverlayView("testapp", "PersonBase").deconstruct()
+    assert name == "DropOverlayView"
+    assert args == ["testapp", "PersonBase"]
     assert kwargs == {}
 
 

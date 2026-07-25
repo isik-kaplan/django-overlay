@@ -4,7 +4,7 @@
 {%- if not loop.last %}, {% endif -%}
 {%- endfor -%}
 {%- endmacro -%}
-CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
 BEGIN
   -- Only overwrite a column if this UPDATE actually changed it, so a
   -- concurrent write to a different column doesn't get clobbered. The
@@ -24,7 +24,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS {{ view_name }}_update_trigger ON {{ tenant_schema | qi }}.{{ view_name | qi }};
-CREATE TRIGGER {{ view_name }}_update_trigger
+DROP TRIGGER IF EXISTS {{ (view_name ~ "_update_trigger") | qi }} ON {{ tenant_schema | qi }}.{{ view_name | qi }};
+CREATE TRIGGER {{ (view_name ~ "_update_trigger") | qi }}
 INSTEAD OF UPDATE ON {{ tenant_schema | qi }}.{{ view_name | qi }}
-FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}();
+FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}();

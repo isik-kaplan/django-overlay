@@ -8,6 +8,7 @@ from ...models import OverlayModelBase
 from ...operations import (
     AddOverlayConstraint,
     AddOverlayUniqueConstraint,
+    DropOverlayView,
     RemoveOverlayConstraint,
     RemoveOverlayUniqueConstraint,
     SyncOverlayView,
@@ -60,6 +61,20 @@ def _new_overlay_unique_constraints(op):
     if isinstance(op, migrations.AddConstraint) and isinstance(op.constraint, OverlayUniqueConstraint):
         return [(op.model_name, op.constraint)]
     return []
+
+
+def _insert_view_drops_before_deletes(app_label, operations):
+    """A DeleteModel drops the model's table, but its view (if any) depends
+    on it — Postgres refuses to DROP TABLE while a dependent view exists.
+    Insert a DropOverlayView immediately before every DeleteModel,
+    unconditionally, same reasoning as RemoveField/RemoveConstraint below:
+    DROP VIEW IF EXISTS makes it safe even for a plain model with no view."""
+    new_operations = []
+    for op in operations:
+        if isinstance(op, migrations.DeleteModel):
+            new_operations.append(DropOverlayView(app_label, op.name))
+        new_operations.append(op)
+    return new_operations
 
 
 def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
@@ -124,15 +139,17 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
 
 class Command(BaseCommand):
     """Same as Django's makemigrations, except any operation touching an
-    OverlayModel's base table gets a SyncOverlayView appended, and any
+    OverlayModel's base table gets a SyncOverlayView appended, any
     OverlayForeignKey/OverlayUniqueConstraint add/rename/remove gets its
-    matching Add/RemoveOverlay(Unique)Constraint appended."""
+    matching Add/RemoveOverlay(Unique)Constraint appended, and any
+    DeleteModel gets a DropOverlayView inserted just before it."""
 
     def write_migration_files(self, changes, *args, **kwargs):
         for app_label, app_migrations in changes.items():
             base_to_view = _overlay_base_to_view(app_label)
             fk_fields = _overlay_foreign_key_fields(app_label)
             for migration in app_migrations:
+                migration.operations = _insert_view_drops_before_deletes(app_label, migration.operations)
                 migration.operations.extend(
                     extra_ops_for_migration(app_label, migration.operations, base_to_view, fk_fields)
                 )

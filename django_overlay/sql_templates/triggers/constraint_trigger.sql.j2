@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
 BEGIN
   -- Only re-check on UPDATE if this column actually changed.
   IF (TG_OP = 'INSERT' OR NEW.{{ column | qi }} IS DISTINCT FROM OLD.{{ column | qi }})
@@ -19,8 +19,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS {{ trigger_name }} ON {{ tenant_schema | qi }}.{{ referencing_table | qi }};
-CREATE CONSTRAINT TRIGGER {{ trigger_name }}
+DROP TRIGGER IF EXISTS {{ trigger_name | qi }} ON {{ tenant_schema | qi }}.{{ referencing_table | qi }};
+CREATE CONSTRAINT TRIGGER {{ trigger_name | qi }}
 AFTER INSERT OR UPDATE ON {{ tenant_schema | qi }}.{{ referencing_table | qi }}
 DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}();
+FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}();

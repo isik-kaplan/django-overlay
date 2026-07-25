@@ -478,3 +478,14 @@ class SoftDeleteTestNote(models.Model):
 
     class Meta:
         app_label = "testapp"
+
+
+class DigitLeadingTableNameTest(OverlayModel):
+    label = models.CharField(max_length=100, default="x")
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "123digitleadingtablenametest"
+
+        @staticmethod
+        def get_source():
+            return None

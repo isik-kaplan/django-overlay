@@ -15,6 +15,9 @@ class-definition time rather than silently being overwritten (same for a
 non-`Strategy` `OverlayMeta.strategy` or a non-`bool` `OverlayMeta.soft_delete`
 — both get type-checked there too, since e.g. `soft_delete = "false"` is
 truthy and would otherwise silently enable it instead of disabling it).
+Every generated view/function/trigger name derived from `table_name` is
+quoted, so an unusual choice (starting with a digit, a reserved word, mixed
+case) is safe either way.
 
 Three `INSTEAD OF` triggers on the view make it writable:
 

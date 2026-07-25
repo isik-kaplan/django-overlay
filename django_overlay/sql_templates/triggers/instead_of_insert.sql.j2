@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
 BEGIN
   NEW.{{ pk_column | qi }} := COALESCE(NEW.{{ pk_column | qi }}, {{ pk_default_expr }});
   INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
@@ -10,7 +10,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS {{ view_name }}_insert_trigger ON {{ tenant_schema | qi }}.{{ view_name | qi }};
-CREATE TRIGGER {{ view_name }}_insert_trigger
+DROP TRIGGER IF EXISTS {{ (view_name ~ "_insert_trigger") | qi }} ON {{ tenant_schema | qi }}.{{ view_name | qi }};
+CREATE TRIGGER {{ (view_name ~ "_insert_trigger") | qi }}
 INSTEAD OF INSERT ON {{ tenant_schema | qi }}.{{ view_name | qi }}
-FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}();
+FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}();

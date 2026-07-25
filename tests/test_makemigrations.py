@@ -6,6 +6,7 @@ from django_overlay.constraints import OverlayUniqueConstraint
 from django_overlay.fields import OverlayForeignKey
 from django_overlay.management.commands.makemigrations import (
     Command,
+    _insert_view_drops_before_deletes,
     _overlay_base_to_view,
     _overlay_foreign_key_fields,
     extra_ops_for_migration,
@@ -13,6 +14,7 @@ from django_overlay.management.commands.makemigrations import (
 from django_overlay.operations import (
     AddOverlayConstraint,
     AddOverlayUniqueConstraint,
+    DropOverlayView,
     RemoveOverlayConstraint,
     RemoveOverlayUniqueConstraint,
     SyncOverlayView,
@@ -249,4 +251,54 @@ def test_command_write_migration_files_appends_extra_ops_before_delegating():
         Command().write_migration_files(changes)
 
     assert any(isinstance(o, SyncOverlayView) and o.model_name == "MetaTest" for o in migration.operations)
+    base_write.assert_called_once_with(changes)
+
+
+def test_deleting_a_model_gets_a_view_drop_inserted_immediately_before_it():
+    op = migrations.DeleteModel(name="SomeModel")
+
+    operations = _insert_view_drops_before_deletes("testapp", [op])
+
+    assert len(operations) == 2
+    assert isinstance(operations[0], DropOverlayView)
+    assert operations[0].model_name == "SomeModel"
+    assert operations[1] is op
+
+
+def test_deleting_two_models_gets_a_view_drop_inserted_before_each():
+    op1 = migrations.DeleteModel(name="First")
+    op2 = migrations.DeleteModel(name="Second")
+
+    operations = _insert_view_drops_before_deletes("testapp", [op1, op2])
+
+    assert [type(o).__name__ for o in operations] == [
+        "DropOverlayView",
+        "DeleteModel",
+        "DropOverlayView",
+        "DeleteModel",
+    ]
+    assert operations[0].model_name == "First"
+    assert operations[2].model_name == "Second"
+
+
+def test_operations_without_a_delete_model_are_left_untouched():
+    op = migrations.AddField(model_name="Foo", name="bar", field=models.CharField(max_length=1))
+
+    operations = _insert_view_drops_before_deletes("testapp", [op])
+
+    assert operations == [op]
+
+
+def test_command_write_migration_files_inserts_a_view_drop_before_delete_model():
+    op = migrations.DeleteModel(name="MetaTestBase")
+    migration = migrations.Migration("some_migration", "testapp")
+    migration.operations = [op]
+    changes = {"testapp": [migration]}
+
+    with patch("django.core.management.commands.makemigrations.Command.write_migration_files") as base_write:
+        Command().write_migration_files(changes)
+
+    assert isinstance(migration.operations[0], DropOverlayView)
+    assert migration.operations[0].model_name == "MetaTestBase"
+    assert migration.operations[1] is op
     base_write.assert_called_once_with(changes)
