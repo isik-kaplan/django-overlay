@@ -30,3 +30,9 @@ queries a table this package doesn't own the DDL for. Benchmarked on a
 500k-row source table: with an index, an insert runs about **1.2x** a plain
 table's native `UniqueConstraint` (~0.07ms vs ~0.06ms). Without one: **~150x**
 slower (~10ms) — the `EXISTS` check degrades to a sequential scan.
+
+`condition=` isn't supported — declaring one raises `OverlayConfigurationError`
+at class-definition time. A partial constraint's condition would apply
+correctly to the native base-table index but the source-vs-base trigger has
+no way to honor it, so it would silently check for collisions the condition
+should have excluded.

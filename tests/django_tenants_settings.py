@@ -1,5 +1,5 @@
 """Run as its own pytest invocation, separate from the main suite (see
-docs/DEVELOPMENT.md) — proves _resolve_schema against a real per-tenant schema."""
+docs/development/DEVELOPMENT.md) — proves _resolve_schema against a real per-tenant schema."""
 
 import os
 

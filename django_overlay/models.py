@@ -49,11 +49,24 @@ _UNSUPPORTED_META_OPTIONS = ("permissions", "default_permissions")
 # override needs to reach both, not just whichever side it happened to land on.
 _BOTH_META_OPTIONS = ("app_label",)
 
+# The metaclass sets these itself on both models — declaring your own would
+# just get silently overwritten, so reject instead.
+_FORCED_META_OPTIONS = {
+    "db_table": "table naming is controlled entirely by OverlayMeta.table_name (defaults to the lowercased class name)",
+    "managed": "the base model is always managed=True and the view model is always managed=False",
+}
+
 
 def _split_meta_options(model_name: str, user_meta) -> tuple[dict, dict]:
     if user_meta is None:
         return {}, {}
     options = {k: v for k, v in vars(user_meta).items() if not k.startswith("_")}
+    forced = [k for k in _FORCED_META_OPTIONS if k in options]
+    if forced:
+        raise OverlayConfigurationError(
+            f"{model_name}.Meta.{forced[0]} isn't supported on an OverlayModel — "
+            f"{_FORCED_META_OPTIONS[forced[0]]}; it would just be silently overwritten."
+        )
     unsupported = [k for k in _UNSUPPORTED_META_OPTIONS if k in options]
     if unsupported:
         raise OverlayConfigurationError(
@@ -102,6 +115,15 @@ class OverlayModelBase(models.base.ModelBase):
         if "get_source" not in overlay_meta.__dict__:
             raise OverlayConfigurationError(
                 f"{name}.OverlayMeta must implement get_source() returning a SourceTable | None."
+            )
+        if not isinstance(overlay_meta.strategy, Strategy):
+            raise OverlayConfigurationError(
+                f"{name}.OverlayMeta.strategy must be a Strategy member (e.g. Strategy.NEGATIVE_ID "
+                f"or .with_strategy(...)), got {overlay_meta.strategy!r}."
+            )
+        if not isinstance(overlay_meta.soft_delete, bool):
+            raise OverlayConfigurationError(
+                f"{name}.OverlayMeta.soft_delete must be a bool, got {overlay_meta.soft_delete!r}."
             )
 
         # M2M fields go on the view model only — copying one to both models
@@ -169,5 +191,5 @@ class OverlayModel(models.Model, metaclass=OverlayModelBase):
         back to whatever the source shows for its id (nothing, if there's no
         source row). Not a delete — doesn't run Django's on_delete collector,
         since the identity itself isn't necessarily going away. See
-        docs/DELETION.md."""
+        docs/concepts/DELETION.md."""
         self._base_model.objects.filter(pk=self.pk).delete()

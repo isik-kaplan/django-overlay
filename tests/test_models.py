@@ -109,6 +109,66 @@ def test_default_strategy_rejects_a_non_strategy_value():
             _default_strategy()
 
 
+def test_overlay_meta_strategy_rejects_a_non_strategy_value():
+    with pytest.raises(OverlayConfigurationError, match="strategy"):
+
+        class BadStrategy(OverlayModel):
+            class Meta:
+                app_label = "testapp"
+
+            class OverlayMeta(OverlayMeta):
+                strategy = "uuid4"
+
+                @staticmethod
+                def get_source():
+                    return None
+
+
+def test_overlay_meta_soft_delete_rejects_a_non_bool_value():
+    with pytest.raises(OverlayConfigurationError, match="soft_delete"):
+
+        class BadSoftDelete(OverlayModel):
+            class Meta:
+                app_label = "testapp"
+
+            class OverlayMeta(OverlayMeta):
+                soft_delete = "false"
+
+                @staticmethod
+                def get_source():
+                    return None
+
+
+def test_meta_db_table_is_rejected():
+    with pytest.raises(OverlayConfigurationError, match="db_table"):
+
+        class HasDbTable(OverlayModel):
+            class Meta:
+                db_table = "my_custom_table_name"
+
+            class OverlayMeta(OverlayMeta):
+                table_name = "has_db_table"
+
+                @staticmethod
+                def get_source():
+                    return None
+
+
+def test_meta_managed_is_rejected():
+    with pytest.raises(OverlayConfigurationError, match="managed"):
+
+        class HasManaged(OverlayModel):
+            class Meta:
+                managed = True
+
+            class OverlayMeta(OverlayMeta):
+                table_name = "has_managed"
+
+                @staticmethod
+                def get_source():
+                    return None
+
+
 def test_meta_permissions_is_rejected():
     with pytest.raises(OverlayConfigurationError, match="permissions"):
 

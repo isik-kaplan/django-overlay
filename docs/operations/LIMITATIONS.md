@@ -11,7 +11,7 @@
   literal you wrote yourself is fine. If the value comes from *data*, quote
   it yourself first (e.g. `psycopg.sql.Literal(value).as_string(connection)`)
   — don't f-string it in.
-- **Delete semantics** — see [DELETION.md](DELETION.md).
+- **Delete semantics** — see [DELETION.md](../concepts/DELETION.md).
 - **Multi-tenancy** — uses `connection.schema_name` if `django_tenants` is
   installed, else Postgres's own `current_schema()`.
 

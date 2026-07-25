@@ -30,7 +30,7 @@ class Conversation(models.Model):
 `class OverlayMeta(OverlayMeta.with_strategy(...))` looks odd but is normal
 Python scoping — the base class expression resolves against the *imported*
 `OverlayMeta` before this inner class shadows the name. If you don't care
-which id strategy you get (see [IDS.md](IDS.md)), plain
+which id strategy you get (see [IDS.md](../concepts/IDS.md)), plain
 `class OverlayMeta(OverlayMeta):` works too.
 
 `Person` then behaves like an ordinary model:

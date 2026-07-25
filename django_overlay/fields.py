@@ -1,5 +1,6 @@
 from django.db import models
 
+from .models import OverlayConfigurationError
 from .strategies import negates_source_ids
 
 
@@ -10,6 +11,11 @@ class OverlayForeignKey(models.ForeignKey):
     operations.AddOverlayConstraint)."""
 
     def __init__(self, to, *args, **kwargs):
+        if "db_constraint" in kwargs:
+            raise OverlayConfigurationError(
+                "OverlayForeignKey always sets db_constraint=False (Postgres can't hold a real FK "
+                "against a view) — don't pass db_constraint yourself."
+            )
         kwargs["db_constraint"] = False
         super().__init__(to, *args, **kwargs)
 

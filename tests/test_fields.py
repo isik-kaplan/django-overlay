@@ -1,13 +1,19 @@
 import pytest
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, models, transaction
 
 from django_overlay.fields import OverlayForeignKey, OverlayOneToOneField
+from django_overlay.models import OverlayConfigurationError
 from tests.testapp.models import Address, AddressNote, MetaTest, MetaTestNote, NullableFkTest, Person, PersonProfile
 
 
 def test_overlay_foreign_key_never_creates_a_db_constraint():
     field = AddressNote._meta.get_field("address")
     assert field.db_constraint is False
+
+
+def test_overlay_foreign_key_rejects_an_explicit_db_constraint_kwarg():
+    with pytest.raises(OverlayConfigurationError, match="db_constraint"):
+        OverlayForeignKey(Address, on_delete=models.CASCADE, db_constraint=True)
 
 
 def test_deconstruct_does_not_leak_db_constraint_as_an_explicit_kwarg():
