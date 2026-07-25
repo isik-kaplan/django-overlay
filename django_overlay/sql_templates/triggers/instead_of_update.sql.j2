@@ -13,10 +13,10 @@ BEGIN
   UPDATE {{ tenant_schema | qi }}.{{ base_table | qi }} SET {{ merge("NEW") }} WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
   IF NOT FOUND THEN
     INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
-      {%- for c in columns -%}{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}
+      {%- for c in columns -%}{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, _overlay_deleted{% endif %}
     )
     VALUES (
-      {%- for c in columns -%}NEW.{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}
+      {%- for c in columns -%}NEW.{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, FALSE{% endif %}
     )
     ON CONFLICT ({{ pk_column | qi }}) DO UPDATE SET {{ merge("EXCLUDED") }};
   END IF;

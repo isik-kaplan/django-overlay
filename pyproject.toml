@@ -56,8 +56,8 @@ DJANGO_SETTINGS_MODULE = "tests.django_settings"
 testpaths = ["tests"]
 # tests/test_tenants/ needs a different DJANGO_SETTINGS_MODULE (a
 # django_tenants-enabled project) and is run as its own separate pytest
-# invocation — see README. Excluded here so the default run doesn't try to
-# collect it against the plain settings module.
+# invocation — see docs/DEVELOPMENT.md. Excluded here so the default run
+# doesn't try to collect it against the plain settings module.
 addopts = "--ignore=tests/test_tenants"
 
 [tool.coverage.run]

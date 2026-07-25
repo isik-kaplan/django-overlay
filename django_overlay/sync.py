@@ -34,8 +34,13 @@ def sync_view(model, tenant_schema: str, execute, columns=None) -> None:
     pk_column = model._meta.pk.column
     strategy = model._overlay_meta.strategy
     pk_default_sql = model._overlay_meta.pk_default_sql
+    soft_delete = model._overlay_meta.soft_delete
 
-    execute(overlay_sql.build_view_sql(view_name, tenant_schema, base_table, source, columns, pk_column, strategy))
+    execute(
+        overlay_sql.build_view_sql(
+            view_name, tenant_schema, base_table, source, columns, pk_column, strategy, soft_delete
+        )
+    )
     execute(
         overlay_sql.build_instead_of_insert_sql(
             view_name,
@@ -46,10 +51,15 @@ def sync_view(model, tenant_schema: str, execute, columns=None) -> None:
             f"{base_table}_{pk_column}_seq",
             strategy,
             pk_default_sql,
+            soft_delete,
         )
     )
-    execute(overlay_sql.build_instead_of_update_sql(view_name, tenant_schema, base_table, columns, pk_column))
-    execute(overlay_sql.build_instead_of_delete_sql(view_name, tenant_schema, base_table, pk_column))
+    execute(
+        overlay_sql.build_instead_of_update_sql(view_name, tenant_schema, base_table, columns, pk_column, soft_delete)
+    )
+    execute(
+        overlay_sql.build_instead_of_delete_sql(view_name, tenant_schema, base_table, pk_column, columns, soft_delete)
+    )
 
 
 def resync_view(model, using: str = "default") -> None:

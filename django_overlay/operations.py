@@ -40,7 +40,9 @@ class SyncOverlayView(migrations.RunPython):
             # SyncOverlayView call, and each has to reflect the columns
             # that existed at that point, not today's field list.
             historical_base = apps.get_model(app_label, model._base_model._meta.model_name)
-            columns = [f.column for f in historical_base._meta.fields]
+            # _overlay_deleted is base-only (soft_delete's shadow flag) — never
+            # part of the overlay's own declared columns.
+            columns = [f.column for f in historical_base._meta.fields if f.column != "_overlay_deleted"]
             overlay_sync.sync_view(model, tenant_schema, schema_editor.execute, columns=columns)
 
         def backward(apps, schema_editor):

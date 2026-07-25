@@ -128,3 +128,10 @@ class RemovableUniqueTestSource(models.Model):
 
     class Meta:
         app_label = "testapp_shared"
+
+
+class SoftDeleteTestSource(models.Model):
+    first_name = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "testapp_shared"

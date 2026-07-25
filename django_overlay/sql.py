@@ -10,6 +10,7 @@ def build_view_sql(
     columns,
     pk_column: str = "id",
     strategy: Strategy = Strategy.NEGATIVE_ID,
+    soft_delete: bool = False,
 ) -> str:
     source_context = None
     if source is not None:
@@ -28,6 +29,7 @@ def build_view_sql(
         columns=columns,
         pk_column=pk_column,
         source=source_context,
+        soft_delete=soft_delete,
     )
 
 
@@ -40,6 +42,7 @@ def build_instead_of_insert_sql(
     pk_sequence: str,
     strategy: Strategy = Strategy.NEGATIVE_ID,
     pk_default_sql: str | None = None,
+    soft_delete: bool = False,
 ) -> str:
     pk_default_expr = pk_default_sql or default_pk_sql(strategy)
     if pk_default_expr is None:
@@ -55,11 +58,12 @@ def build_instead_of_insert_sql(
         pk_column=pk_column,
         pk_default_expr=pk_default_expr,
         columns=columns,
+        soft_delete=soft_delete,
     )
 
 
 def build_instead_of_update_sql(
-    view_name: str, tenant_schema: str, base_table: str, columns, pk_column: str = "id"
+    view_name: str, tenant_schema: str, base_table: str, columns, pk_column: str = "id", soft_delete: bool = False
 ) -> str:
     return render(
         "triggers/instead_of_update.sql.j2",
@@ -69,17 +73,27 @@ def build_instead_of_update_sql(
         function_name=f"{view_name}_instead_of_update",
         pk_column=pk_column,
         columns=columns,
+        soft_delete=soft_delete,
     )
 
 
-def build_instead_of_delete_sql(view_name: str, tenant_schema: str, base_table: str, pk_column: str = "id") -> str:
+def build_instead_of_delete_sql(
+    view_name: str,
+    tenant_schema: str,
+    base_table: str,
+    pk_column: str = "id",
+    columns=None,
+    soft_delete: bool = False,
+) -> str:
+    template = "triggers/instead_of_delete_soft.sql.j2" if soft_delete else "triggers/instead_of_delete.sql.j2"
     return render(
-        "triggers/instead_of_delete.sql.j2",
+        template,
         tenant_schema=tenant_schema,
         view_name=view_name,
         base_table=base_table,
         function_name=f"{view_name}_instead_of_delete",
         pk_column=pk_column,
+        columns=columns,
     )
 
 

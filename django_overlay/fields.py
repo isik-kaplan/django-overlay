@@ -27,16 +27,32 @@ class OverlayForeignKey(models.ForeignKey):
 
 
 def target_tables_for(target, tenant_schema: str) -> list[dict]:
-    """[{"schema", "table", "id_column", "negate"}, ...] for `target`'s base
-    table (never negated) plus its source, if any (negated for a
-    NEGATIVE_ID target). Takes the target model directly, not `self`, so a
+    """[{"schema", "table", "id_column", "negate", "soft_delete"}, ...] for
+    `target`'s base table (never negated) plus its source, if any (negated
+    for a NEGATIVE_ID target). Takes the target model directly, not `self`, so a
     migration operation can call it against a *live* model even when the
     referencing field only exists in migration-historical state."""
-    tables = [{"schema": tenant_schema, "table": target._base_model._meta.db_table, "id_column": "id", "negate": False}]
+    tables = [
+        {
+            "schema": tenant_schema,
+            "table": target._base_model._meta.db_table,
+            "id_column": "id",
+            "negate": False,
+            "soft_delete": target._overlay_meta.soft_delete,
+        }
+    ]
     source = target.get_source()
     if source is not None:
         negate = negates_source_ids(target._overlay_meta.strategy)
-        tables.append({"schema": source.schema, "table": source.table, "id_column": source.id_column, "negate": negate})
+        tables.append(
+            {
+                "schema": source.schema,
+                "table": source.table,
+                "id_column": source.id_column,
+                "negate": negate,
+                "soft_delete": False,
+            }
+        )
     return tables
 
 

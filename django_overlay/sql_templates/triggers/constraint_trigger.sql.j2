@@ -5,7 +5,7 @@ BEGIN
      AND NEW.{{ column | qi }} IS NOT NULL
      AND NOT (
        {% for t in target_tables -%}
-       EXISTS (SELECT 1 FROM {{ t.schema | qi }}.{{ t.table | qi }} WHERE {{ t.id_column | qi }} = {{ "-" if t.negate }}NEW.{{ column | qi }})
+       EXISTS (SELECT 1 FROM {{ t.schema | qi }}.{{ t.table | qi }} WHERE {{ t.id_column | qi }} = {{ "-" if t.negate }}NEW.{{ column | qi }}{% if t.soft_delete %} AND NOT _overlay_deleted{% endif %})
        {%- if not loop.last %} OR {% endif %}
        {% endfor -%}
      )

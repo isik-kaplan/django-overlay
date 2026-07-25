@@ -8,10 +8,11 @@ from django_overlay.models import (
     OverlayMeta,
     OverlayModel,
     OverlayModelBase,
+    _default_soft_delete,
     _default_strategy,
 )
 from django_overlay.strategies import Strategy
-from tests.testapp.models import Address, AddressNote, Person
+from tests.testapp.models import Address, AddressNote, Person, SoftDeleteTest
 
 
 def test_view_model_is_unmanaged_and_bound_to_the_view_table():
@@ -173,6 +174,44 @@ def test_meta_app_label_reaches_both_the_base_and_view_model():
 
     assert HasExplicitAppLabel._meta.app_label == "testapp"
     assert HasExplicitAppLabel.base_table()._meta.app_label == "testapp"
+
+
+def test_default_soft_delete_defaults_to_false_when_unconfigured():
+    assert _default_soft_delete() is False
+
+
+def test_default_soft_delete_reads_from_settings_when_configured():
+    with override_settings(DJANGO_OVERLAY_DEFAULT_SOFT_DELETE=True):
+        assert _default_soft_delete() is True
+
+
+def test_default_soft_delete_rejects_a_non_bool_value():
+    with override_settings(DJANGO_OVERLAY_DEFAULT_SOFT_DELETE="yes"):
+        with pytest.raises(ImproperlyConfigured, match="DJANGO_OVERLAY_DEFAULT_SOFT_DELETE"):
+            _default_soft_delete()
+
+
+def test_soft_delete_model_gets_a_base_only_shadow_field():
+    assert "_overlay_deleted" in {f.name for f in SoftDeleteTest.base_table()._meta.fields}
+    assert "_overlay_deleted" not in {f.name for f in SoftDeleteTest._meta.fields}
+
+
+def test_declaring_your_own_overlay_deleted_field_is_rejected():
+    with pytest.raises(OverlayConfigurationError, match="_overlay_deleted"):
+
+        class HasOwnShadowField(OverlayModel):
+            _overlay_deleted = models.CharField(max_length=1)
+
+            class Meta:
+                app_label = "testapp"
+
+            class OverlayMeta(OverlayMeta):
+                table_name = "has_own_shadow_field"
+                soft_delete = True
+
+                @staticmethod
+                def get_source():
+                    return None
 
 
 def test_abstract_overlaymodel_subclass_is_not_split():

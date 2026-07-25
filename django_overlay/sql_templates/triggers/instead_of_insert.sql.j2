@@ -2,9 +2,9 @@ CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name }}() RETURN
 BEGIN
   NEW.{{ pk_column | qi }} := COALESCE(NEW.{{ pk_column | qi }}, {{ pk_default_expr }});
   INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
-    {%- for c in columns -%}{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}
+    {%- for c in columns -%}{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, _overlay_deleted{% endif %}
   ) VALUES (
-    {%- for c in columns -%}NEW.{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}
+    {%- for c in columns -%}NEW.{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, FALSE{% endif %}
   );
   RETURN NEW;
 END;

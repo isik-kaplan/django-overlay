@@ -446,3 +446,35 @@ class ReservedWord(OverlayModel):
         @staticmethod
         def get_source():
             return SourceTable(schema="public", table="testapp_shared_reservedwordsource")
+
+
+class SoftDeleteTest(OverlayModel):
+    first_name = models.CharField(max_length=100)
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "softdeletetest"
+        soft_delete = True
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_softdeletetestsource")
+
+
+class SoftDeleteTestNoSource(OverlayModel):
+    label = models.CharField(max_length=100, default="x")
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "softdeletetestnosource"
+        soft_delete = True
+
+        @staticmethod
+        def get_source():
+            return None
+
+
+class SoftDeleteTestNote(models.Model):
+    target = OverlayForeignKey(SoftDeleteTest, on_delete=models.CASCADE, related_name="notes")
+    text = models.TextField()
+
+    class Meta:
+        app_label = "testapp"

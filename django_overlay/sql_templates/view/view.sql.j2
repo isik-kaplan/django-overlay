@@ -6,6 +6,9 @@
 {%- endmacro -%}
 CREATE OR REPLACE VIEW {{ tenant_schema | qi }}.{{ view_name | qi }} AS
 SELECT {{ select_list(pk_column | qi) }} FROM {{ tenant_schema | qi }}.{{ base_table | qi }}
+{% if soft_delete -%}
+WHERE NOT _overlay_deleted
+{% endif -%}
 {% if source -%}
 UNION ALL
 SELECT {{ select_list(("-" if source.negate else "") ~ (source.id_column | qi)) }} FROM {{ source.schema | qi }}.{{ source.table | qi }}

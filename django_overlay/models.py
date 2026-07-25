@@ -24,6 +24,16 @@ def _default_strategy() -> Strategy:
     return configured
 
 
+def _default_soft_delete() -> bool:
+    """Lets a project opt every model into soft delete by default via
+    settings.DJANGO_OVERLAY_DEFAULT_SOFT_DELETE. A model can still override
+    this with its own OverlayMeta.soft_delete."""
+    configured = getattr(settings, "DJANGO_OVERLAY_DEFAULT_SOFT_DELETE", False)
+    if not isinstance(configured, bool):
+        raise ImproperlyConfigured(f"settings.DJANGO_OVERLAY_DEFAULT_SOFT_DELETE must be a bool, got {configured!r}.")
+    return configured
+
+
 # Options that emit DDL go on the base (managed=True) model; everything
 # else (ordering, verbose_name, ...) goes on the view model, since that's
 # what's actually queried.
@@ -61,6 +71,7 @@ class OverlayMeta:
 
     Strategy = Strategy
     strategy = _default_strategy()
+    soft_delete = _default_soft_delete()
     pk_default_sql = None
 
     @classmethod
@@ -100,6 +111,12 @@ class OverlayModelBase(models.base.ModelBase):
         rest_items = {k: v for k, v in namespace.items() if k not in field_items and k not in m2m_items}
         table_name = getattr(overlay_meta, "table_name", name.lower())
 
+        if overlay_meta.soft_delete and "_overlay_deleted" in field_items:
+            raise OverlayConfigurationError(
+                f"{name} can't declare its own `_overlay_deleted` field — django_overlay reserves "
+                "that name for its soft_delete shadow flag."
+            )
+
         if "id" not in field_items:
             injected = default_id_field(overlay_meta.strategy)
             if injected is not None:
@@ -108,6 +125,10 @@ class OverlayModelBase(models.base.ModelBase):
         base_meta_options, view_meta_options = _split_meta_options(name, namespace.get("Meta"))
 
         base_ns = {**rest_items, **{k: copy.deepcopy(v) for k, v in field_items.items()}}
+        if overlay_meta.soft_delete:
+            # Base-only shadow flag — never copied to the view model, so it
+            # never shows up as a queryable column there.
+            base_ns["_overlay_deleted"] = models.BooleanField(default=False, editable=False)
         base_ns["__qualname__"] = f"{name}Base"
         # No default_permissions for the base table — nobody should see
         # "Can add <name>base" in an admin permission list.
@@ -142,3 +163,11 @@ class OverlayModel(models.Model, metaclass=OverlayModelBase):
     @classmethod
     def get_source(cls):
         return cls._overlay_meta.get_source()
+
+    def reset_to_source(self):
+        """Discard this row's local materialization/soft-deletion and fall
+        back to whatever the source shows for its id (nothing, if there's no
+        source row). Not a delete — doesn't run Django's on_delete collector,
+        since the identity itself isn't necessarily going away. See
+        docs/DELETION.md."""
+        self._base_model.objects.filter(pk=self.pk).delete()
