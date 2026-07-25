@@ -1,6 +1,8 @@
 from unittest.mock import patch
 
 from django.db import migrations, models
+from hypothesis import given
+from hypothesis import strategies as st
 
 from django_overlay.constraints import OverlayUniqueConstraint
 from django_overlay.fields import OverlayForeignKey
@@ -302,3 +304,51 @@ def test_command_write_migration_files_inserts_a_view_drop_before_delete_model()
     assert migration.operations[0].model_name == "MetaTestBase"
     assert migration.operations[1] is op
     base_write.assert_called_once_with(changes)
+
+
+_model_name = st.from_regex(r"[A-Za-z][A-Za-z0-9]{0,9}", fullmatch=True)
+
+
+@given(op_specs=st.lists(st.tuples(st.sampled_from(["delete", "other"]), _model_name), max_size=15))
+def test_every_delete_model_gets_a_view_drop_immediately_before_it_for_any_op_sequence(op_specs):
+    operations = [
+        migrations.DeleteModel(name=name)
+        if kind == "delete"
+        else migrations.AddField(model_name=name, name="f", field=models.CharField(max_length=1))
+        for kind, name in op_specs
+    ]
+
+    result = _insert_view_drops_before_deletes("testapp", operations)
+
+    for i, op in enumerate(result):
+        if isinstance(op, migrations.DeleteModel):
+            assert i > 0
+            assert isinstance(result[i - 1], DropOverlayView)
+            assert result[i - 1].model_name == op.name
+
+    assert [op for op in result if not isinstance(op, DropOverlayView)] == operations
+
+
+@given(n=st.integers(min_value=1, max_value=20))
+def test_the_same_fk_field_added_any_number_of_times_only_adds_one_constraint(n):
+    ops = [
+        migrations.AddField(
+            model_name="AddressNote", name="address", field=OverlayForeignKey("Address", on_delete=models.CASCADE)
+        )
+        for _ in range(n)
+    ]
+
+    extra_ops = extra_ops_for_migration("testapp", ops, {}, set())
+
+    assert len([o for o in extra_ops if isinstance(o, AddOverlayConstraint)]) == 1
+
+
+@given(n=st.integers(min_value=1, max_value=20))
+def test_the_same_new_unique_constraint_appearing_any_number_of_times_only_adds_it_once(n):
+    base_to_view = _overlay_base_to_view("testapp")
+    constraint = OverlayUniqueConstraint(fields=["ssn"], name="fake_constraint")
+    ops = [migrations.AddConstraint(model_name="UniqueTestBase", constraint=constraint) for _ in range(n)]
+
+    extra_ops = extra_ops_for_migration("testapp", ops, base_to_view, set())
+
+    assert len([o for o in extra_ops if isinstance(o, AddOverlayUniqueConstraint)]) == 1

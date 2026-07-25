@@ -2,6 +2,8 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.test import override_settings
+from hypothesis import given
+from hypothesis import strategies as st
 
 from django_overlay.models import (
     OverlayConfigurationError,
@@ -133,6 +135,46 @@ def test_overlay_meta_soft_delete_rejects_a_non_bool_value():
 
             class OverlayMeta(OverlayMeta):
                 soft_delete = "false"
+
+                @staticmethod
+                def get_source():
+                    return None
+
+
+_non_strategy_value = st.one_of(
+    st.text(), st.integers(), st.floats(allow_nan=False), st.none(), st.lists(st.integers())
+)
+
+
+@given(value=_non_strategy_value)
+def test_overlay_meta_strategy_rejects_any_non_strategy_value(value):
+    with pytest.raises(OverlayConfigurationError, match="strategy"):
+
+        class BadStrategyFuzzed(OverlayModel):
+            class Meta:
+                app_label = "testapp"
+
+            class OverlayMeta(OverlayMeta):
+                strategy = value
+
+                @staticmethod
+                def get_source():
+                    return None
+
+
+_non_bool_value = st.one_of(st.text(), st.integers(), st.floats(allow_nan=False), st.none(), st.lists(st.integers()))
+
+
+@given(value=_non_bool_value)
+def test_overlay_meta_soft_delete_rejects_any_non_bool_value(value):
+    with pytest.raises(OverlayConfigurationError, match="soft_delete"):
+
+        class BadSoftDeleteFuzzed(OverlayModel):
+            class Meta:
+                app_label = "testapp"
+
+            class OverlayMeta(OverlayMeta):
+                soft_delete = value
 
                 @staticmethod
                 def get_source():

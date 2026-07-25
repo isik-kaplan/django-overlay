@@ -20,6 +20,9 @@ DJANGO_SETTINGS_MODULE=tests.django_tenants_settings POSTGRES_USER=postgres \
   uv run pytest tests/test_tenants -o addopts="" --create-db
 ```
 
+A few tests use `hypothesis` for property-based fuzzing instead of fixed
+examples — identifier quoting, and the migration-detection dedup guards.
+
 The main suite (not `test_tenants`) is 100% line+branch coverage, enforced:
 
 ```bash
