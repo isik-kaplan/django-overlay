@@ -27,3 +27,10 @@ def test_uuid7_uses_the_stdlib_implementation_when_available():
     sentinel = uuid.uuid4()
     with patch("uuid.uuid7", return_value=sentinel, create=True):
         assert uuid7() is sentinel
+
+
+def test_uuid7_falls_back_when_the_stdlib_implementation_is_unavailable():
+    with patch("uuid.uuid7", None, create=True):
+        value = uuid7()
+    assert isinstance(value, uuid.UUID)
+    assert value.version == 7
