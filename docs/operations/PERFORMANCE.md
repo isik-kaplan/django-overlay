@@ -230,13 +230,99 @@ Things that were tried and don't fix it:
   every other query got worse. Not worth a global setting.
 - **A partial index on the base table** (`(id) WHERE NOT _overlay_deleted`) to
   give the base branch a sorted path: the planner keeps choosing a seq scan, and
-  `Merge Append` still doesn't appear.
+  `Merge Append` still doesn't appear. There is a reason for that, and it turns
+  out to be a *second* blocker rather than a failure of the index — see below.
 - **Switching id strategy.** UUID4 has no negation at all and behaves
   identically, which is what ruled the negation out as the cause.
 
 The lever that does exist is the one already stated: keep the filter selective,
 and keep the base table small. Both shrink the anti-join, which is the thing
 being paid for.
+
+## What does unlock O(limit) paging
+
+The section above is measured against the default model shape — overridable,
+soft-deletable. Two model-level flags change it, and between them they are the
+difference between reading every row and reading twenty.
+
+There are **two** blockers, not one, and they are the two anti-join inputs.
+
+**The anti-join**, as described above. `overridable = False` removes it, or
+narrows it to tombstones under soft delete. Once it is gone the planner does
+choose a `Merge Append` — but only half the plan improves:
+
+```
+Merge Append
+  ->  Sort (top-N heapsort)   <- base branch, 600,000 rows scanned
+  ->  Index Scan Backward     <- source branch, 4 buffers
+```
+
+**The soft-delete qual on the base branch** is the second. `WHERE NOT
+_overlay_deleted` is what stops that side supplying ordered output, and no index
+shape recovers it:
+
+| | base alone | source alone | union of both |
+|---|---|---|---|
+| no extra index | 0.2ms index scan | 0.2ms index scan | 53.3ms seq scan + sort |
+| partial `(score DESC) WHERE NOT _overlay_deleted` | 0.2ms | — | 52.5ms seq scan + sort |
+| plain `(score DESC)` | 0.2ms | — | 51.7ms seq scan + sort |
+| covering `(score DESC) INCLUDE (id)` | 0.3ms | 0.2ms | 53.1ms seq scan + sort |
+
+Each branch is ordered and instant on its own. The union is not, at any index
+shape. Removing the qual is what fixes it:
+
+| | time | plan |
+|---|---|---|
+| base branch unfiltered | **0.2ms** | `Merge Append`, two ordered scans |
+| base branch `WHERE NOT _overlay_deleted` | 55.4ms | seq scan + sort |
+| + composite `(_overlay_deleted, score DESC)` | 55.0ms | seq scan + sort |
+| + qual rewritten `_overlay_deleted = FALSE` | 56.7ms | seq scan + sort |
+
+With both gone — `overridable = False` **and** `soft_delete = False` — the plan
+reads 27 buffers and executes in **0.029ms on 1.2M rows**, and `OFFSET 100000`
+only rises to 9.4ms. That is O(limit): the same twenty rows are examined whether
+the tables hold 900 thousand or 300 million.
+
+It costs semantics, and the cost is not small. Both anti-join inputs gone means
+the tenant can **add** rows and nothing else — no overriding a vendor row, no
+deleting one. Use it for append-only link tables, not for entities.
+
+**A qual as such is not the problem.** With the anti-join gone and a *selective*
+qual served by a composite index present on **both** branches, the ordered path
+survives:
+
+| query | before the index | after `(city, score DESC)` on both branches |
+|---|---|---|
+| `WHERE city=… ORDER BY score DESC LIMIT 20` | 62.8ms | **0.3ms** |
+
+So the rule is: the ordered path survives when each branch's access is served by
+an index supplying **both** restriction and ordering, and the restriction is
+selective. A near-universal boolean like soft-delete is not, and defeats it.
+
+### What this means for a real schema
+
+The production-shaped benchmark (`tests/probe_bench_graph.py`) puts both shapes
+on either side of every join — four overridable, soft-deletable entities linked
+by three append-only M2M through models:
+
+| link tables (`overridable=False, soft_delete=False`) | overlay | ratio | plan |
+|---|---|---|---|
+| person_id lookup | 0.2ms | 1.6× | append |
+| unscoped ordered page | 0.1ms | **1.1×** | **Merge Append** |
+| deep offset | 7.9ms | 1.1× | Merge Append |
+
+| entities (`overridable, soft_delete`) | overlay | ratio |
+|---|---|---|
+| point lookup by pk | 0.3ms | 2.2× |
+| equality, indexed | 0.6ms | 1.5× |
+| equality, **unindexed** | 8.3ms | 1.2× |
+| scoped + ordered | 0.5ms | 1.9× |
+| **unscoped ordered page** | 25.4ms | **97.7×** |
+
+One cliff, and it is the only one. **Scope your list screens** — a single
+equality filter on an indexed column took the worst case from 374ms to 3.1ms —
+and mirror the composite `(scope, sort)` index onto the source table, or you
+lose the `Merge Append` and never find out why.
 
 ## Pagination, and DRF's paginators
 

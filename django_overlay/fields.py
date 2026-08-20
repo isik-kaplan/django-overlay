@@ -1,6 +1,10 @@
 import copy
 
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django.db.models.fields.related_lookups import RelatedIn
+from django.db.models.lookups import In
 
 from .models import OverlayConfigurationError
 from .strategies import negates_source_ids
@@ -73,6 +77,103 @@ def target_tables_for(target, tenant_schema: str, soft_delete: bool | None = Non
             }
         )
     return tables
+
+
+def _array_subquery_in_enabled() -> bool:
+    """Lets a project turn the rewrite below off with
+    settings.DJANGO_OVERLAY_ARRAY_SUBQUERY_IN = False, in case its own
+    subqueries are large enough that materialising them costs more than the
+    bad plan does."""
+    configured = getattr(settings, "DJANGO_OVERLAY_ARRAY_SUBQUERY_IN", True)
+    if not isinstance(configured, bool):
+        raise ImproperlyConfigured(f"settings.DJANGO_OVERLAY_ARRAY_SUBQUERY_IN must be a bool, got {configured!r}.")
+    return configured
+
+
+class OverlaySubqueryIn(RelatedIn):
+    """`col IN (subquery)` becomes `col = ANY (ARRAY(subquery))`.
+
+    Semantically identical — SQL defines `IN` as `= ANY` and the three-valued
+    NULL logic is the same — but it plans completely differently, and on an
+    overlay model that is the difference between a page and a timeout.
+
+    A `UNION ALL` view is an appendrel, and an appendrel parent carries no
+    statistics: `examine_simple_variable()` has arms for `RTE_RELATION` and for
+    `RTE_SUBQUERY && !rte->inh`, and a pulled-up UNION ALL is neither, so the
+    planner falls back to `DEFAULT_NUM_DISTINCT` and estimates the join at
+    1/200. With a `LIMIT` on top, the tuple fraction collapses, `add_path()`
+    selects on startup cost alone, and the cheapest-startup plan is a nested
+    loop that then never terminates early.
+
+    `IN (subquery)` stays a semi-join and is costed with that broken estimate.
+    `ARRAY(subquery)` is an InitPlan: it is evaluated once, before the outer
+    plan is costed, so the outer query sees a plain array instead of a
+    relation whose size it cannot guess.
+
+    Measured at 900,000 view rows, against a 1.6ms plain-table baseline:
+    the traversal Django emits today is 6,868.9ms, `IN (subquery)` is 727.4ms,
+    and this is **3.9ms**.
+
+    Subclasses `RelatedIn`, not `In`: a ForeignKey's `IN` lookup is the one
+    that converts model instances to their primary keys and handles
+    multi-column targets, and registering a plain `In` over the top of it
+    silently breaks `filter(fk__in=[instance, ...])`.
+
+    Registered on OverlayForeignKey only, which is exactly the case where the
+    outer relation is a view and the estimate is therefore blind. A literal
+    list is left alone — there is no subquery to fence, and Django's `IN` is
+    already right.
+
+    The cost is that the subquery is materialised: roughly 16 bytes per row for
+    a uuid key. Fine for a selective filter, not for one matching millions —
+    set DJANGO_OVERLAY_ARRAY_SUBQUERY_IN = False to opt out."""
+
+    def as_sql(self, compiler, connection):
+        if self.rhs_is_direct_value() or not _array_subquery_in_enabled():
+            return super().as_sql(compiler, connection)
+        lhs_sql, lhs_params = self.process_lhs(compiler, connection)
+        rhs_sql, rhs_params = self.process_rhs(compiler, connection)
+        # process_rhs already parenthesises the subquery, so `ARRAY` + that is
+        # `ARRAY(SELECT ...)`.
+        return f"{lhs_sql} = ANY (ARRAY{rhs_sql})", list(lhs_params) + list(rhs_params)
+
+
+OverlayForeignKey.register_lookup(OverlaySubqueryIn)
+
+
+class OverlayFencedIn(In):
+    """The same `= ANY (ARRAY(…))` rewrite, on a primary key.
+
+    `OverlaySubqueryIn` is registered on `OverlayForeignKey`, so it covers
+    `filter(fk__in=<subquery>)`. The M2M fence needs it on the *primary key* of
+    the model being filtered — `person.id = ANY (ARRAY(…))` — and that field is
+    an ordinary `UUIDField` or `AutoField`, which the package does not own.
+
+    **Deliberately registered nowhere.** `OverlayQuery.build_lookup()`
+    constructs it directly when it sees the private name, so the only way to
+    reach it is through `OverlayQuery._m2m_fence()`, which is the only caller
+    that has established the fence is redundant with a join already in the
+    query. Registering it on `models.Field` — the previous arrangement — put a
+    lookup on every field of every model in any project that imported this
+    package, overlay or not, to serve one internal call site.
+
+    It is not exposed as a public way to scope a query, and that is a
+    measured decision rather than caution. The array form wins only while the
+    subquery is small: on a twenty-aggregate summary at 1,000,000 view rows it
+    was 2.0x faster than a plain `IN` at a 25,000-row scope and 2.3x *slower*
+    at a 1,000,000-row one, crossing over somewhere between. The library cannot
+    see the scope size when it compiles the lookup, so making this reachable
+    from `pk__in` would silently double the cost of every broad-scope query
+    past a threshold nobody can predict. See tests/probe_aggregation.py.
+
+    Measured on the production-shaped graph at 300,000 people: the M2M
+    traversal Django emits is 306.6ms selective / 7,896.5ms broad; with this
+    fence added it is 0.4ms / 105.9ms, returning identical rows.
+    """
+
+    lookup_name = "overlay_fenced_in"
+
+    as_sql = OverlaySubqueryIn.as_sql
 
 
 class OverlayOneToOneField(OverlayForeignKey, models.OneToOneField):

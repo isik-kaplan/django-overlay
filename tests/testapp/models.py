@@ -1026,3 +1026,378 @@ class WideCustomerNoteU7(models.Model):
     class Meta:
         app_label = "testapp"
         indexes = [models.Index(fields=["customer"], name="widecustomernoteu7_customer_idx")]
+
+
+class NullableFkOverlay(OverlayModel):
+    """A nullable OverlayForeignKey between two overlay models.
+
+    `WideOrder.customer` and friends are all NOT NULL, so without this there is
+    no way to test that the traversal rewrite treats a NULL foreign key the way
+    the join does. See tests/test_traversal_rewrite.py."""
+
+    label = models.CharField(max_length=50)
+    person = OverlayForeignKey(Person, on_delete=models.SET_NULL, null=True, related_name="nullable_overlay_refs")
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "nullablefkoverlay"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_nullablefkoverlaysource")
+
+
+# ---------------------------------------------------------------------------
+# The production-shaped benchmark graph (tests/probe_bench_graph.py).
+#
+# Four entities the tenant may override and soft-delete, linked by three M2M
+# through models it may only add to and remove from. The two halves sit at
+# opposite ends of everything measured for ordered paging:
+#
+#   entities      overridable=True,  soft_delete=True   -> full anti-join, and
+#                                                          a qual on the base
+#                                                          branch. Both things
+#                                                          that block an
+#                                                          ordered path.
+#   through       overridable=False, soft_delete=False  -> no anti-join and no
+#                                                          qual. A bare
+#                                                          UNION ALL, which is
+#                                                          the O(limit) shape.
+#
+# So a person list is the slow shape, a membership traversal is the fast one,
+# and any query crossing the two is the case worth measuring.
+# ---------------------------------------------------------------------------
+
+
+class BenchPerson(OverlayModel):
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    city = models.CharField(max_length=100)
+    postcode = models.CharField(max_length=20)
+    status = models.CharField(max_length=20)
+    score = models.IntegerField(null=True)
+    born_on = models.DateField(null=True)
+    notes = models.TextField(blank=True, default="")
+
+    addresses = OverlayManyToManyField(
+        "BenchAddress", through="BenchPersonAddress", related_name="people"
+    )
+    phones = OverlayManyToManyField("BenchPhone", through="BenchPersonPhone", related_name="people")
+    emails = OverlayManyToManyField("BenchEmail", through="BenchPersonEmail", related_name="people")
+    # Plain, not Overlay: BenchLabel is an ordinary table, so the auto-created
+    # through table objection (checks.E002) does not apply and there is no view
+    # on the far side to fence against. See BenchLabel.
+    labels = models.ManyToManyField("BenchLabel", through="BenchPersonLabel", related_name="bench_people")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["last_name"], name="bp_last_name_idx"),
+            models.Index(fields=["city"], name="bp_city_idx"),
+            models.Index(fields=["status"], name="bp_status_idx"),
+            models.Index(fields=["score"], name="bp_score_idx"),
+            models.Index(fields=["city", "-score"], name="bp_city_score_idx"),
+            models.Index(fields=["last_name", "-score"], name="bp_lname_score_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "bench_person"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_benchpersonsource")
+
+
+class BenchAddress(OverlayModel):
+    line1 = models.CharField(max_length=200)
+    city = models.CharField(max_length=100)
+    postcode = models.CharField(max_length=20)
+    country = models.CharField(max_length=2)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["city"], name="ba_city_idx"),
+            models.Index(fields=["postcode"], name="ba_postcode_idx"),
+            models.Index(fields=["country"], name="ba_country_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "bench_address"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_benchaddresssource")
+
+
+class BenchPhone(OverlayModel):
+    number = models.CharField(max_length=32)
+    kind = models.CharField(max_length=20)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["number"], name="bh_number_idx"),
+            models.Index(fields=["kind"], name="bh_kind_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "bench_phone"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_benchphonesource")
+
+
+class BenchEmail(OverlayModel):
+    address = models.CharField(max_length=200)
+    domain = models.CharField(max_length=100)
+    kind = models.CharField(max_length=20)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["address"], name="be_address_idx"),
+            models.Index(fields=["domain"], name="be_domain_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "bench_email"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_benchemailsource")
+
+
+class BenchPersonAddress(OverlayModel):
+    person = OverlayForeignKey(BenchPerson, on_delete=models.CASCADE)
+    address = OverlayForeignKey(BenchAddress, on_delete=models.CASCADE)
+    role = models.CharField(max_length=20, default="home")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["person"], name="bpa_person_idx"),
+            models.Index(fields=["address"], name="bpa_address_idx"),
+            models.Index(fields=["person", "address"], name="bpa_pair_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "bench_person_address"
+        overridable = False
+        soft_delete = False
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_benchpersonaddresssource")
+
+
+class BenchPersonPhone(OverlayModel):
+    person = OverlayForeignKey(BenchPerson, on_delete=models.CASCADE)
+    phone = OverlayForeignKey(BenchPhone, on_delete=models.CASCADE)
+    role = models.CharField(max_length=20, default="mobile")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["person"], name="bpp_person_idx"),
+            models.Index(fields=["phone"], name="bpp_phone_idx"),
+            models.Index(fields=["person", "phone"], name="bpp_pair_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "bench_person_phone"
+        overridable = False
+        soft_delete = False
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_benchpersonphonesource")
+
+
+class BenchPersonEmail(OverlayModel):
+    person = OverlayForeignKey(BenchPerson, on_delete=models.CASCADE)
+    email = OverlayForeignKey(BenchEmail, on_delete=models.CASCADE)
+    role = models.CharField(max_length=20, default="primary")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["person"], name="bpe_person_idx"),
+            models.Index(fields=["email"], name="bpe_email_idx"),
+            models.Index(fields=["person", "email"], name="bpe_pair_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "bench_person_email"
+        overridable = False
+        soft_delete = False
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_benchpersonemailsource")
+
+
+# ---------------------------------------------------------------------------
+# Plain mirrors of the benchmark graph: ordinary Django models, ordinary
+# tables, ordinary ManyToManyField. No overlay machinery anywhere.
+#
+# These exist so the benchmark can compare ORM against ORM. Measuring an
+# overlay queryset against hand-written SQL on a plain table charges the
+# overlay for Django's own overhead and flatters the baseline; these carry the
+# same fields, the same indexes and the same rows, so the only difference left
+# is the view.
+# ---------------------------------------------------------------------------
+
+
+class PlainPerson(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    city = models.CharField(max_length=100)
+    postcode = models.CharField(max_length=20)
+    status = models.CharField(max_length=20)
+    score = models.IntegerField(null=True)
+    born_on = models.DateField(null=True)
+    notes = models.TextField(blank=True, default="")
+
+    addresses = models.ManyToManyField("PlainAddress", through="PlainPersonAddress", related_name="people")
+    phones = models.ManyToManyField("PlainPhone", through="PlainPersonPhone", related_name="people")
+    emails = models.ManyToManyField("PlainEmail", through="PlainPersonEmail", related_name="people")
+    labels = models.ManyToManyField("BenchLabel", through="PlainPersonLabel", related_name="plain_people")
+
+    class Meta:
+        db_table = "plain_person"
+        indexes = [
+            models.Index(fields=["last_name"], name="pp_last_name_idx"),
+            models.Index(fields=["city"], name="pp_city_idx"),
+            models.Index(fields=["status"], name="pp_status_idx"),
+            models.Index(fields=["score"], name="pp_score_idx"),
+            models.Index(fields=["city", "-score"], name="pp_city_score_idx"),
+            models.Index(fields=["last_name", "-score"], name="pp_lname_score_idx"),
+        ]
+
+
+class PlainAddress(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    line1 = models.CharField(max_length=200)
+    city = models.CharField(max_length=100)
+    postcode = models.CharField(max_length=20)
+    country = models.CharField(max_length=2)
+
+    class Meta:
+        db_table = "plain_address"
+        indexes = [
+            models.Index(fields=["city"], name="pa_city_idx"),
+            models.Index(fields=["postcode"], name="pa_postcode_idx"),
+            models.Index(fields=["country"], name="pa_country_idx"),
+        ]
+
+
+class PlainPhone(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    number = models.CharField(max_length=32)
+    kind = models.CharField(max_length=20)
+
+    class Meta:
+        db_table = "plain_phone"
+        indexes = [
+            models.Index(fields=["number"], name="ph_number_idx"),
+            models.Index(fields=["kind"], name="ph_kind_idx"),
+        ]
+
+
+class PlainEmail(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    address = models.CharField(max_length=200)
+    domain = models.CharField(max_length=100)
+    kind = models.CharField(max_length=20)
+
+    class Meta:
+        db_table = "plain_email"
+        indexes = [
+            models.Index(fields=["address"], name="pe_address_idx"),
+            models.Index(fields=["domain"], name="pe_domain_idx"),
+        ]
+
+
+class PlainPersonAddress(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    person = models.ForeignKey(PlainPerson, on_delete=models.CASCADE)
+    address = models.ForeignKey(PlainAddress, on_delete=models.CASCADE)
+    role = models.CharField(max_length=20, default="home")
+
+    class Meta:
+        db_table = "plain_person_address"
+
+
+class PlainPersonPhone(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    person = models.ForeignKey(PlainPerson, on_delete=models.CASCADE)
+    phone = models.ForeignKey(PlainPhone, on_delete=models.CASCADE)
+    role = models.CharField(max_length=20, default="mobile")
+
+    class Meta:
+        db_table = "plain_person_phone"
+
+
+class PlainPersonEmail(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    person = models.ForeignKey(PlainPerson, on_delete=models.CASCADE)
+    email = models.ForeignKey(PlainEmail, on_delete=models.CASCADE)
+    role = models.CharField(max_length=20, default="primary")
+
+    class Meta:
+        db_table = "plain_person_email"
+
+
+# ---------------------------------------------------------------------------
+# The hybrid: a tenant-owned entity that is NOT behind a view.
+#
+# Every other relation in this graph joins two overlay views, and that is the
+# shape that collapses -- probe_narrow_m2m_stall measured two m2m conditions
+# estimating 267,425,037,000 rows for a 132-row answer, because neither side
+# carries statistics.
+#
+# But not every entity has a vendor source to merge. A label, a saved list, a
+# campaign is tenant-owned outright: there is no source row it could ever
+# shadow, so there is no reason for it to be a view at all. Joining the person
+# view to a plain table should be the good case -- the plain side has real
+# statistics, and `_m2m_fence()` declines to fence it for exactly that reason
+# (it requires both the through model and the target to be view models).
+#
+# BenchLabel is that entity, and it is deliberately an ordinary Model. The two
+# link tables are ordinary too; only `BenchPersonLabel.person` needs an
+# OverlayForeignKey, because its target is a view and Postgres cannot hold a
+# real FK constraint against one.
+# ---------------------------------------------------------------------------
+
+
+class BenchLabel(models.Model):
+    name = models.CharField(max_length=100)
+    kind = models.CharField(max_length=20)
+
+    class Meta:
+        db_table = "bench_label"
+        indexes = [
+            models.Index(fields=["kind"], name="bl_kind_idx"),
+            models.Index(fields=["name"], name="bl_name_idx"),
+        ]
+
+
+class BenchPersonLabel(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    person = OverlayForeignKey(BenchPerson, on_delete=models.CASCADE, related_name="label_links")
+    label = models.ForeignKey(BenchLabel, on_delete=models.CASCADE, related_name="bench_links")
+
+    class Meta:
+        db_table = "bench_person_label"
+        indexes = [
+            models.Index(fields=["person"], name="bpl_person_idx"),
+            models.Index(fields=["label"], name="bpl_label_idx"),
+        ]
+
+
+class PlainPersonLabel(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    person = models.ForeignKey(PlainPerson, on_delete=models.CASCADE, related_name="label_links")
+    label = models.ForeignKey(BenchLabel, on_delete=models.CASCADE, related_name="plain_links")
+
+    class Meta:
+        db_table = "plain_person_label"
+        indexes = [
+            models.Index(fields=["person"], name="ppl_person_idx"),
+            models.Index(fields=["label"], name="ppl_label_idx"),
+        ]

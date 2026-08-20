@@ -439,3 +439,140 @@ class WideOrderLineU7Source(models.Model):
             models.Index(fields=["order_id"], name="wols7_order_id_idx"),
             models.Index(fields=["product_id"], name="wols7_product_id_idx"),
         ]
+
+
+class NullableFkOverlaySource(models.Model):
+    """Source for the one model with a *nullable* OverlayForeignKey on an
+    overlay model — the shape where a join and a semi-join could differ on
+    NULL, and so the shape the traversal rewrite has to be tested against."""
+
+    label = models.CharField(max_length=50)
+    person_id = models.IntegerField(null=True)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["person_id"], name="nfos_person_id_idx"),
+        ]
+
+
+# ---------------------------------------------------------------------------
+# The production-shaped benchmark graph: four entities the tenant may override
+# and soft-delete, linked by three M2M through models it may only add to.
+#
+# Every index here mirrors one on the overlay side. That is not decoration --
+# an unindexed source branch turns any filter that cannot terminate early into
+# a sequential scan of the whole vendor table, and a `(scope, sort)` index
+# present on one branch but not the other silently costs the `Merge Append`.
+# ---------------------------------------------------------------------------
+
+
+class BenchPersonSource(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    city = models.CharField(max_length=100)
+    postcode = models.CharField(max_length=20)
+    status = models.CharField(max_length=20)
+    score = models.IntegerField(null=True)
+    born_on = models.DateField(null=True)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["last_name"], name="bps_last_name_idx"),
+            models.Index(fields=["city"], name="bps_city_idx"),
+            models.Index(fields=["status"], name="bps_status_idx"),
+            models.Index(fields=["score"], name="bps_score_idx"),
+            models.Index(fields=["city", "-score"], name="bps_city_score_idx"),
+            models.Index(fields=["last_name", "-score"], name="bps_lname_score_idx"),
+        ]
+
+
+class BenchAddressSource(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    line1 = models.CharField(max_length=200)
+    city = models.CharField(max_length=100)
+    postcode = models.CharField(max_length=20)
+    country = models.CharField(max_length=2)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["city"], name="bas_city_idx"),
+            models.Index(fields=["postcode"], name="bas_postcode_idx"),
+            models.Index(fields=["country"], name="bas_country_idx"),
+        ]
+
+
+class BenchPhoneSource(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    number = models.CharField(max_length=32)
+    kind = models.CharField(max_length=20)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["number"], name="bhs_number_idx"),
+            models.Index(fields=["kind"], name="bhs_kind_idx"),
+        ]
+
+
+class BenchEmailSource(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    address = models.CharField(max_length=200)
+    domain = models.CharField(max_length=100)
+    kind = models.CharField(max_length=20)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["address"], name="bes_address_idx"),
+            models.Index(fields=["domain"], name="bes_domain_idx"),
+        ]
+
+
+class BenchPersonAddressSource(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    person_id = models.UUIDField()
+    address_id = models.UUIDField()
+    role = models.CharField(max_length=20)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["person_id"], name="bpas_person_idx"),
+            models.Index(fields=["address_id"], name="bpas_address_idx"),
+            models.Index(fields=["person_id", "address_id"], name="bpas_pair_idx"),
+        ]
+
+
+class BenchPersonPhoneSource(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    person_id = models.UUIDField()
+    phone_id = models.UUIDField()
+    role = models.CharField(max_length=20)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["person_id"], name="bpps_person_idx"),
+            models.Index(fields=["phone_id"], name="bpps_phone_idx"),
+            models.Index(fields=["person_id", "phone_id"], name="bpps_pair_idx"),
+        ]
+
+
+class BenchPersonEmailSource(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    person_id = models.UUIDField()
+    email_id = models.UUIDField()
+    role = models.CharField(max_length=20)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["person_id"], name="bpes_person_idx"),
+            models.Index(fields=["email_id"], name="bpes_email_idx"),
+            models.Index(fields=["person_id", "email_id"], name="bpes_pair_idx"),
+        ]
