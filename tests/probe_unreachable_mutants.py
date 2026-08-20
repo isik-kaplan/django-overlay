@@ -18,6 +18,7 @@ reading.
 Exit code is the number of survivors, so it can gate CI.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -25,6 +26,25 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Where a mutation that is currently applied gets recorded, so that a run which
+# never reaches its `finally` can still be undone.
+#
+# Editing the source and putting it back is the whole method here, and the
+# restore lives in a `finally` -- which covers an exception and covers nothing
+# else. A SIGKILL, a CI step timeout, a tool that stops waiting: any of those
+# leaves the mutation applied. The next run then reads that mutated file as its
+# "original", which fails twice over. Every pattern in the file reports STALE,
+# because the line it matches on is the line that was replaced. And every
+# *other* mutation in the same file gets measured against a source that is
+# already broken, so its verdict means nothing either. Neither of those looks
+# like a mistake in the output; the first reads as a refactor nobody updated the
+# list for.
+#
+# Inside .git/ rather than the working tree, so it can never be committed and
+# never shows up as an untracked file. A checkout that is not a git repository
+# simply goes without the safety net.
+IN_FLIGHT = ROOT / ".git" / "probe-unreachable-in-flight.json"
 
 # (region, label, file, old, new) — the mutation must be killed by the suite.
 # A fifth element "equivalent" marks one that provably *can't* be killed because
@@ -363,11 +383,44 @@ def run_suite() -> bool:
     return proc.returncode == 0
 
 
+def record_in_flight(rel_path, original) -> None:
+    if IN_FLIGHT.parent.is_dir():
+        IN_FLIGHT.write_text(json.dumps({"path": rel_path, "original": original}))
+
+
+def clear_in_flight() -> None:
+    IN_FLIGHT.unlink(missing_ok=True)
+
+
+def restore_in_flight():
+    """Undo a mutation an interrupted run left applied. Returns the file, or None.
+
+    Deliberately not a "is the tree dirty?" check. Editing django_overlay/ and
+    then running this to see what the change does is the normal way to use it,
+    so refusing on any local modification would refuse the common case. What is
+    recorded here is one specific fact -- this script applied that mutation and
+    has not put it back yet -- and only that fact justifies overwriting a file.
+    """
+    if not IN_FLIGHT.exists():
+        return None
+    record = json.loads(IN_FLIGHT.read_text())
+    (ROOT / record["path"]).write_text(record["original"])
+    clear_in_flight()
+    return record["path"]
+
+
 def main(regions) -> int:
     selected = [m for m in MUTANTS if not regions or m[0] in regions]
     if not selected:
         print(f"no mutants for {regions!r}; regions are {sorted({m[0] for m in MUTANTS})}")
         return 1
+
+    recovered = restore_in_flight()
+    if recovered:
+        print(f"put {recovered} back first -- a previous run was killed with its "
+              f"mutation still applied, and reading that as the original would have "
+              f"reported it STALE and measured every other mutation in the file "
+              f"against broken source")
 
     unexpected = []
     for mutant in selected:
@@ -380,11 +433,13 @@ def main(regions) -> int:
             print(f"         pattern appears {original.count(old)}x in {rel_path}, expected once")
             unexpected.append(f"{label} (pattern no longer matches)")
             continue
+        record_in_flight(rel_path, original)
         path.write_text(original.replace(old, new))
         try:
             survived = run_suite()
         finally:
             path.write_text(original)
+            clear_in_flight()
         if equivalent:
             status = "equivalent" if survived else "SURPRISE  "
             if not survived:
