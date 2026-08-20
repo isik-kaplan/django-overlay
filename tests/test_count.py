@@ -23,6 +23,7 @@ from tests.testapp.models import (
     Address,
     HardDeleteCountTest,
     Person,
+    PersonNote,
     PersonUuid4,
     PersonUuid7Polyfill,
     SoftDeleteTestNoSource,
@@ -158,6 +159,18 @@ def test_hard_delete_model_has_no_deleted_filter():
     HardDeleteCountTest.objects.create(first_name="organic")
 
     assert decomposed(HardDeleteCountTest.objects.all())
+    # The statement itself, not just its answer. What replaces the WHERE clause
+    # here is an empty string spliced straight after the table name, and
+    # anything non-empty put there parses as a table alias instead -- valid SQL
+    # returning the same count, so no assertion on the number can see it.
+    with CaptureQueriesContext(connection) as captured:
+        HardDeleteCountTest.objects.count()
+    assert captured[0]["sql"] == (
+        'SELECT (SELECT count(*) FROM "harddeletecounttest")'
+        ' + (SELECT count(*) FROM "public"."testapp_shared_harddeletecounttestsource"'
+        ' WHERE NOT EXISTS (SELECT 1 FROM "harddeletecounttest" AS overlay_base'
+        ' WHERE overlay_base."id" = -"testapp_shared_harddeletecounttestsource"."id"))'
+    )
     assert HardDeleteCountTest.objects.count() == view_count(HardDeleteCountTest) == 2
 
     HardDeleteCountTest.objects.get(pk=-source.id).delete()
@@ -216,6 +229,30 @@ def test_a_join_that_multiplies_rows_is_not_counted_as_the_whole_table(mixed_peo
     joined = Person.objects.values("addresses__city")
     assert not decomposed(joined)
     assert joined.count() == 4
+    assert Person.objects.count() == 3, "which is not what the joined queryset counts"
+
+
+def test_the_alias_map_guard_sits_between_one_table_and_two(mixed_people):
+    """Where exactly the `alias_map` line falls, from both sides.
+
+    `.values('first_name')` puts one alias in the map and is still a count of
+    every row, so it has to decompose. One join puts two in, and two is already
+    enough to multiply rows -- a reverse FK does it without any m2m through
+    table in between, which is the smallest shape that can. Asserting only the
+    m2m case (three aliases) left both sides of the comparison free to move.
+    """
+    person = Person.objects.get(first_name="organic")
+    for text in ("first", "second"):
+        PersonNote.objects.create(person=person, text=text)
+
+    single = Person.objects.values("first_name")
+    joined = Person.objects.values("overlay_notes__id")
+    assert len(single.query.alias_map) == 1
+    assert len(joined.query.alias_map) == 2
+
+    assert decomposed(single), "values() alone still counts the whole table"
+    assert not decomposed(joined)
+    assert joined.count() == 4, "two notes on one person, plus a NULL row each for the other two"
     assert Person.objects.count() == 3, "which is not what the joined queryset counts"
 
 

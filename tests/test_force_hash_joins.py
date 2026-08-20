@@ -13,7 +13,7 @@ row. The performance itself is measured in tests/probe_plan_forcing.py.
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
-from django.db.models import Count
+from django.db.models import Count, Exists, OuterRef, Q, Subquery
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
@@ -21,6 +21,7 @@ from django_overlay.models import (
     _HASH_JOIN_THRESHOLD,
     _HASH_JOIN_THRESHOLD_LIMITED,
     _MAX_SUBQUERY_DEPTH,
+    _nested_queries,
     _overlay_views_joined,
     _overlay_views_read,
 )
@@ -83,8 +84,17 @@ def test_the_setting_turns_it_off():
 
 
 def test_a_non_bool_setting_is_refused():
-    with override_settings(DJANGO_OVERLAY_FORCE_HASH_JOINS="yes please"), pytest.raises(ImproperlyConfigured):
-        list(BenchPerson.objects.filter(**TWO_HOPS))
+    # The whole message, not just the exception type. `pytest.raises` alone
+    # passes for a message of None, which is what a mutant replaced this one
+    # with -- and the message is the only thing that tells a reader which
+    # setting they got wrong and what it wanted.
+    with override_settings(DJANGO_OVERLAY_FORCE_HASH_JOINS="yes please"):
+        with pytest.raises(ImproperlyConfigured) as raised:
+            list(BenchPerson.objects.filter(**TWO_HOPS))
+
+    assert str(raised.value) == (
+        "settings.DJANGO_OVERLAY_FORCE_HASH_JOINS must be a bool, got 'yes please'."
+    )
 
 
 def test_the_session_setting_is_restored():
@@ -176,6 +186,19 @@ def test_aggregate_is_covered():
     assert any(BAN in entry["sql"] for entry in captured.captured_queries)
 
 
+def test_the_forced_path_forwards_its_arguments_too():
+    """get_aggregation is overridden twice over: once to pass straight through,
+    and once inside the forced-hash-join block. They forward separately, and a
+    test of the first says nothing about the second.
+    """
+    query = BenchPerson.objects.filter(**TWO_HOPS).query.clone()
+    assert query._wants_hash_joins(), "precondition: this is the forced path"
+
+    result = query.get_aggregation("default", aggregate_exprs={"n": Count("id")})
+
+    assert set(result) == {"n"}
+
+
 def test_the_threshold_counts_one_hop_as_three_views_and_two_as_five():
     """The constant is only defensible if the counting behind it is right."""
     one_hop = Roster.objects.filter(members__name="m").query
@@ -218,6 +241,128 @@ def test_the_walk_stops_before_it_can_recurse_forever():
     query = BenchPerson.objects.filter(**TWO_HOPS).query
     assert _overlay_views_read(query) != set(), "the query must have views to find"
     assert _overlay_views_read(query, _depth=_MAX_SUBQUERY_DEPTH + 1) == set()
+
+
+def models_of(query):
+    """Which models the queries one level inside `query` belong to."""
+    return sorted(inner.model.__name__ for inner in _nested_queries(query))
+
+
+# _nested_queries is what makes the count see past the outer query, and it was
+# reached only through queries whose answer did not depend on it -- twenty-six
+# mutants lived in it, renaming every attribute it reads and nulling every
+# object it reads them from. Each shape below is a different way a Query can
+# hold another one, asserted on the walk directly.
+def test_a_subquery_on_the_right_of_a_lookup_is_found():
+    scope = Member.objects.filter(name="m").values("pk")
+    assert models_of(Roster.objects.filter(pk__in=scope).query) == ["Member"]
+
+
+def test_a_subquery_on_the_left_of_a_lookup_is_found():
+    """`filter(Exists(...))` does not put the expression where you would
+    guess: Django compares it to True, so the node's *lhs* is the Exists and
+    its rhs is a bool. A walk that read rhs alone found nothing here, and
+    nothing in the suite could tell -- the Exists still executes correctly,
+    it just stops counting towards the ban."""
+    outer = Roster.objects.filter(Exists(Member.objects.filter(name=OuterRef("title"))))
+    node = list(outer.query.where.children)[0]
+    assert isinstance(node.lhs, Exists) and node.rhs is True, "the shape this test rests on"
+    assert models_of(outer.query) == ["Member"]
+
+
+def test_a_subquery_wrapped_in_an_expression_is_unwrapped():
+    """The `.query` hop, which only matters for a wrapped inner query: a bare
+    Query on the rhs is already the thing wanted, so a walk that never
+    unwrapped anything still passed on `pk__in`."""
+    wrapped = Roster.objects.filter(Exists(Member.objects.filter(name=OuterRef("title"))))
+    node = list(wrapped.query.where.children)[0]
+    assert not hasattr(node.lhs, "alias_map"), "the Exists itself must not look like a Query"
+    assert hasattr(node.lhs.query, "alias_map"), "its .query must be the one found"
+    assert models_of(wrapped.query) == ["Member"]
+
+
+def test_the_walk_descends_into_a_compound_where_node():
+    """`Q(...) | Q(...)` nests the lookups one level down inside a WhereNode,
+    so a walk that treats every node as a leaf sees an empty query -- and both
+    branches have to survive it, since abandoning the loop at the first
+    compound node loses everything after it."""
+    one = Member.objects.filter(name="a").values("pk")
+    two = Member.objects.filter(name="b").values("pk")
+    single = Roster.objects.filter(Q(title="t") | Q(pk__in=one))
+    both = Roster.objects.filter(Q(pk__in=one) | Q(pk__in=two))
+
+    assert list(single.query.where.children)[0].children, "the branch must be nested to prove anything"
+    assert models_of(single.query) == ["Member"]
+    assert models_of(both.query) == ["Member", "Member"]
+
+
+def test_an_annotated_subquery_is_found_whichever_form_it_takes():
+    """Two shapes that look the same in Django and are not.
+
+    `Exists` keeps its inner query on `.query`. A `Subquery` does not survive
+    resolution as a Subquery at all -- what lands in `query.annotations` is the
+    inner Query itself, which has no `.query` of its own. Looking only for
+    `.query` therefore found the Exists and silently dropped the Subquery, so
+    an annotated scope over overlay views did not count towards the ban.
+    """
+    exists = Roster.objects.annotate(e=Exists(Member.objects.filter(name=OuterRef("title"))))
+    subquery = Roster.objects.annotate(
+        n=Subquery(Member.objects.filter(name=OuterRef("title")).values("id")[:1])
+    )
+    assert models_of(exists.query) == ["Member"]
+    assert models_of(subquery.query) == ["Member"]
+    assert _overlay_views_joined(exists.query) == _overlay_views_joined(subquery.query) == 2
+
+    # An aggregate is an annotation too, and must not be mistaken for a
+    # subquery -- it has no inner query, and its joins are already in the
+    # outer alias map.
+    assert models_of(Roster.objects.annotate(n=Count("members")).query) == []
+
+
+def test_an_annotated_scope_over_two_hops_is_banned_like_a_filtered_one():
+    """What the blind spot above cost, at the level that matters: the same
+    two-hop scope banned nested loops as a filter and did not as an
+    annotation."""
+    scope = BenchPerson.objects.filter(**TWO_HOPS).values("pk")[:1]
+    annotated = BenchPerson.objects.annotate(scoped=Subquery(scope))
+    assert _overlay_views_joined(annotated.query) >= _HASH_JOIN_THRESHOLD
+    assert any(BAN in statement for statement in statements(annotated))
+
+
+def _chain(depth):
+    """`depth` levels of `pk__in` nesting, with a view at the bottom that
+    appears nowhere else — so whether the walk reached that level is a
+    yes-or-no question about one table name."""
+    inner = Member.objects.values("pk")
+    for _ in range(depth):
+        inner = Roster.objects.filter(pk__in=inner).values("pk")
+    return inner.query
+
+
+def test_the_last_level_the_walk_reaches_is_the_limit_itself():
+    """Which level the guard cuts at, pinned from both sides.
+
+    _MAX_SUBQUERY_DEPTH levels down is still walked; one more is not. Asserting
+    only that a deep chain "still answers" left the boundary free to move by a
+    level in either direction, and left the counter free to stop counting --
+    four mutants lived in this guard and the recursion that feeds it, moving
+    the start, the comparison, and the step.
+    """
+    marker = Member._meta.db_table
+    assert marker in _overlay_views_read(_chain(_MAX_SUBQUERY_DEPTH))
+    assert marker not in _overlay_views_read(_chain(_MAX_SUBQUERY_DEPTH + 1))
+    # Not vacuous in either direction: the outer view is found at both depths,
+    # so the difference above is the guard firing and not the walk failing.
+    assert Roster._meta.db_table in _overlay_views_read(_chain(_MAX_SUBQUERY_DEPTH + 1))
+
+
+def test_the_lowered_threshold_fires_on_the_threshold_itself():
+    """Two views and a slice is the smallest banned shape, and it has to be
+    banned *at* the limit rather than past it -- a `>` here would leave the
+    lowered threshold unreachable, since two is as low as a join can go."""
+    sliced = Roster.objects.filter(pk__in=Member.objects.values("pk")).order_by("id")[:5]
+    assert _overlay_views_joined(sliced.query) == _HASH_JOIN_THRESHOLD_LIMITED == 2
+    assert any(BAN in statement for statement in statements(sliced))
 
 
 def test_a_deeply_chained_query_still_answers():

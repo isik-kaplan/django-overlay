@@ -243,6 +243,21 @@ def test_union_of_two_overlay_querysets():
     assert sorted(person.first_name for person in combined) == ["o", "s"]
 
 
+def test_union_deduplicates_by_default_and_keeps_duplicates_with_all():
+    """`all` is a parameter of union(), and it was free to be wrong.
+
+    Nothing passed it, so its default could flip and the forwarding could be
+    dropped without any test noticing -- three mutants. UNION versus UNION ALL
+    over the same row is the difference between one result and two.
+    """
+    PersonSource.objects.create(first_name="dup", age=1)
+
+    both = [Person.objects.filter(first_name="dup"), Person.objects.filter(first_name="dup")]
+
+    assert len(list(both[0].union(both[1]))) == 1, "the default has to deduplicate"
+    assert len(list(both[0].union(both[1], all=True))) == 2, "all=True has to reach super()"
+
+
 def test_raw_queries_go_through_the_view():
     PersonSource.objects.create(first_name="s", age=1)
 

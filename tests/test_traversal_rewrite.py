@@ -188,6 +188,47 @@ def test_one_hop(graph):
     assert matched == ["REF-organic", "REF-vendor"]
 
 
+def test_the_negation_guard_needs_only_one_flag_to_fire():
+    """Asserted on the method, because no queryset can reach the two reads
+    separately: `exclude()` sets branch_negated and current_negated together,
+    so every shape that sets one sets the other and `or` behaves like `and`.
+
+    Seven mutants lived in this one line -- the connective narrowed, and each
+    key in turn nulled or renamed -- and all seven survived the whole suite.
+    """
+    query = WideOrder.objects.all().query
+    rewritable = ("customer__city", "city42")
+    assert query._traversal_rewrite(rewritable) is not None, "precondition: this shape does rewrite"
+
+    assert query._traversal_rewrite(rewritable, branch_negated=True) is None
+    assert query._traversal_rewrite(rewritable, current_negated=True) is None
+    assert query._traversal_rewrite(rewritable, branch_negated=True, current_negated=True) is None
+
+
+@pytest.mark.parametrize("path", [123, None, ("customer", "city")])
+def test_a_non_string_path_is_refused_before_anything_looks_inside_it(path):
+    """`"__" not in path` is only safe because the isinstance check
+    short-circuits it. Present but ANDed, the refusal becomes a TypeError on
+    the first non-string path -- and nothing in the suite passes one, so the
+    guard was never actually exercised as a guard."""
+    query = WideOrder.objects.all().query
+    assert query._traversal_rewrite((path, "city42")) is None
+
+
+def test_the_subquery_it_builds_rewrites_in_its_turn(graph):
+    """Two hops means two array forms, one nested in the other.
+
+    The inner queryset is built on an OverlayQuery precisely so the rewrite
+    recurses. Drop that argument and the inner filter falls back to a plain
+    Query: still correct, still different from the unrewritten SQL, so
+    `expect_rewrite=True` on the two-hop case passes either way. Counting the
+    array forms is what tells them apart.
+    """
+    clause = sql_of(WideOrderLine.objects.filter(order__customer__city="city42"))
+    assert clause.count("= ANY (ARRAY(SELECT") == 2
+    assert "INNER JOIN" not in clause
+
+
 def test_the_rewritten_sql_is_the_array_form(graph):
     clause = sql_of(WideOrder.objects.filter(customer__city="city42"))
     assert "= ANY (ARRAY(SELECT" in clause

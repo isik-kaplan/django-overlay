@@ -180,17 +180,24 @@ jobs:
         run: uv sync
 
       # Computed before the shard is selected, because selecting rewrites
-      # pyproject.toml — and hashFiles in the save step would then produce a
-      # different key than the restore step used, so nothing would ever hit.
+      # pyproject.toml and the save step would otherwise produce a different
+      # key than the restore step used, so nothing would ever hit.
       #
-      # Hashing uv.lock and pyproject.toml means a dependency or config change
-      # discards every prior result. That is deliberate: mutmut's change
-      # detection is git-based and knows nothing about dependencies, so reusing
-      # results across a Django upgrade would report mutants as settled when
-      # nothing had re-verified them.
+      # A dependency or mutmut-config change has to discard every prior result:
+      # mutmut's change detection is git-based and knows nothing about
+      # dependencies, so reusing verdicts across a Django upgrade would report
+      # mutants as settled when nothing had re-verified them.
+      #
+      # But that means what goes into the key, exactly. This used to be
+      # hashFiles('uv.lock', 'pyproject.toml'), which threw away four hours of
+      # results over three edited comment lines in a file that also carries the
+      # ruff config, the coverage settings and the version number. So the key
+      # is built from the parsed [tool.mutmut] table and the declared
+      # dependencies instead -- TOML parsing drops comments and formatting, and
+      # sort_keys makes it insensitive to reordering.
       - name: Fix the cache key before anything rewrites the config
         run: |
-          echo "MUTMUT_CACHE_KEY=mutmut-${{ matrix.shard }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}" >> "$GITHUB_ENV"
+          echo "MUTMUT_CACHE_KEY=mutmut-${{ matrix.shard }}-$(uv run python .github/scripts/mutation_cache_key.py)" >> "$GITHUB_ENV"
 
       # Restore and save are separate on purpose. The combined `actions/cache`
       # writes nothing when the job fails, and every mutation run so far has

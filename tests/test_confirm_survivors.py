@@ -46,26 +46,54 @@ def test_only_mutants_that_lived_are_carried_into_phase_two(tmp_path):
     write_meta(tmp_path, "sql", {
         "django_overlay.sql.x_a__mutmut_1": 1,    # killed
         "django_overlay.sql.x_b__mutmut_1": 3,    # killed: pytest internal error
-        "django_overlay.sql.x_c__mutmut_1": -24,  # killed
+        "django_overlay.sql.x_c__mutmut_1": -24,  # SIGXCPU -- hung, not killed
         "django_overlay.sql.x_d__mutmut_1": 0,    # survived
         "django_overlay.sql.x_e__mutmut_1": 33,   # no tests -- alive
     })
-    alive, unchecked = confirm_survivors.alive_from_meta(tmp_path / "mutants")
-    assert alive == ["django_overlay.sql.x_d__mutmut_1", "django_overlay.sql.x_e__mutmut_1"]
+    alive, unchecked, _ = confirm_survivors.alive_from_meta(tmp_path / "mutants")
+    assert alive == [
+        "django_overlay.sql.x_c__mutmut_1",
+        "django_overlay.sql.x_d__mutmut_1",
+        "django_overlay.sql.x_e__mutmut_1",
+    ]
     assert unchecked == []
+
+
+@pytest.mark.parametrize("code", [-24, 24, 152, 255, 36])
+def test_a_mutant_that_hung_is_not_counted_as_dead(tmp_path, code):
+    """SIGXCPU means it ran until the CPU limit, which is not a test objecting.
+
+    mutmut's own map says `-24: "killed"` and then `-24: "timeout"` in the same
+    literal, and the later one wins. Copying the first line meant a hung mutant
+    was filed as killed and never reached phase two.
+    """
+    write_meta(tmp_path, "sql", {"django_overlay.sql.x_a__mutmut_1": code})
+    alive, _, _ = confirm_survivors.alive_from_meta(tmp_path / "mutants")
+    assert alive == ["django_overlay.sql.x_a__mutmut_1"]
+
+
+def test_the_kill_codes_agree_with_mutmut():
+    """If mutmut renames or renumbers these, this has to fail rather than drift."""
+    from mutmut.__main__ import status_by_exit_code
+
+    for code in confirm_survivors.KILLED_CODES:
+        assert status_by_exit_code[code] == "killed", f"{code} is not a kill to mutmut"
+    for code, status in status_by_exit_code.items():
+        if status == "killed":
+            assert code in confirm_survivors.KILLED_CODES, f"{code} is a kill mutmut knows about"
 
 
 def test_a_pragma_skipped_mutant_is_not_a_survivor(tmp_path):
     """`# pragma: no mutate` lines are the one benign bucket."""
     write_meta(tmp_path, "sql", {"django_overlay.sql.x_a__mutmut_1": 34})
-    alive, _ = confirm_survivors.alive_from_meta(tmp_path / "mutants")
+    alive, _, _ = confirm_survivors.alive_from_meta(tmp_path / "mutants")
     assert alive == []
 
 
 def test_a_mutant_with_no_verdict_is_reported_separately(tmp_path):
     """Not checked is not the same as not killed, and must not be confirmed."""
     write_meta(tmp_path, "sql", {"django_overlay.sql.x_a__mutmut_1": None})
-    alive, unchecked = confirm_survivors.alive_from_meta(tmp_path / "mutants")
+    alive, unchecked, _ = confirm_survivors.alive_from_meta(tmp_path / "mutants")
     assert alive == []
     assert unchecked == ["django_overlay.sql.x_a__mutmut_1"]
 
@@ -73,7 +101,7 @@ def test_a_mutant_with_no_verdict_is_reported_separately(tmp_path):
 def test_unreadable_meta_does_not_stop_the_others(tmp_path):
     write_meta(tmp_path, "sql", {"django_overlay.sql.x_a__mutmut_1": 0})
     (tmp_path / "mutants" / "django_overlay" / "broken.py.meta").write_text("{not json")
-    alive, _ = confirm_survivors.alive_from_meta(tmp_path / "mutants")
+    alive, _, _ = confirm_survivors.alive_from_meta(tmp_path / "mutants")
     assert alive == ["django_overlay.sql.x_a__mutmut_1"]
 
 
@@ -150,6 +178,58 @@ def test_a_phase_one_that_tested_nothing_is_a_failure_not_a_pass(run_in):
     """The green-report failure mode, one phase later."""
     write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": None})
     assert confirm_survivors.main(["--label", "ddl"]) == 1
+
+
+def test_a_shard_with_no_mutants_at_all_is_a_failure(run_in):
+    """"Nothing survived" and "nothing was mutated" are the same empty list.
+
+    It happened: the cache-key step failed, the mutation step was skipped,
+    mutants/ never existed, and this reported a clean shard.
+    """
+    assert confirm_survivors.main(["--label", "ddl"]) == 1
+
+
+def test_the_total_distinguishes_an_empty_run_from_a_clean_one(tmp_path):
+    write_meta(tmp_path, "sql", {"django_overlay.sql.x_a__mutmut_1": 1})
+    alive, unchecked, total = confirm_survivors.alive_from_meta(tmp_path / "mutants")
+    assert (alive, unchecked, total) == ([], [], 1)
+
+    empty, _, nothing = confirm_survivors.alive_from_meta(tmp_path / "absent")
+    assert (empty, nothing) == ([], 0)
+
+
+def test_the_tests_are_refreshed_before_confirming(tmp_path, monkeypatch):
+    """Phase two runs the suite from inside mutants/, where tests/ is a snapshot.
+
+    A test written after the last `mutmut run` is not in that snapshot, so
+    without this the confirmation runs a suite that predates the fix and reports
+    survivors that are already dead.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_new.py").write_text("def test_fresh(): pass\n")
+    (tmp_path / "mutants" / "tests").mkdir(parents=True)
+    (tmp_path / "mutants" / "tests" / "test_old.py").write_text("def test_stale(): pass\n")
+
+    assert confirm_survivors.refresh_copies() is True
+    assert (tmp_path / "mutants" / "tests" / "test_new.py").exists()
+
+
+def test_the_scripts_are_refreshed_as_well_as_the_tests(tmp_path, monkeypatch):
+    """Parts of the suite read the shard map and these scripts out of the copy,
+    so a stale .github/ tests a version of this file that no longer exists."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".github" / "scripts").mkdir(parents=True)
+    (tmp_path / ".github" / "scripts" / "new.py").write_text("# fresh\n")
+    (tmp_path / "mutants" / ".github").mkdir(parents=True)
+
+    assert confirm_survivors.refresh_copies() is True
+    assert (tmp_path / "mutants" / ".github" / "scripts" / "new.py").exists()
+
+
+def test_refreshing_is_skipped_when_there_is_nothing_to_refresh(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert confirm_survivors.refresh_copies() is False
 
 
 # ------------------------------------------------------------- the baseline
@@ -361,6 +441,131 @@ def test_the_cache_survives_the_round_trip(run_in, monkeypatch, a_test_file):
         confirm_survivors.function_hashes(str(run_in / "mutants")),
         root=str(run_in / "mutants"),
     )
+
+
+def test_each_verdict_is_saved_as_it_is_reached(tmp_path):
+    """A shard killed by the job time limit must not lose what it already paid for."""
+    saved = []
+    confirm_survivors.confirm(
+        ["a", "b", "c"],
+        run=lambda name: (1, 1.0, "tests/test_x.py::test_y"),
+        say=lambda *_: None, cache={}, hashes={}, root=str(tmp_path),
+        save=lambda verdicts: saved.append(dict(verdicts)),
+    )
+    assert [len(v) for v in saved] == [1, 2, 3], "verdicts were not persisted as they landed"
+
+
+def test_a_reused_verdict_is_saved_too(tmp_path, a_test_file):
+    """Otherwise a resumed run drops everything it did not re-run."""
+    saved = []
+    entry = {"a": {"killed_by": "tests/test_x.py::test_y", "function_hash": "fn",
+                   "test_file_hash": confirm_survivors.sha(a_test_file)}}
+    confirm_survivors.confirm(
+        ["a"], run=lambda name: pytest.fail("should have been reused"),
+        say=lambda *_: None, cache=entry, hashes={"a": "fn"}, root=str(tmp_path),
+        save=lambda verdicts: saved.append(dict(verdicts)),
+    )
+    assert saved and "a" in saved[-1]
+
+
+# --------------------------------------------- mutants no test could kill
+#
+# An allow-list is how a policy gets quietly gutted, so the guards on it matter
+# more than the feature. An entry needs a real reason; an entry whose mutant is
+# gone, or is now killed, fails the build rather than sitting there.
+
+
+def equivalents(tmp_path, body):
+    path = tmp_path / "mutation-equivalents.toml"
+    path.write_text(body)
+    return path
+
+
+GOOD_REASON = (
+    "click tests standalone_mode with `if not standalone_mode`, so None and "
+    "False take the same branch everywhere and no test can tell them apart."
+)
+
+
+def test_an_exempt_mutant_is_not_re_run(run_in, monkeypatch):
+    write_meta(run_in, "cli", {"django_overlay.cli.x_main__mutmut_40": 0})
+    path = equivalents(run_in, f'["django_overlay.cli.x_main__mutmut_40"]\nreason = "{GOOD_REASON}"\n')
+    monkeypatch.setattr(confirm_survivors, "EQUIVALENTS", path)
+    monkeypatch.setattr(confirm_survivors, "run_full_suite",
+                        lambda name, timeout=0: pytest.fail("ran a mutant no test can kill"))
+    assert confirm_survivors.main(["--label", "cli"]) == 0
+    report = json.loads((run_in / "mutants" / "mutmut-confirmed.json").read_text())
+    assert report["exempt"] == ["django_overlay.cli.x_main__mutmut_40"]
+    assert report["confirmed"] == []
+
+
+@pytest.mark.parametrize("reason", ['reason = ""', 'reason = "equivalent"', ""])
+def test_an_exemption_without_a_real_reason_is_rejected(tmp_path, reason):
+    path = equivalents(tmp_path, f'["a.b.x_c__mutmut_1"]\n{reason}\n')
+    reasons, problems = confirm_survivors.read_equivalents(path)
+    assert reasons == {}
+    assert problems and "no real reason" in problems[0]
+
+
+def test_a_good_reason_is_accepted(tmp_path):
+    path = equivalents(tmp_path, f'["a.b.x_c__mutmut_1"]\nreason = "{GOOD_REASON}"\n')
+    reasons, problems = confirm_survivors.read_equivalents(path)
+    assert problems == []
+    assert reasons["a.b.x_c__mutmut_1"].startswith("click tests")
+
+
+def test_an_unreadable_file_is_a_problem_not_an_empty_list(tmp_path):
+    path = equivalents(tmp_path, "{not toml")
+    reasons, problems = confirm_survivors.read_equivalents(path)
+    assert reasons == {} and problems
+
+
+def test_no_file_at_all_is_fine(tmp_path):
+    assert confirm_survivors.read_equivalents(tmp_path / "absent.toml") == ({}, [])
+
+
+def test_an_exemption_for_a_mutant_that_no_longer_exists_fails(run_in):
+    """A rewrite that removes the mutant has to force the exemption to be revisited."""
+    write_meta(run_in, "cli", {"django_overlay.cli.x_main__mutmut_1": 1})
+    problems = confirm_survivors.stale_exemptions(
+        {"django_overlay.cli.x_main__mutmut_40": GOOD_REASON}
+    )
+    assert problems and "no longer exists" in problems[0]
+
+
+def test_an_exemption_for_a_mutant_that_is_now_killed_fails(run_in):
+    """An unnecessary exemption makes the policy look smaller than it is."""
+    write_meta(run_in, "cli", {"django_overlay.cli.x_main__mutmut_40": 1})
+    problems = confirm_survivors.stale_exemptions(
+        {"django_overlay.cli.x_main__mutmut_40": GOOD_REASON}
+    )
+    assert problems and "kills it now" in problems[0]
+
+
+def test_an_exemption_is_not_judged_by_a_shard_that_did_not_mutate_it(run_in):
+    """Only the shard covering cli.py has anything to say about an exemption in it."""
+    write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": 1})
+    assert confirm_survivors.stale_exemptions(
+        {"django_overlay.cli.x_main__mutmut_40": GOOD_REASON}
+    ) == []
+
+
+def test_a_bad_exemptions_file_stops_the_run_before_confirming_anything(run_in, monkeypatch):
+    write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": 0})
+    path = equivalents(run_in, '["a.b.x_c__mutmut_1"]\nreason = "no"\n')
+    monkeypatch.setattr(confirm_survivors, "EQUIVALENTS", path)
+    monkeypatch.setattr(confirm_survivors, "run_full_suite",
+                        lambda name, timeout=0: pytest.fail("confirmed against a broken list"))
+    assert confirm_survivors.main(["--label", "ddl"]) == 1
+
+
+def test_the_checked_in_exemptions_are_all_properly_justified():
+    """The file that actually ships, held to the rule it documents."""
+    reasons, problems = confirm_survivors.read_equivalents()
+    assert problems == []
+    for name, reason in reasons.items():
+        assert "__mutmut_" in name, f"{name} is not a mutant name"
+        assert len(reason) >= confirm_survivors.SHORTEST_USEFUL_REASON
 
 
 # --------------------------------------------------------------- the union

@@ -312,3 +312,91 @@ def test_the_count_returning_form_of_the_private_update():
 
     assert updated == 1
     assert Person.objects.get(pk=person.pk).age == 2
+
+
+@pytest.mark.django_db(databases=["default", "other"], transaction=True)
+def test_the_base_table_path_stays_on_the_alias_it_was_given():
+    """`using=self.db` in three places, none of them asserted.
+
+    With one alias configured, `using(self.db)` and `using(None)` are the same
+    call, so every mutation of them survived. `other` is the same test database
+    under a second name, which is enough to tell them apart: the work has to be
+    issued on the alias the queryset was routed to, or a multi-database project
+    silently reads and writes the wrong connection.
+    """
+    from django.db import connections
+
+    PersonSource.objects.using("other").create(first_name="routed", age=1)
+
+    with CaptureQueriesContext(connections["other"]) as captured:
+        Person.objects.using("other").filter(first_name="routed").update(age=models.F("age") + 1)
+
+    statements = " ".join(query["sql"].upper() for query in captured.captured_queries)
+    assert "UPDATE" in statements, "the update was not issued on the alias it was given"
+    assert Person.objects.using("other").get(first_name="routed").age == 2
+
+
+@pytest.mark.django_db(databases=["default", "other"], transaction=True)
+def test_the_save_path_stays_on_the_alias_it_was_given():
+    """_update() is the save() route, with its own copy of the same argument.
+
+    update() and _update() take `using=self.db` in five places between them and
+    share none of them, so a test of one says nothing about the other.
+    """
+    from django.db import connections
+
+    person = Person.objects.using("other").create(first_name="saved", age=5)
+    person.age = models.F("age") + 1
+
+    with CaptureQueriesContext(connections["other"]) as captured:
+        person.save(using="other")
+
+    statements = " ".join(query["sql"].upper() for query in captured.captured_queries)
+    assert "UPDATE" in statements, "the save was not issued on the alias it was given"
+    assert Person.objects.using("other").get(first_name="saved").age == 6
+
+
+@pytest.mark.django_db(databases=["default", "other"], transaction=True)
+def test_the_copy_and_the_update_roll_back_together():
+    """`transaction.atomic(using=self.db)` -- on the alias being written to.
+
+    The copy into the base table and the update against it are two statements
+    that must not be separable: a row materialised out of the source and then
+    not updated is a silent change of ownership. Opening the transaction on the
+    default connection while writing to another leaves the copy outside any
+    transaction, so it survives a failure -- which is what these two mutants do,
+    and why nothing short of a rollback can see them.
+    """
+    from django.db import DatabaseError
+
+    PersonSource.objects.using("other").create(first_name="rollback", age=1)
+    base_rows = Person._base_model._default_manager.using("other")
+    assert not base_rows.filter(first_name="rollback").exists(), "precondition: source-only row"
+
+    with pytest.raises(DatabaseError):
+        Person.objects.using("other").filter(first_name="rollback").update(
+            age=models.F("age") / models.Value(0)
+        )
+
+    assert not base_rows.filter(first_name="rollback").exists(), (
+        "the copy must roll back with the update that failed"
+    )
+
+
+@pytest.mark.django_db(databases=["default", "other"], transaction=True)
+def test_the_save_path_rolls_its_copy_back_too():
+    """_update() opens its own transaction, so it needs its own rollback case."""
+    from django.db import DatabaseError
+
+    PersonSource.objects.using("other").create(first_name="save_rollback", age=1)
+    base_rows = Person._base_model._default_manager.using("other")
+    person = Person.objects.using("other").get(first_name="save_rollback")
+    assert not base_rows.filter(first_name="save_rollback").exists(), "precondition: source-only row"
+
+    person.age = models.F("age") / models.Value(0)
+    with pytest.raises(DatabaseError):
+        person.save(using="other")
+
+    assert not base_rows.filter(first_name="save_rollback").exists(), (
+        "the copy must roll back with the save that failed"
+    )

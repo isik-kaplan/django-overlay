@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from unittest import mock
 
 import pytest
 from django.apps import apps
@@ -209,3 +210,36 @@ def test_a_test_declared_model_does_not_outlive_its_test():
     run next."""
     assert not [name for name in apps.all_models["testapp"] if name.startswith("transient")]
     Address.objects.all().delete()
+
+
+def test_the_boot_failure_message_is_assembled_exactly():
+    """What a developer sees when the process refuses to start.
+
+    Asserting that ids and model names appear in it left four mutants alive in
+    the assembly: the heading, the blank line between one error and the next,
+    and the empty string standing in for a missing hint. That last one needs an
+    error without a hint, which the real checks do not currently produce.
+    """
+    from django.core.checks import Error
+
+    from django_overlay import apps as overlay_apps
+    from django_overlay import checks as overlay_checks
+
+    with mock.patch.object(overlay_checks, "check_no_plain_fk_to_overlay_models",
+                           return_value=[Error("first thing", hint="do this", id="django_overlay.E001")]), \
+         mock.patch.object(overlay_checks, "check_overlay_uniqueness",
+                           return_value=[Error("second thing", id="django_overlay.E003")]):
+        with pytest.raises(ImproperlyConfigured) as raised:
+            overlay_apps.DjangoOverlayConfig.ready(
+                apps.get_app_config("django_overlay")
+            )
+
+    assert str(raised.value) == (
+        "django_overlay found misconfigured overlay models:\n"
+        "\n"
+        "django_overlay.E001: first thing\n"
+        "\n"
+        "do this\n"
+        "\n"
+        "django_overlay.E003: second thing"
+    )

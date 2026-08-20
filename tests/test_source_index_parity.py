@@ -16,12 +16,15 @@ exactly what that command was written to report, rather than reimplementing the
 comparison.
 """
 
+from unittest import mock
+
 import pytest
 from django.apps import apps
-from django.db import connection
+from django.db import connection, models
 
 from django_overlay.introspection import compare_indexes, table_indexes
 from django_overlay.sync import resolve_schema
+from tests.testapp.models import RosterMembership, WideCustomer
 
 
 pytestmark = pytest.mark.django_db
@@ -109,9 +112,27 @@ def test_the_system_check_reports_a_missing_source_index():
     assert len(warnings) == 1
     warning = warnings[0]
     assert warning.id == "django_overlay.W001"
-    assert "(city)" in warning.msg
-    assert "testapp_shared_widecustomersource" in warning.msg
-    assert "show_source_indexes" in warning.hint
+    assert warning.obj is WideCustomer
+    # The whole message, not a substring of it. Every separator, indent and
+    # blank line in this text was a surviving mutant while the assertions here
+    # were `"(city)" in warning.msg` -- true of a message assembled wrongly in
+    # any number of ways.
+    assert warning.msg == (
+        "WideCustomer is indexed differently from its source table:\n"
+        "\n"
+        "  on widecustomer but not on public.testapp_shared_widecustomersource:\n"
+        "    - (city)\n"
+        "\n"
+        "The view reads both tables, so a filter is only as fast as the branch without "
+        "the index — the other one falls back to a sequential scan."
+    )
+    assert warning.hint == (
+        "Run `manage.py show_source_indexes` for the full comparison, then add the "
+        "missing indexes to whichever side is short. Note that Django indexes every "
+        "ForeignKey column automatically, so your table can have indexes you never "
+        "declared. If the source table isn't yours to change, silence this with "
+        "SILENCED_SYSTEM_CHECKS."
+    )
 
 
 def test_the_system_check_reports_an_index_the_base_table_is_missing():
@@ -125,8 +146,71 @@ def test_the_system_check_reports_an_index_the_base_table_is_missing():
             cursor.execute("DROP INDEX tmp_src_only")
 
     assert len(warnings) == 1
-    assert "but not on widecustomer" in warnings[0].msg
-    assert "(email)" in warnings[0].msg
+    assert warnings[0].msg == (
+        "WideCustomer is indexed differently from its source table:\n"
+        "\n"
+        "  on public.testapp_shared_widecustomersource but not on widecustomer:\n"
+        "    - (email)\n"
+        "\n"
+        "The view reads both tables, so a filter is only as fast as the branch without "
+        "the index — the other one falls back to a sequential scan."
+    )
+
+
+def test_a_multi_column_index_is_listed_with_its_columns_joined():
+    """Single-column fixtures never exercise the separator.
+
+    Every index in the fixtures covers one column, so `", ".join(columns)`
+    returns that column whatever the separator is, and two mutants of it lived
+    happily -- one per direction. A composite index is what makes the join
+    observable.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "CREATE INDEX tmp_multi ON testapp_shared_widecustomersource (city, email)"
+        )
+        try:
+            warnings = run_check()
+        finally:
+            cursor.execute("DROP INDEX tmp_multi")
+
+    assert len(warnings) == 1
+    assert "    - (city, email)\n" in warnings[0].msg
+
+
+def test_an_index_missing_from_the_base_table_lists_its_columns_joined():
+    """The other direction has its own join, and its own mutant."""
+    with connection.cursor() as cursor:
+        cursor.execute("CREATE INDEX tmp_multi_here ON widecustomer (city, email)")
+        try:
+            warnings = run_check()
+        finally:
+            cursor.execute("DROP INDEX tmp_multi_here")
+
+    assert len(warnings) == 1
+    assert "    - (city, email)\n" in warnings[0].msg
+
+
+def test_the_primary_key_index_is_ignored_even_when_only_one_side_has_one():
+    """The pk is excluded from the comparison, and that has to be observable.
+
+    While both tables had a primary key, passing the wrong pk column changed
+    nothing: each side gained the same `(id,)` entry and the difference
+    cancelled. So the mutant that dropped the pk column entirely survived. A
+    source table without a primary key is where the exclusion does work.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "ALTER TABLE testapp_shared_widecustomersource "
+            "DROP CONSTRAINT testapp_shared_widecustomersource_pkey"
+        )
+        try:
+            assert run_check() == [], "the primary key should not be compared at all"
+        finally:
+            cursor.execute(
+                "ALTER TABLE testapp_shared_widecustomersource "
+                "ADD CONSTRAINT testapp_shared_widecustomersource_pkey PRIMARY KEY (id)"
+            )
 
 
 def test_the_system_check_does_nothing_without_a_database():
@@ -161,6 +245,27 @@ def test_the_primary_key_and_tombstone_flag_are_not_reported():
     assert _index_columns("btree (unbalanced") == []
     assert _index_columns("gist (geom)") == ["geom"]
     assert _index_columns("something odd") == []
+
+    # Nesting, which is the whole reason this counts parentheses instead of
+    # splitting on commas. A comma inside an expression belongs to the
+    # expression; every arithmetic mutant of the depth counters lived until
+    # something in here had one.
+    assert _index_columns("btree (greatest(a, b), city)") == ["greatest(a, b)", "city"]
+    assert _index_columns("btree (coalesce(a, coalesce(b, c)), city)") == [
+        "coalesce(a, coalesce(b, c))",
+        "city",
+    ]
+    assert _index_columns("btree ((a + b), (c + d))") == ["(a + b)", "(c + d)"]
+
+    # Quoted identifiers, which Postgres uses for anything not lower_snake.
+    # `.strip('"')` had two live mutants, both invisible while every column in
+    # the fixtures was bare.
+    assert _index_columns('btree ("Weird Column")') == ["Weird Column"]
+    assert _index_columns('btree ("Weird Column", city)') == ["Weird Column", "city"]
+    # Only the quotes come off, not whatever letters happen to sit next to
+    # them: `.strip('"')` takes a set of characters, and a mutant that widened
+    # that set was invisible until a column name began with one of them.
+    assert _index_columns('btree ("XCoord")') == ["XCoord"]
 
     assert _ignorable({"unique": True, "shape": "btree (id)"}, "id")
     assert _ignorable({"unique": False, "shape": "btree (_overlay_deleted)"}, "id")
@@ -201,8 +306,113 @@ def test_relation_check_reports_an_unindexed_foreign_key_on_the_source():
             cursor.execute("CREATE INDEX rms_roster_id_idx ON testapp_shared_rostermembershipsource (roster_id)")
 
     assert [w.id for w in warnings] == ["django_overlay.W002"]
-    assert "roster_id" in warnings[0].msg
-    assert "foreign key" in warnings[0].msg
+    warning = warnings[0]
+    assert warning.obj is RosterMembership
+    # All of it. Eleven mutants lived in this message and its hint while the
+    # assertions picked out "roster_id" and "foreign key" -- both still true of
+    # a message whose lines, separators and closing sentence are all wrong.
+    assert warning.msg == (
+        "RosterMembership has columns with no index on "
+        "public.testapp_shared_rostermembershipsource:\n"
+        "\n"
+        "    - roster_id: roster is a foreign key, so joins and reverse lookups read "
+        "the source\n"
+        "\n"
+        "Django indexes these on your table automatically; nothing does it on the vendor's."
+    )
+    assert warning.hint == (
+        "Add a btree index on each of ['roster_id'] to "
+        "public.testapp_shared_rostermembershipsource. If the source table isn't yours "
+        "to change, silence this with SILENCED_SYSTEM_CHECKS."
+    )
+
+
+def test_several_uncovered_columns_are_listed_one_per_line():
+    """One missing column never exercises the join between them.
+
+    `"\n".join(lines)` returns the single line whatever the separator is, so
+    the mutant of it lived while every test here dropped one index at a time.
+    RosterMembership has two foreign keys, which is two lines.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute("DROP INDEX rms_roster_id_idx")
+        cursor.execute("DROP INDEX rms_member_id_idx")
+        try:
+            warnings = run_relations_check()
+        finally:
+            cursor.execute(
+                "CREATE INDEX rms_roster_id_idx ON testapp_shared_rostermembershipsource (roster_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX rms_member_id_idx ON testapp_shared_rostermembershipsource (member_id)"
+            )
+
+    assert [w.id for w in warnings] == ["django_overlay.W002"]
+    assert (
+        "    - member_id: member is a foreign key, so joins and reverse lookups read "
+        "the source\n"
+        "    - roster_id: roster is a foreign key, so joins and reverse lookups read "
+        "the source\n"
+    ) in warnings[0].msg
+    assert "['member_id', 'roster_id']" in warnings[0].hint
+
+
+def test_a_one_to_one_column_is_described_as_one_to_one():
+    """No overlay model with a source has a one-to-one field, so that branch of
+    the description is only reachable by calling the function directly -- which
+    is why two mutants of the phrase lived."""
+    from django.test.utils import isolate_apps
+
+    from django_overlay.checks import _columns_needing_a_source_index
+    from django_overlay.fields import OverlayOneToOneField
+    from django_overlay.models import OverlayMeta, OverlayModel
+    from django_overlay.sources import SourceTable
+
+    with isolate_apps("tests.testapp"):
+        model = type(
+            "ProbeOneToOne",
+            (OverlayModel,),
+            {
+                "__module__": "tests.testapp.models",
+                "desk": OverlayOneToOneField(WideCustomer, on_delete=models.CASCADE, null=True),
+                "Meta": type("Meta", (), {"app_label": "testapp"}),
+                "OverlayMeta": type(
+                    "OverlayMeta",
+                    (OverlayMeta,),
+                    {
+                        "table_name": "probe_one_to_one",
+                        "get_source": staticmethod(
+                            lambda: SourceTable(schema="public", table="probe_one_to_one_source")
+                        ),
+                    },
+                ),
+            },
+        )
+
+    needed = _columns_needing_a_source_index(model)
+    assert needed["desk_id"] == (
+        "desk is a one-to-one, so joins and reverse lookups read the source"
+    )
+
+
+def test_every_model_is_visited_even_after_one_is_skipped():
+    """`continue` and `break` differ only when something comes after the skip.
+
+    A model whose source table does not exist yet is skipped, and the loop has
+    to carry on to the next one. Nothing in the fixtures puts a skipped model
+    before a complaining one, so the mutant that turned that `continue` into a
+    `break` never changed an outcome.
+    """
+    from django_overlay import checks
+
+    visited = []
+    with mock.patch.object(checks, "_overlay_models_with_a_source", return_value=["skipped", "seen"]), \
+         mock.patch.object(checks, "_comparable_tables", side_effect=[None, ("public", "t", "s")]):
+        checks._for_each_comparable_model(
+            ("default",), lambda cursor, model, *tables: visited.append(model) or None
+        )
+
+    assert visited == ["seen"], "the loop stopped at the skipped model instead of continuing"
 
 
 def test_relation_check_reports_an_unindexed_uniqueness_column():

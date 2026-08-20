@@ -29,6 +29,64 @@ def test_trigger_name_is_stable_and_within_postgres_identifier_length():
     assert len(name) <= 63
 
 
+def test_passing_db_constraint_is_refused_with_the_reason():
+    """The refusal explains why the field owns that argument, and five mutants
+    lived in the explanation."""
+    from django_overlay.exceptions import OverlayConfigurationError
+
+    with pytest.raises(OverlayConfigurationError) as raised:
+        OverlayForeignKey("testapp.Address", on_delete=models.CASCADE, db_constraint=True)
+
+    assert str(raised.value) == (
+        "OverlayForeignKey always sets db_constraint=False (Postgres can't hold a real FK "
+        "against a view) — don't pass db_constraint yourself."
+    )
+
+
+def test_a_trigger_name_is_truncated_to_postgres_identifier_length():
+    """`[:63]` is the identifier limit, and `<= 63` passes for `[:64]` too.
+
+    Every fixture name is short, so the truncation never happened and the
+    boundary was never tested -- while at 64 characters Postgres silently
+    truncates for you, and two triggers that differ only past the limit become
+    one.
+    """
+
+    class LongName:
+        class _meta:
+            db_table = "a" * 80
+
+    field = AddressNote._meta.get_field("address")
+
+    assert len(field.trigger_name(LongName)) == 63
+    assert len(field.referenced_row_trigger_name(LongName)) == 63
+
+
+def test_the_two_trigger_names_do_not_collide_after_truncation():
+    """They share a prefix, so truncating to the same length must still leave
+    them different."""
+
+    class LongName:
+        class _meta:
+            db_table = "b" * 80
+
+    field = AddressNote._meta.get_field("address")
+
+    assert field.trigger_name(LongName) != field.referenced_row_trigger_name(LongName)
+
+
+def test_a_foreign_key_takes_on_delete_positionally():
+    """ForeignKey's second argument is positional, and it rides in *args.
+
+    Every field in the fixtures passes on_delete by keyword, so dropping *args
+    from the forwarding changed nothing any test could see -- while a field
+    declared the ordinary Django way would raise TypeError at import.
+    """
+    field = OverlayForeignKey("testapp.Address", models.CASCADE)
+
+    assert field.remote_field.on_delete is models.CASCADE
+
+
 def test_target_tables_include_the_base_table_and_every_declared_source():
     field = AddressNote._meta.get_field("address")
     targets = field.target_tables("public")
@@ -58,6 +116,48 @@ def test_overlay_one_to_one_field_target_tables_point_at_person():
     tables = [(t["schema"], t["table"]) for t in targets]
     assert ("public", Person.base_table()._meta.db_table) in tables
     assert ("public", "testapp_shared_personsource") in tables
+
+
+def test_the_soft_delete_override_is_used_only_when_it_is_given():
+    """`soft_delete if soft_delete is None else ...` -- the condition, inverted.
+
+    The override exists so a trigger rebuilt while replaying an older migration
+    does not reference _overlay_deleted before the migration that adds it has
+    run. Nothing passed it, so the branch that reads the model's own setting was
+    the only one ever taken.
+    """
+    field = AddressNote._meta.get_field("address")
+    from django_overlay.fields import target_tables_for
+
+    default = target_tables_for(Address, "public")
+    forced_off = target_tables_for(Address, "public", soft_delete=False)
+    forced_on = target_tables_for(Address, "public", soft_delete=True)
+
+    assert default[0]["soft_delete"] == Address._overlay_meta.soft_delete
+    assert forced_off[0]["soft_delete"] is False
+    assert forced_on[0]["soft_delete"] is True
+    assert field.target_tables("public")[0]["soft_delete"] == default[0]["soft_delete"]
+
+
+def test_the_source_entry_never_carries_soft_delete():
+    """A vendor table has no tombstone column, so this key is always False --
+    and it has to be spelled the way the template reads it."""
+    targets = AddressNote._meta.get_field("address").target_tables("public")
+    source = [t for t in targets if t["table"] == "testapp_shared_addresssource"][0]
+
+    assert set(source) == {"schema", "table", "id_column", "negate", "soft_delete"}
+    assert source["soft_delete"] is False
+
+
+def test_deconstructing_a_field_that_never_had_db_constraint_is_fine():
+    """`kwargs.pop("db_constraint", None)` -- the default is what stops a
+    KeyError on a field where Django never put the key there."""
+    field = OverlayForeignKey("testapp.Address", on_delete=models.CASCADE)
+    field.set_attributes_from_name("address")
+
+    _, _, _, kwargs = field.deconstruct()
+
+    assert "db_constraint" not in kwargs
 
 
 def test_target_tables_for_a_source_less_model_has_no_source_entry():

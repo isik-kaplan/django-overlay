@@ -14,7 +14,10 @@ an exception type click would have raised.
 
 import builtins
 import sys
+from importlib import metadata
 from unittest import mock
+
+import pytest
 
 from django_overlay import cli
 
@@ -36,14 +39,44 @@ def test_no_arguments_prints_the_usage(capsys):
     assert "benchmark" in capsys.readouterr().out
 
 
-def test_help_prints_the_usage(capsys):
-    assert cli.main(["--help"]) == 0
+# Every alias, not just the long one. `--help` alone passing says nothing about
+# `-h`, and mutation testing found exactly that: breaking `-h` cost nothing.
+@pytest.mark.parametrize("spelling", ["-h", "--help", "help"])
+def test_every_spelling_of_help_prints_the_usage(capsys, spelling):
+    assert cli.main([spelling]) == 0
     assert "usage: django-overlay" in capsys.readouterr().out
 
 
-def test_version_prints_a_version(capsys):
+@pytest.mark.parametrize("spelling", ["-V", "--version", "version"])
+def test_every_spelling_of_version_prints_the_version(capsys, spelling):
+    assert cli.main([spelling]) == 0
+    assert capsys.readouterr().out == f"django-overlay {metadata.version('django-overlay')}\n"
+
+
+def test_the_version_printed_is_the_installed_one(capsys):
+    """`django-overlay ` is a literal in the f-string, so matching it proves nothing.
+
+    The assertion that used to be here checked the output contained
+    "django-overlay", which is true whatever `_version()` returns -- including
+    "unknown", which is what it returns when the package name it looks up is
+    wrong. Two mutants lived in that gap.
+    """
     assert cli.main(["--version"]) == 0
-    assert "django-overlay" in capsys.readouterr().out
+    printed = capsys.readouterr().out.split()[-1]
+    assert printed == metadata.version("django-overlay")
+    assert printed != "unknown"
+
+
+def test_arguments_come_from_argv_after_the_program_name(monkeypatch, capsys):
+    """Nothing called main() without an explicit argv, so the slice was free to be wrong.
+
+    Asserting only that the output mentions "django-overlay" would not do it:
+    the usage text says that too, so dropping an argument and printing usage
+    instead would pass. It has to be the version line specifically.
+    """
+    monkeypatch.setattr(sys, "argv", ["django-overlay", "--version"])
+    assert cli.main() == 0
+    assert capsys.readouterr().out == f"django-overlay {metadata.version('django-overlay')}\n"
 
 
 def test_an_unknown_command_is_an_error(capsys):
@@ -97,10 +130,29 @@ def test_a_mistyped_flag_is_a_usage_error_not_a_traceback(capsys):
     assert "No such option" in capsys.readouterr().err
 
 
+def test_a_usage_error_names_a_command_somebody_could_type(capsys):
+    """Without prog_name, click names itself after argv[0] and suggests nonsense."""
+    cli.main(["benchmark", "--nonsense-flag"])
+    assert "Usage: django-overlay benchmark" in capsys.readouterr().err
+
+
+def test_a_subcommand_that_returns_nothing_still_exits_zero():
+    """click commands return None on success; the shim turns that into an exit code."""
+    with mock.patch.object(cli, "load_benchmark") as loader:
+        loader.return_value = mock.Mock(return_value=None)
+        assert cli.main(["benchmark"]) == 0
+
+
+def test_a_subcommand_that_returns_a_code_keeps_it():
+    with mock.patch.object(cli, "load_benchmark") as loader:
+        loader.return_value = mock.Mock(return_value=3)
+        assert cli.main(["benchmark"]) == 3
+
+
 def test_an_aborted_prompt_exits_quietly(capsys):
     import click
 
     with mock.patch.object(cli, "load_benchmark") as loader:
         loader.return_value = mock.Mock(side_effect=click.exceptions.Abort())
         assert cli.main(["benchmark"]) == 1
-    assert "aborted" in capsys.readouterr().err
+    assert capsys.readouterr().err == "aborted\n"
