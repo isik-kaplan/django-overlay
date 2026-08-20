@@ -8,7 +8,7 @@ from django.conf import settings
 from tests.testapp.registry import STRATEGIES
 
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.concurrency]
 
 
 def negates(strategy_name):

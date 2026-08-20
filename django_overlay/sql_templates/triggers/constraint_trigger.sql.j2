@@ -1,5 +1,22 @@
 CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
 BEGIN
+  -- Deferred to COMMIT, so by the time this runs NEW is how the row looked
+  -- when the event was queued, not necessarily how it looks now. Postgres
+  -- doesn't drop queued events for rows deleted later in the same
+  -- transaction (its own referential-integrity triggers get that skip
+  -- internally; a user-written constraint trigger doesn't), so without this
+  -- guard `create(); delete()` inside one transaction fails at COMMIT
+  -- against a parent that is legitimately gone. A column changed since is
+  -- the same story — that UPDATE queued its own event, which checks the
+  -- value that actually landed.
+  IF NOT EXISTS (
+    SELECT 1 FROM {{ tenant_schema | qi }}.{{ referencing_table | qi }}
+    WHERE {{ referencing_pk | qi }} = NEW.{{ referencing_pk | qi }}
+      AND {{ column | qi }} IS NOT DISTINCT FROM NEW.{{ column | qi }}
+  ) THEN
+    RETURN NULL;
+  END IF;
+
   -- Only re-check on UPDATE if this column actually changed.
   IF (TG_OP = 'INSERT' OR NEW.{{ column | qi }} IS DISTINCT FROM OLD.{{ column | qi }})
      AND NEW.{{ column | qi }} IS NOT NULL

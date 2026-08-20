@@ -12,7 +12,27 @@ WHERE NOT _overlay_deleted
 {% if source -%}
 UNION ALL
 SELECT {{ select_list(("-" if source.negate else "") ~ (source.id_column | qi)) }} FROM {{ source.schema | qi }}.{{ source.table | qi }}
-WHERE {% if source.extra_where %}{{ source.extra_where }} AND {% endif -%}
-{{ "-" if source.negate }}{{ source.id_column | qi }} NOT IN (SELECT {{ pk_column | qi }} FROM {{ tenant_schema | qi }}.{{ base_table | qi }} WHERE {{ pk_column | qi }} IS NOT NULL)
+{#- NOT EXISTS, not NOT IN. Both express "the base table hasn't taken this id
+    over", but NOT IN makes Postgres hash every base row before it can rule out
+    a single source row -- a point lookup measured 39ms against 0.03ms once this
+    became a real anti-join. The base pk is never NULL, so the two are
+    equivalent here; NOT IN's NULL semantics were what the old IS NOT NULL
+    filter was working around.
+
+    The anti-join is skipped entirely when nothing can ever shadow a source
+    row -- see OverlayMeta.overridable. It is the dominant cost of the whole
+    view: the same two tables ordered by id measured 0.031ms as a bare UNION
+    ALL (Merge Append, which LIMIT stops early) against 53ms with the anti-join
+    above them. A non-overridable model that also hard-deletes has nothing in
+    its base table that can collide with a source id, so there is nothing to
+    exclude. With soft delete a tombstone still shadows, but only a tombstone,
+    so the check narrows to those -- which is a far smaller and better
+    estimated relation than the whole base table. -#}
+{% if anti_join or source.extra_where -%}
+WHERE {% if source.extra_where %}{{ source.extra_where }}{% if anti_join %} AND {% endif %}{% endif -%}
+{% if anti_join -%}
+NOT EXISTS (SELECT 1 FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS overlay_base WHERE overlay_base.{{ pk_column | qi }} = {{ "-" if source.negate }}{{ source.table | qi }}.{{ source.id_column | qi }}{% if anti_join == "tombstones" %} AND overlay_base._overlay_deleted{% endif %})
+{% endif -%}
+{% endif -%}
 {% endif -%}
 ;

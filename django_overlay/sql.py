@@ -2,6 +2,35 @@ from ._templating import render
 from .strategies import Strategy, default_pk_sql, negates_source_ids
 
 
+def _source_context(source, strategy: Strategy) -> dict | None:
+    """The source table as the templates want it — including whether this
+    strategy negates source ids, which decides how a base pk maps back to a
+    source row."""
+    if source is None:
+        return None
+    return {
+        "schema": source.schema,
+        "table": source.table,
+        "id_column": source.id_column,
+        "extra_where": source.extra_where,
+        "negate": negates_source_ids(strategy),
+    }
+
+
+def anti_join_kind(overridable: bool, soft_delete: bool) -> str | None:
+    """Which anti-join the view needs to stop a source row appearing twice.
+
+    "full"       — anything in the base table shadows its source row.
+    "tombstones" — only a tombstone can, because nothing is ever materialised.
+    None         — nothing can, so the source branch needs no check at all.
+
+    Split out of the template so the three cases can be asserted directly.
+    """
+    if overridable:
+        return "full"
+    return "tombstones" if soft_delete else None
+
+
 def build_view_sql(
     view_name: str,
     tenant_schema: str,
@@ -11,16 +40,8 @@ def build_view_sql(
     pk_column: str = "id",
     strategy: Strategy = Strategy.NEGATIVE_ID,
     soft_delete: bool = False,
+    overridable: bool = True,
 ) -> str:
-    source_context = None
-    if source is not None:
-        source_context = {
-            "schema": source.schema,
-            "table": source.table,
-            "id_column": source.id_column,
-            "extra_where": source.extra_where,
-            "negate": negates_source_ids(strategy),
-        }
     return render(
         "view/view.sql.j2",
         tenant_schema=tenant_schema,
@@ -28,8 +49,9 @@ def build_view_sql(
         base_table=base_table,
         columns=columns,
         pk_column=pk_column,
-        source=source_context,
+        source=_source_context(source, strategy),
         soft_delete=soft_delete,
+        anti_join=anti_join_kind(overridable, soft_delete),
     )
 
 
@@ -43,6 +65,8 @@ def build_instead_of_insert_sql(
     strategy: Strategy = Strategy.NEGATIVE_ID,
     pk_default_sql: str | None = None,
     soft_delete: bool = False,
+    source=None,
+    overridable: bool = True,
 ) -> str:
     pk_default_expr = pk_default_sql or default_pk_sql(strategy)
     if pk_default_expr is None:
@@ -59,11 +83,19 @@ def build_instead_of_insert_sql(
         pk_default_expr=pk_default_expr,
         columns=columns,
         soft_delete=soft_delete,
+        source=_source_context(source, strategy),
+        overridable=overridable,
     )
 
 
 def build_instead_of_update_sql(
-    view_name: str, tenant_schema: str, base_table: str, columns, pk_column: str = "id", soft_delete: bool = False
+    view_name: str,
+    tenant_schema: str,
+    base_table: str,
+    columns,
+    pk_column: str = "id",
+    soft_delete: bool = False,
+    overridable: bool = True,
 ) -> str:
     return render(
         "triggers/instead_of_update.sql.j2",
@@ -74,6 +106,7 @@ def build_instead_of_update_sql(
         pk_column=pk_column,
         columns=columns,
         soft_delete=soft_delete,
+        overridable=overridable,
     )
 
 
@@ -98,15 +131,46 @@ def build_instead_of_delete_sql(
 
 
 def build_constraint_trigger_sql(
-    trigger_name: str, tenant_schema: str, referencing_table: str, column: str, target_tables
+    trigger_name: str,
+    tenant_schema: str,
+    referencing_table: str,
+    column: str,
+    target_tables,
+    referencing_pk: str = "id",
 ) -> str:
-    """`target_tables`: see fields.target_tables_for()."""
+    """`target_tables`: see fields.target_tables_for(). `referencing_pk` lets
+    the deferred trigger re-find its own row at COMMIT — see the template."""
     return render(
         "triggers/constraint_trigger.sql.j2",
         tenant_schema=tenant_schema,
         referencing_table=referencing_table,
+        referencing_pk=referencing_pk,
         column=column,
         target_tables=target_tables,
+        function_name=f"check_{trigger_name}",
+        trigger_name=trigger_name,
+    )
+
+
+def build_referenced_row_trigger_sql(
+    trigger_name: str,
+    tenant_schema: str,
+    referencing_table: str,
+    column: str,
+    target_table: str,
+    target_view: str,
+    target_pk: str = "id",
+) -> str:
+    """The delete side of one OverlayForeignKey: refuse to remove a row that is
+    still referenced. Lives on the *target's* base table."""
+    return render(
+        "triggers/referenced_row_trigger.sql.j2",
+        tenant_schema=tenant_schema,
+        referencing_table=referencing_table,
+        column=column,
+        target_table=target_table,
+        target_view=target_view,
+        target_pk=target_pk,
         function_name=f"check_{trigger_name}",
         trigger_name=trigger_name,
     )
@@ -120,6 +184,7 @@ def build_unique_constraint_trigger_sql(
     source,
     pk_column: str,
     strategy: Strategy = Strategy.NEGATIVE_ID,
+    soft_delete: bool = False,
 ) -> str | None:
     """None if there's no source to guard against — Postgres's own UNIQUE
     constraint on the base table already covers base-vs-base."""
@@ -134,5 +199,6 @@ def build_unique_constraint_trigger_sql(
         columns=columns,
         pk_column=pk_column,
         negate=negates_source_ids(strategy),
+        soft_delete=soft_delete,
         source={"schema": source.schema, "table": source.table, "id_column": source.id_column},
     )

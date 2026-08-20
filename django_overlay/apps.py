@@ -10,11 +10,19 @@ class DjangoOverlayConfig(AppConfig):
     def ready(self):
         from . import checks  # also registers the manage.py check
 
-        # Runs on every process boot, not just `manage.py check` — a bad
-        # FK/M2M against an overlay model should fail loudly right away.
-        errors = checks.check_no_plain_fk_to_overlay_models(None)
+        # Run on every process boot, not just `manage.py check`. That's the
+        # hard stop: ready() is part of django.setup(), which every Django
+        # process must complete before models are usable, and --skip-checks
+        # doesn't reach it. A misconfigured model can't get as far as emitting
+        # DDL or serving a request.
+        errors = [
+            *checks.check_no_plain_fk_to_overlay_models(None),
+            *checks.check_overlay_uniqueness(None),
+        ]
         if errors:
             raise ImproperlyConfigured(
-                "django_overlay found unsafe references to overlay view models:\n"
-                + "\n".join(f"{error.id}: {error.msg}" for error in errors)
+                "django_overlay found misconfigured overlay models:\n\n"
+                + "\n\n".join(
+                    f"{error.id}: {error.msg}" + (f"\n\n{error.hint}" if error.hint else "") for error in errors
+                )
             )

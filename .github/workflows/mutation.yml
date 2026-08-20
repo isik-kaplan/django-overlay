@@ -1,0 +1,307 @@
+name: Mutation
+
+# Its own workflow rather than a job in Tests, for one reason: concurrency.
+#
+# Tests cancels superseded runs, which is right for a five-minute matrix and
+# fatal for a multi-hour one. A mutation run has to complete *once* to write the
+# cache that makes every later run cheap, and under `cancel-in-progress: true`
+# any push during those hours kills it — so it would never finish, and would
+# therefore never stop being an expensive job.
+#
+# So: no cancellation of a run already under way. The group still serialises
+# them, and GitHub keeps only the newest pending run, so pushing repeatedly
+# queues one job behind the current one rather than a pile.
+#
+# Policy: no mutant survives. A mutant that lives is a change to
+# django_overlay/ that no test objects to — either the test is missing or the
+# code is dead. A genuinely equivalent mutant gets a `# pragma: no mutate` on
+# its line explaining why, not a tolerance in check_mutants.py. `timeout` and
+# `suspicious` count as alive: an unstable or hanging mutant is one nothing
+# reliably kills.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Kept identical to the block in benchmarks.yml — the two must move together.
+  # Mutation is hours of compute, so it runs for people with standing in the
+  # repository and on master, not for anybody who opens a pull request.
+  gate:
+    runs-on: ubuntu-22.04
+    outputs:
+      maintainer: ${{ steps.check.outputs.maintainer }}
+    steps:
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "maintainer=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR)
+              echo "maintainer=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "maintainer=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::Mutation testing is skipped for outside contributions; it runs on master after merge." ;;
+          esac
+
+  # The regions mutmut structurally can't reach — see KNOWN_ISSUES/09. mutmut
+  # forks a pre-warmed parent and only picks the mutant in the child, so
+  # anything that runs at import time (the metaclass, every migration
+  # operation, the SQL templates) has already run against the original code.
+  # This harness edits the source directly instead.
+  #
+  # Its own job rather than a step in each shard: it is minutes, not hours, and
+  # repeating it six times would waste them and blur which shard went red.
+  # Every mutation's `old` string must match its file exactly once, so a
+  # refactor that moves the code reports STALE instead of quietly testing
+  # nothing.
+  unreachable:
+    needs: gate
+    if: needs.gate.outputs.maintainer == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_overlay_test
+        ports:
+          - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
+        options: >-
+          --shm-size=1g
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: django_overlay_test
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Mutation-test the code mutmut can't reach
+        run: uv run python tests/probe_unreachable_mutants.py
+
+  # One job per subsystem. Each mutates a different slice of django_overlay/
+  # and runs the *whole* suite, so a shard's verdicts are what a single job
+  # would have produced — see the header of mutation_shards.py for why
+  # sharding the tests instead would be unsound.
+  #
+  # The list must match SHARDS in .github/scripts/mutation_shards.py;
+  # tests/test_mutation_shards.py asserts it does, in the ordinary test run.
+  mutate:
+    needs: gate
+    if: needs.gate.outputs.maintainer == 'true'
+    strategy:
+      # Every shard reports. Stopping the others because one went red would
+      # trade five known answers for one.
+      fail-fast: false
+      matrix:
+        shard: [queryset, query, models, ddl, checks, commands, fields, cli]
+
+    # Single Python version on purpose: mutation results don't vary across
+    # interpreters, and each shard runs the whole suite once per mutant.
+    runs-on: ubuntu-22.04
+
+    # GitHub's hard cap for a hosted-runner job is 360 minutes, and this asks
+    # for all of it. The repository is public, so hosted standard runners cost
+    # nothing and the only budget being spent is wall-clock.
+    #
+    # Nothing should need all of it now. The shard that did was `models` when
+    # models.py was one 1,227-line module: 42% of the mutants in one job, which
+    # measured 331 minutes. Splitting that module into a package by subject put
+    # the worst shard at roughly 86. The cap stays as a backstop, and a shard
+    # that does hit it is not wasted — the cache below is saved either way and
+    # the next run resumes from it.
+    timeout-minutes: 360
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_overlay_test
+        ports:
+          - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
+        options: >-
+          --shm-size=1g
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: django_overlay_test
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Computed before the shard is selected, because selecting rewrites
+      # pyproject.toml and the save step would otherwise produce a different
+      # key than the restore step used, so nothing would ever hit.
+      #
+      # A dependency or mutmut-config change has to discard every prior result:
+      # mutmut's change detection is git-based and knows nothing about
+      # dependencies, so reusing verdicts across a Django upgrade would report
+      # mutants as settled when nothing had re-verified them.
+      #
+      # But that means what goes into the key, exactly. This used to be
+      # hashFiles('uv.lock', 'pyproject.toml'), which threw away four hours of
+      # results over three edited comment lines in a file that also carries the
+      # ruff config, the coverage settings and the version number. So the key
+      # is built from the parsed [tool.mutmut] table and the declared
+      # dependencies instead -- TOML parsing drops comments and formatting, and
+      # sort_keys makes it insensitive to reordering.
+      - name: Fix the cache key before anything rewrites the config
+        run: |
+          echo "MUTMUT_CACHE_KEY=mutmut-${{ matrix.shard }}-$(uv run python .github/scripts/mutation_cache_key.py ${{ matrix.shard }})" >> "$GITHUB_ENV"
+
+      # Restore and save are separate on purpose. The combined `actions/cache`
+      # writes nothing when the job fails, and every mutation run so far has
+      # failed or been cancelled — so no cache has ever been written, and each
+      # run has started cold. That is the whole reason an expensive job stayed
+      # expensive. Saving with `if: always()` makes progress cumulative: a
+      # shard that goes red, or that runs out the 360 minutes, still hands its
+      # work to the next run.
+      - name: Restore this shard's mutation cache
+        uses: actions/cache/restore@v4
+        with:
+          path: mutants
+          key: ${{ env.MUTMUT_CACHE_KEY }}-${{ github.sha }}
+          restore-keys: |
+            ${{ env.MUTMUT_CACHE_KEY }}-
+
+      # mutmut takes its config from [tool.mutmut] and nowhere else, so scoping
+      # a run to a shard means editing the file. `only_mutate` is excluded from
+      # mutmut's config fingerprint, so this does not invalidate a single
+      # cached verdict.
+      - name: Select the shard
+        run: uv run python .github/scripts/mutation_shards.py ${{ matrix.shard }}
+
+      # --max-children 1 is not optional and cannot be moved into
+      # [tool.mutmut]: mutmut only accepts it as a flag, and without it forks
+      # one child per CPU onto the single shared Postgres test database, where
+      # the children race each other's schema and every mutant comes back
+      # killed. A green report built out of broken tests.
+      - name: Run mutation tests
+        run: uv run mutmut run --max-children 1
+
+      # Phase one leaves survivors behind by design -- it only runs the tests
+      # mutmut's tracing picked -- so this reports the counts and checks that
+      # the run actually happened, without gating on them.
+      - name: Summarise phase one for this shard
+        if: always()
+        run: |
+          uv run mutmut export-cicd-stats
+          uv run python .github/scripts/check_mutants.py --phase-one \
+            --label ${{ matrix.shard }} mutants/mutmut-cicd-stats.json
+
+      # Phase two: every survivor re-run against the whole suite, which is what
+      # decides whether it is real. Only survivors cost a full pass, which is
+      # what keeps the job inside its six hours.
+      - name: Confirm this shard's survivors against the whole suite
+        if: always()
+        run: |
+          uv run python .github/scripts/confirm_survivors.py \
+            --label ${{ matrix.shard }} --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Save this shard's mutation cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: mutants
+          key: ${{ env.MUTMUT_CACHE_KEY }}-${{ github.sha }}
+
+      - name: Upload this shard's results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutmut-stats-${{ matrix.shard }}
+          path: |
+            mutants/mutmut-cicd-stats.json
+            mutants/mutmut-confirmed.json
+          if-no-files-found: warn
+
+  # The policy applies to the union, not to a shard. This is the check worth
+  # reading: one table, every shard, and a total.
+  report:
+    needs: [gate, mutate]
+    if: always() && needs.gate.outputs.maintainer == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Collect every shard's results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mutmut-stats-*
+          path: shard-stats
+
+      # Two tables, because they answer different questions. The first is what
+      # phase one measured -- how much of the package was mutated, and how much
+      # of it died to the traced tests alone. The second is the policy: what
+      # survived the whole suite, by name.
+      - name: Report what phase one measured
+        run: |
+          uv run python .github/scripts/check_mutants.py --phase-one \
+            --expect-every-shard \
+            --summary "$GITHUB_STEP_SUMMARY" shard-stats
+
+      - name: Enforce the no-surviving-mutant policy across every shard
+        run: |
+          uv run python .github/scripts/confirm_survivors.py \
+            --aggregate shard-stats --expect-every-shard \
+            --summary "$GITHUB_STEP_SUMMARY"

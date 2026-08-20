@@ -13,13 +13,23 @@ BEGIN
      )
      -- Exclude this row's own source origin, or it'd conflict with itself.
      AND EXISTS (
-       SELECT 1 FROM {{ source.schema | qi }}.{{ source.table | qi }}
+       SELECT 1 FROM {{ source.schema | qi }}.{{ source.table | qi }} AS src
        WHERE (
          {% for c in columns -%}
-         {{ c | qi }} = NEW.{{ c | qi }}{% if not loop.last %} AND {% endif %}
+         src.{{ c | qi }} = NEW.{{ c | qi }}{% if not loop.last %} AND {% endif %}
          {%- endfor %}
        )
-       AND {{ source.id_column | qi }} != {{ "-" if negate }}NEW.{{ pk_column | qi }}
+       AND src.{{ source.id_column | qi }} != {{ "-" if negate }}NEW.{{ pk_column | qi }}
+       {%- if soft_delete %}
+       -- A source row masked by a tombstone isn't a visible row, so its value
+       -- reserves nothing. Without this the partial unique index frees a
+       -- locally-created value but a source-backed one stays taken forever.
+       AND NOT EXISTS (
+         SELECT 1 FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS tombstone
+         WHERE tombstone.{{ pk_column | qi }} = {{ "-" if negate }}src.{{ source.id_column | qi }}
+           AND tombstone._overlay_deleted
+       )
+       {%- endif %}
      )
   THEN
     -- %% doubled so psycopg doesn't treat it as a bind placeholder.
@@ -34,5 +44,10 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS {{ trigger_name | qi }} ON {{ tenant_schema | qi }}.{{ base_table | qi }};
 CREATE CONSTRAINT TRIGGER {{ trigger_name | qi }}
 AFTER INSERT OR UPDATE ON {{ tenant_schema | qi }}.{{ base_table | qi }}
-DEFERRABLE INITIALLY DEFERRED
+-- INITIALLY IMMEDIATE, unlike the FK trigger, to match what Postgres does for
+-- the native half of this constraint: a unique index raises at the statement.
+-- Deferring only the source-side half would mean the same constraint failing
+-- at two different moments depending on which side you collided with. Still
+-- DEFERRABLE, so SET CONSTRAINTS can opt into deferral where it is wanted.
+DEFERRABLE INITIALLY IMMEDIATE
 FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}();

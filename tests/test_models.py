@@ -1,7 +1,10 @@
+import re
+
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.test import override_settings
+from django.test.utils import isolate_apps
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -12,6 +15,7 @@ from django_overlay.models import (
     OverlayModelBase,
     _default_soft_delete,
     _default_strategy,
+    _split_meta_options,
 )
 from django_overlay.strategies import Strategy
 from tests.testapp.models import Address, AddressNote, Person, SoftDeleteTest
@@ -37,7 +41,11 @@ def test_base_model_points_back_to_the_view_model():
 def test_both_models_share_the_declared_non_m2m_fields():
     view_fields = {f.name for f in Person._meta.fields}
     base_fields = {f.name for f in Person.base_table()._meta.fields}
-    assert view_fields == base_fields == {"id", "first_name", "age"}
+
+    assert view_fields == {"id", "first_name", "age"}
+    # The base model carries one extra: soft delete's shadow flag, which is
+    # never exposed on the view and so never queryable through the model.
+    assert base_fields == view_fields | {"_overlay_deleted"}
 
 
 def test_m2m_fields_only_exist_on_the_view_model_not_the_base_model():
@@ -106,9 +114,17 @@ def test_default_strategy_reads_from_settings_when_configured():
 
 
 def test_default_strategy_rejects_a_non_strategy_value():
+    # Compared whole. Matching the setting name alone left the rest of the
+    # sentence unpinned -- and the rest is what says a Strategy member is
+    # wanted and gives an example of one, which is the actionable part.
     with override_settings(DJANGO_OVERLAY_DEFAULT_STRATEGY="negative_id"):
-        with pytest.raises(ImproperlyConfigured, match="DJANGO_OVERLAY_DEFAULT_STRATEGY"):
+        with pytest.raises(ImproperlyConfigured) as raised:
             _default_strategy()
+
+    assert str(raised.value) == (
+        "settings.DJANGO_OVERLAY_DEFAULT_STRATEGY must be a django_overlay.strategies.Strategy "
+        "member (e.g. Strategy.NEGATIVE_ID), got 'negative_id'."
+    )
 
 
 def test_overlay_meta_strategy_rejects_a_non_strategy_value():
@@ -212,7 +228,9 @@ def test_meta_managed_is_rejected():
 
 
 def test_meta_permissions_is_rejected():
-    with pytest.raises(OverlayConfigurationError, match="permissions"):
+    # Matches the explanation, not just the option name: the reason is the part
+    # a reader needs, and asserting only "permissions" leaves it unpinned.
+    with pytest.raises(OverlayConfigurationError, match="permissions isn't supported on an OverlayModel"):
 
         class HasPermissions(OverlayModel):
             class Meta:
@@ -227,7 +245,13 @@ def test_meta_permissions_is_rejected():
 
 
 def test_meta_default_permissions_is_rejected():
-    with pytest.raises(OverlayConfigurationError, match="default_permissions"):
+    with pytest.raises(
+        OverlayConfigurationError,
+        match=re.escape(
+            "default_permissions isn't supported on an OverlayModel — there's no model to attach "
+            "it to that makes sense (see _UNSUPPORTED_META_OPTIONS)."
+        ),
+    ):
 
         class HasDefaultPermissions(OverlayModel):
             class Meta:
@@ -278,13 +302,13 @@ def test_meta_app_label_reaches_both_the_base_and_view_model():
     assert HasExplicitAppLabel.base_table()._meta.app_label == "testapp"
 
 
-def test_default_soft_delete_defaults_to_false_when_unconfigured():
-    assert _default_soft_delete() is False
+def test_default_soft_delete_defaults_to_true_when_unconfigured():
+    assert _default_soft_delete() is True
 
 
 def test_default_soft_delete_reads_from_settings_when_configured():
-    with override_settings(DJANGO_OVERLAY_DEFAULT_SOFT_DELETE=True):
-        assert _default_soft_delete() is True
+    with override_settings(DJANGO_OVERLAY_DEFAULT_SOFT_DELETE=False):
+        assert _default_soft_delete() is False
 
 
 def test_default_soft_delete_rejects_a_non_bool_value():
@@ -324,3 +348,52 @@ def test_abstract_overlaymodel_subclass_is_not_split():
     assert AbstractOverlay._meta.abstract is True
     assert not hasattr(AbstractOverlay, "_base_model")
     assert not hasattr(AbstractOverlay, "_overlay_meta")
+
+
+def test_private_meta_attributes_are_not_forwarded_as_options():
+    """`vars(Meta)` carries __module__, __qualname__ and friends; forwarding
+    those as model options would either be ignored silently or blow up
+    somewhere far from the cause."""
+    base_options, view_options = _split_meta_options("Probe", type("Meta", (), {"ordering": ["x"]}))
+
+    assert view_options == {"ordering": ["x"]}
+    assert base_options == {}
+    assert not any(key.startswith("_") for key in {**base_options, **view_options})
+
+
+def test_multi_table_inheritance_from_a_concrete_overlay_model_is_rejected_by_name():
+    """The message has to name the real problem. Before this it complained
+    about a missing OverlayMeta, which sent you off writing one for a model
+    that could never work."""
+    with pytest.raises(OverlayConfigurationError, match="Multi-table inheritance isn't supported"):
+
+        class Child(Person):
+            extra = models.CharField(max_length=10)
+
+
+@isolate_apps("tests.testapp")
+def test_an_abstract_overlay_base_is_still_allowed():
+    """The escape hatch the message points at. isolate_apps because this one
+    actually builds — left in the real registry it would be a managed model
+    whose table no migration ever created."""
+
+    class Shared(OverlayModel):
+        nickname = models.CharField(max_length=10)
+
+        class Meta:
+            abstract = True
+            app_label = "testapp"
+
+    class Concrete(Shared):
+        class Meta:
+            app_label = "testapp"
+
+        class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+            table_name = "abstract_base_child"
+
+            @staticmethod
+            def get_source():
+                return None
+
+    assert Concrete._meta.get_field("nickname") is not None
+    assert Concrete.base_table()._meta.db_table == "abstract_base_child"

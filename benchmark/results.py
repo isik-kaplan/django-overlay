@@ -1,0 +1,146 @@
+"""Saved runs, and the delta column that compares against them.
+
+`--save-results` writes a run here. Every later run picks the most recent saved
+run up automatically and adds a delta column, with no flag needed -- the flag
+is for producing a baseline, not for using one.
+
+Two rules keep the deltas honest:
+
+  * a run taken in a different environment is not compared, it is reported as
+    incomparable with the reason (see environment.py);
+  * a change smaller than the noise floor is not shown at all. The harness
+    cannot resolve a 5% move, and printing one invites somebody to go looking
+    for a regression that is measurement error.
+"""
+
+import json
+import pathlib
+from datetime import UTC, datetime
+
+from benchmark import environment
+
+
+DIRECTORY = pathlib.Path(__file__).parent / "results"
+
+# Below this, a difference is the harness talking to itself. The ban probe's
+# own control row -- a query neither column bans, run twice -- lands at 1.0x
+# with excursions to about 1.2x, so anything under a fifth is not a signal.
+NOISE_FLOOR = 0.20
+
+
+def _slug(label):
+    keep = [c if c.isalnum() or c in "-_" else "-" for c in label.lower()]
+    return "".join(keep).strip("-") or "run"
+
+
+def save(label, env, suites):
+    DIRECTORY.mkdir(parents=True, exist_ok=True)
+    path = DIRECTORY / f"{_slug(label)}.json"
+    path.write_text(json.dumps({
+        "label": label,
+        "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "environment": env,
+        "suites": suites,
+    }, indent=2))
+    return path
+
+
+def saved_runs():
+    """Every saved run, newest first."""
+    if not DIRECTORY.exists():
+        return []
+    found = []
+    for path in DIRECTORY.glob("*.json"):
+        try:
+            found.append((path, json.loads(path.read_text())))
+        except (OSError, json.JSONDecodeError):
+            continue
+    found.sort(key=lambda pair: pair[1].get("saved_at", ""), reverse=True)
+    return found
+
+
+def latest(label=None):
+    runs = saved_runs()
+    if label is not None:
+        for path, data in runs:
+            if data.get("label") == label or path.stem == _slug(label):
+                return data
+        return None
+    return runs[0][1] if runs else None
+
+
+def clear():
+    """Remove every saved run. Returns how many went."""
+    if not DIRECTORY.exists():
+        return 0
+    removed = 0
+    for path in DIRECTORY.glob("*.json"):
+        path.unlink()
+        removed += 1
+    return removed
+
+
+def _index(run):
+    """(suite, section, row, column) -> cell dict, for a saved run."""
+    table = {}
+    for suite in run.get("suites", []):
+        for section in suite.get("sections", []):
+            for row in section.get("rows", []):
+                for column, cell in row.get("cells", {}).items():
+                    table[(suite["name"], section["title"], row["label"], column)] = cell
+    return table
+
+
+def deltas_for(baseline, suite_name, section):
+    """{(row label, column): text} for one freshly measured section.
+
+    Only cells the baseline also holds get a delta, so adding a row to a suite
+    does not produce a column of blanks that reads as "unchanged".
+    """
+    if baseline is None:
+        return {}
+    previous = _index(baseline)
+    out = {}
+    for row in section.rows:
+        for column, cell in row.cells.items():
+            was = previous.get((suite_name, section.title, row.label, column))
+            if was is None:
+                continue
+            text = _delta_text(was, cell)
+            if text:
+                out[(row.label, column)] = text
+    return out
+
+
+def _delta_text(was, now):
+    """How to describe the move from a saved cell to a fresh one."""
+    # Nothing to say about a cell that was never run on one side or the other.
+    if was.get("note") or now.note:
+        return ""
+    # A cap boundary crossed either way is the whole story, and a percentage
+    # across it would be invented -- a capped cell only says "at least".
+    if was["capped"] and not now.capped:
+        return "(was capped)"
+    if now.capped and not was["capped"]:
+        return "(now capped)"
+    if was["capped"] and now.capped:
+        return ""
+    if not was["ms"]:
+        return ""
+    change = (now.ms - was["ms"]) / was["ms"]
+    if abs(change) < NOISE_FLOOR:
+        return ""
+    return f"({change * 100:+.0f}%)"
+
+
+def comparison_note(baseline, env):
+    """One line about the baseline, or about why there isn't one."""
+    if baseline is None:
+        return None
+    changed = environment.differences(baseline["environment"], env)
+    if changed:
+        return (
+            f"no delta column: the baseline '{baseline['label']}' was taken in a "
+            f"different environment ({'; '.join(changed)})"
+        )
+    return f"delta column compares against '{baseline['label']}' from {baseline['saved_at']}"

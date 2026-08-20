@@ -1,0 +1,286 @@
+name: Benchmarks
+
+# Three tiers, because the cost of a benchmark and the confidence it buys are
+# very far apart at different scales.
+#
+#   smoke      every pull request and master push. Scale 0.05, about a minute.
+#              GATES, on the one thing a benchmark can honestly fail on: the
+#              overlay and a plain table holding identical rows returning
+#              different answers. A timing is never a failure; a wrong answer
+#              is, whatever the clock says.
+#
+#   standard   master pushes and maintainers' pull requests. All eight suites
+#              at scale 0.3. Reports timings, still fails on a disagreement.
+#
+#   deep       manual only. Scale 1.0 by default — the size at which the
+#              interesting pathologies actually appear. Pure report.
+#
+# Why `standard` is not the top tier: two of the shapes the nested-loop ban
+# exists for are healthy at 300,000 rows and take 27 seconds at 1,000,000
+# (summary counts 81ms -> 26,829ms, scope-as-subquery 107ms -> 26,250ms). So
+# 0.3 is a fast regression check, not proof, and anything being reasoned about
+# seriously wants a `deep` run at 1.0 behind it.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: '1.0 is 1,000,000 people'
+        required: false
+        default: '1.0'
+      suite:
+        description: 'One suite name, or blank for all of them'
+        required: false
+        default: ''
+      max_runtime:
+        description: 'Hard ceiling for the run'
+        required: false
+        default: '1h'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BENCH_URL: postgres://postgres:postgres@localhost:5432/django_overlay_bench
+
+jobs:
+  # Kept identical to the block in tests.yml — see the comment there. The two
+  # must move together.
+  gate:
+    runs-on: ubuntu-22.04
+    outputs:
+      maintainer: ${{ steps.check.outputs.maintainer }}
+    steps:
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "maintainer=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR)
+              echo "maintainer=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "maintainer=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::The scale 0.3 benchmark is skipped for outside contributions; the smoke tier still runs." ;;
+          esac
+
+  smoke:
+    name: Smoke (scale 0.05)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_overlay_bench
+        ports:
+          - 5432:5432
+        # --shm-size, because a service container gets 64MB of /dev/shm by
+        # default and Postgres puts parallel workers' tuple queues there. At
+        # scale 0.3 the benchmark hit `could not resize shared memory segment
+        # ... No space left on device` four times, which the harness reports as
+        # a lost connection -- an honest report of a query that never ran, but
+        # a measurement lost either way.
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
+        options: >-
+          --shm-size=1g
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync
+
+      # --database-url bypasses docker compose entirely, so the benchmark
+      # itself runs exactly the same code here as it does on a laptop; only
+      # the database plumbing differs.
+      - name: Run the smoke suites
+        run: |
+          uv run django-overlay benchmark \
+            --smoke \
+            --scale 0.05 \
+            --passes 1 \
+            --cap 10 \
+            --max-runtime 10m \
+            --yes \
+            --no-compare \
+            --format markdown \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --database-url "$BENCH_URL"
+
+  standard:
+    name: Full suite (scale 0.3)
+    needs: gate
+    if: needs.gate.outputs.maintainer == 'true' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    # Far above the benchmark's own 30m ceiling, so the budget guard is what
+    # stops a slow run and reports what it skipped, rather than GitHub killing
+    # the job and leaving nothing behind. 45 was not far enough: `staged`
+    # overran a twenty-one second estimate by thirty-seven minutes and GitHub
+    # killed the job with five suites unmeasured and no closing banner. The
+    # per-measurement ceiling in benchmark/harness.py is the actual fix; this is
+    # the margin that means a future overrun is reported rather than truncated.
+    timeout-minutes: 90
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_overlay_bench
+        ports:
+          - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
+        options: >-
+          --shm-size=1g
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run every suite at scale 0.3
+        run: |
+          set -o pipefail
+          uv run django-overlay benchmark \
+            --scale 0.3 \
+            --passes 1 \
+            --cap 10 \
+            --max-runtime 30m \
+            --yes \
+            --no-compare \
+            --format markdown \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --database-url "$BENCH_URL" \
+            2>&1 | tee benchmark.log
+
+      - name: Surface the budget and anything skipped
+        if: always()
+        run: uv run python .github/scripts/benchmark_warnings.py benchmark.log
+
+      - name: Upload the full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-standard-log
+          path: benchmark.log
+          if-no-files-found: ignore
+
+  deep:
+    name: Full suite (manual scale)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    # The benchmark's own ceiling defaults to 1h and the guard enforces it, but
+    # this job takes --max-runtime as an input and somebody will type a big one,
+    # so it asks for GitHub's hard cap of 360 and lets the budget guard be the
+    # thing that decides when to stop.
+    timeout-minutes: 360
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_overlay_bench
+        ports:
+          - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
+        options: >-
+          --shm-size=1g
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run the requested suites
+        # Report-only: a timing on a shared runner is not a pass/fail signal,
+        # and a disagreement would already have failed the smoke tier.
+        continue-on-error: true
+        # Inputs go through the environment rather than being interpolated into
+        # the script, so a dispatch input cannot become shell.
+        env:
+          BENCH_SUITE: ${{ github.event.inputs.suite }}
+          BENCH_SCALE: ${{ github.event.inputs.scale || '1.0' }}
+          BENCH_MAX_RUNTIME: ${{ github.event.inputs.max_runtime || '1h' }}
+        run: |
+          set -o pipefail
+          SUITE_ARG=""
+          if [ -n "$BENCH_SUITE" ]; then
+            SUITE_ARG="--suite $BENCH_SUITE"
+          fi
+          uv run django-overlay benchmark \
+            $SUITE_ARG \
+            --scale "$BENCH_SCALE" \
+            --passes 1 \
+            --cap 10 \
+            --max-runtime "$BENCH_MAX_RUNTIME" \
+            --yes \
+            --no-compare \
+            --format markdown \
+            --output "$GITHUB_STEP_SUMMARY" \
+            --database-url "$BENCH_URL" \
+            2>&1 | tee benchmark.log
+
+      # `warning` is not a job status, so this is the closest thing: an
+      # annotation that lands at the top of the run page, and the budget lines
+      # repeated at the very end of the log where somebody scrolling to the
+      # bottom will actually see them.
+      - name: Surface the budget and anything skipped
+        if: always()
+        run: uv run python .github/scripts/benchmark_warnings.py benchmark.log
+
+      - name: Upload the full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-deep-log
+          path: benchmark.log
+          if-no-files-found: ignore

@@ -1,5 +1,22 @@
 # Migrations
 
+## The command has to be ours
+
+`django_overlay` ships its own `makemigrations`, and Django resolves a command
+name to whichever app declares it *last* in `INSTALLED_APPS`. If another app
+overrides `makemigrations` too (`django_tenants` does, as `makemigrations` and
+`migrate_schemas`), the last one wins and the other is simply not used — with
+no warning. If that were `django_overlay`'s, the view and trigger operations
+would silently stop being generated and your migrations would look fine while
+doing half the work.
+
+Put `django_overlay` **after** any other app that overrides the command, and
+check with:
+
+```bash
+python manage.py makemigrations --help   # the description names django_overlay
+```
+
 `makemigrations` is overridden: whenever a migration changes an
 OverlayModel's fields, or adds/renames/removes an `OverlayForeignKey`
 (including inside an `OverlayManyToManyField`'s through model) or an

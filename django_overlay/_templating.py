@@ -9,6 +9,12 @@ def _qi(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _sql_literal(value: str) -> str:
+    """Jinja filter: quote a value as a SQL string literal. Only for names this
+    package generates itself — it is not a substitute for bind parameters."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 _ENV = jinja2.Environment(
     loader=jinja2.PackageLoader("django_overlay", "sql_templates"),
     autoescape=False,
@@ -16,6 +22,7 @@ _ENV = jinja2.Environment(
     lstrip_blocks=True,
 )
 _ENV.filters["qi"] = _qi
+_ENV.filters["sql_literal"] = _sql_literal
 
 
 def render(template_name: str, **context) -> str:

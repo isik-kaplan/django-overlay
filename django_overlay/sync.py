@@ -18,15 +18,18 @@ def resolve_schema(connection) -> str:
         return cursor.fetchone()[0]
 
 
-def sync_view(model, tenant_schema: str, execute, columns=None) -> None:
+def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None) -> None:
     """Regenerates `model`'s view + its three INSTEAD OF triggers. Shared by
     SyncOverlayView and resync_view() — they just differ in what `execute`
     is (a schema_editor's or a plain cursor's).
 
-    SyncOverlayView passes `columns` from migration-historical state rather
-    than the live model: replaying migrations on a fresh database re-runs
-    every past SyncOverlayView call, and each has to reflect the columns
-    that existed at that point in history, not today's field list."""
+    SyncOverlayView passes `columns` and `soft_delete` from migration-historical
+    state rather than the live model: replaying migrations on a fresh database
+    re-runs every past SyncOverlayView call, and each has to reflect the shape
+    that existed at that point in history, not today's. `soft_delete` matters
+    for the same reason `columns` does — turning it on adds `_overlay_deleted`,
+    and a view rebuilt for an earlier migration must not filter on a column
+    that migration hasn't added yet."""
     columns = columns if columns is not None else _columns_for(model)
     base_table = model._base_model._meta.db_table
     view_name = model._meta.db_table
@@ -34,11 +37,17 @@ def sync_view(model, tenant_schema: str, execute, columns=None) -> None:
     pk_column = model._meta.pk.column
     strategy = model._overlay_meta.strategy
     pk_default_sql = model._overlay_meta.pk_default_sql
-    soft_delete = model._overlay_meta.soft_delete
+    soft_delete = model._overlay_meta.soft_delete if soft_delete is None else soft_delete
+    # Read live, not from historical state, because there is nothing historical
+    # to read: soft_delete leaves a `_overlay_deleted` column behind that says
+    # what it was at a point in history, and `overridable` leaves no trace in
+    # the field list at all. Which is also why changing it generates no
+    # migration — see OverlayMeta — and needs resync_overlay_views.
+    overridable = model._overlay_meta.overridable
 
     execute(
         overlay_sql.build_view_sql(
-            view_name, tenant_schema, base_table, source, columns, pk_column, strategy, soft_delete
+            view_name, tenant_schema, base_table, source, columns, pk_column, strategy, soft_delete, overridable
         )
     )
     execute(
@@ -52,10 +61,14 @@ def sync_view(model, tenant_schema: str, execute, columns=None) -> None:
             strategy,
             pk_default_sql,
             soft_delete,
+            source,
+            overridable,
         )
     )
     execute(
-        overlay_sql.build_instead_of_update_sql(view_name, tenant_schema, base_table, columns, pk_column, soft_delete)
+        overlay_sql.build_instead_of_update_sql(
+            view_name, tenant_schema, base_table, columns, pk_column, soft_delete, overridable
+        )
     )
     execute(
         overlay_sql.build_instead_of_delete_sql(view_name, tenant_schema, base_table, pk_column, columns, soft_delete)

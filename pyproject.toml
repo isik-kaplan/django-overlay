@@ -7,7 +7,10 @@ authors = [
 ]
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.11"
+# 3.12 rather than 3.11 because the floor below is Django 6.0, which requires
+# it. Raising both together is the point: the package overrides private
+# QuerySet internals, and those are not stable across a four-year Django range.
+requires-python = ">=3.12"
 keywords = ["django", "postgres", "views", "multi-tenant"]
 classifiers = [
   "Framework :: Django",
@@ -15,11 +18,23 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
 ]
-dependencies = ["django>=4.2", "jinja2>=3.1.0"]
+# django>=6.0, not >=4.2. The declared range was never real: OverlayQuerySet
+# overrides QuerySet._update(), whose signature gained `returning_fields` in
+# 6.0, so every install on 4.2-5.2 raised TypeError the first time an update
+# touched a column it reads. Nothing caught it because CI resolved 6.0 for
+# Python 3.12+ and only the 3.11 job saw 5.2.
+dependencies = ["django>=6.0", "jinja2>=3.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/isik-kaplan/django-overlay"
 Repository = "https://github.com/isik-kaplan/django-overlay"
+
+# The only shipped entry point. Its `benchmark` subcommand resolves lazily
+# against the `benchmark/` directory, which is excluded from the wheel below —
+# so an installed copy gets a working `--help` and a clear message, and a
+# source checkout gets the real thing. See django_overlay/cli.py.
+[project.scripts]
+django-overlay = "django_overlay.cli:main"
 
 [tool.uv]
 dev-dependencies = [
@@ -32,16 +47,43 @@ dev-dependencies = [
     "ruff>=0.9.0",
     "sqlfluff>=3.0.0",
     "django-tenants>=3.6.0",
+    "mutmut>=3.7.0",
+    # The benchmark CLI. Not a runtime dependency of the library — the shipped
+    # shim in django_overlay/cli.py imports it only when the command is run.
+    "click>=8.1.0",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# What ships. `benchmark/` carries a docker compose file, its own settings
+# module and a data generator that writes millions of rows; `tests/` carries
+# the Django app those models live in. Neither is any use to somebody who
+# installed the library, and both are large.
+[tool.hatch.build.targets.wheel]
+packages = ["django_overlay"]
+
+# Local working notes are kept out of git via .git/info/exclude rather than
+# .gitignore, which hatchling reads — so without naming them here they would
+# be picked up as ordinary untracked files and shipped in the sdist.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "benchmark",
+    "mutants",
+    "KNOWN_ISSUES",
+    "TODO",
+    "PERFORMANCE-TODO.md",
+    "django_overlay_code_review.md",
+]
+
 [tool.ruff]
 line-length = 120
 fix = true
 extend-exclude = ["*/migrations/*"]
+# Long SQL/template fragments have to match the source byte for byte.
+[tool.ruff.lint.per-file-ignores]
+"tests/probe_unreachable_mutants.py" = ["E501"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -50,7 +92,7 @@ unfixable = []
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
-known-first-party = ["django_overlay"]
+known-first-party = ["benchmark", "django_overlay"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.django_settings"
@@ -60,6 +102,123 @@ testpaths = ["tests"]
 # invocation — see docs/development/DEVELOPMENT.md. Excluded here so the
 # default run doesn't try to collect it against the plain settings module.
 addopts = "--ignore=tests/test_tenants"
+markers = [
+    "concurrency: spawns threads and real connections to race them. Excluded from",
+    "mutation runs, where a mutation can leave a thread waiting on a lock that is",
+    "never released and turn a killed mutant into a timeout. The unreachable-mutant",
+    "harness runs the full suite, so these are still mutation-covered.",
+]
+
+# Mutation testing. Policy: zero surviving mutants — see
+# docs/development/DEVELOPMENT.md. A mutant that is genuinely equivalent
+# (the mutated code is indistinguishable from the original) gets a
+# `# pragma: no mutate` on its line with a comment saying why, rather than
+# being tolerated in the report.
+[tool.mutmut]
+source_paths = ["django_overlay/"]
+# sql_templates/ is listed even though it already lives under source_paths.
+# mutmut copies non-Python files out of source_paths exactly once and never
+# refreshes them, so the .sql.j2 files went stale and every run after that was
+# mutating current Python against SQL templates from an earlier commit — for
+# about eleven hours, silently, until a test finally depended on one and broke
+# the baseline. Paths in also_copy *are* re-copied each run, which is the fix.
+# If mutation results ever look impossible again, `rm -rf mutants` first.
+#
+# benchmark/ is here because tests/ imports it — test_benchmark_tooling.py
+# directly, and test_cli.py through the shim's lazy import, which resolves to
+# None when the directory is absent and fails the assertion that it does not.
+# Without it the whole suite fails to collect inside mutants/ and mutmut
+# reports every mutant as unrun.
+# .github/ is here because tests/test_mutation_shards.py reads the shard map out
+# of .github/scripts/ and the matrix out of .github/workflows/. Without it that
+# test raises at import time, the whole suite fails to collect inside mutants/,
+# and mutmut reports every mutant as unrun -- which is how it was found, by the
+# guard in check_mutants.py, on the first shard run after the test was written.
+also_copy = [
+    "tests/",
+    "benchmark/",
+    ".github/",
+    "pyproject.toml",
+    "sqlfluff_libs/",
+    "django_overlay/sql_templates/",
+]
+# Phase one of two. mutmut runs only the tests its tracing associates with each
+# mutant, which is cheap -- a couple of seconds against a full suite pass -- and
+# wrong in exactly one direction. Tracing under-selects here (mutating
+# SyncOverlayView.forward picks six tests that never apply a migration), and
+# under-selection can only fail to kill a mutant, never kill one that should
+# have lived. So a kill in this phase is final, and every mistake it makes lands
+# in the survivor pile, where phase two re-runs each survivor against the whole
+# suite and settles it -- see .github/scripts/confirm_survivors.py.
+#
+# This used to append `tests/` so that every mutant ran everything. Same answer,
+# but it costs a full suite pass per mutant whether the mutant lives or dies:
+# measured at ~32s locally and ~97s on a runner, which puts four of the six
+# shards past the six-hour job cap. The two-phase split pays the full suite only
+# for mutants that survive.
+pytest_add_cli_args = ["-m", "not concurrency"]
+# operations.py is invisible to mutation testing as the suite is written
+# today: everything in it runs inside pytest-django's session-scoped database
+# setup rather than inside a test, and mutmut's trampoline doesn't swap in the
+# mutant there. Verified — `model = None` in SyncOverlayView.forward leaves
+# all 202 tests passing under mutmut, while the same edit applied directly to
+# the source breaks 97 of them. Mutants here would always "survive" and no
+# amount of test-writing would kill them, so they'd make the policy below
+# meaningless. Lifting this needs tests that apply migrations inside the test
+# body — see KNOWN_ISSUES/09.
+do_not_mutate = ["django_overlay/operations.py"]
+# only_mutate is not set here by hand. CI writes it per shard and a local run
+# scopes itself the same way, so the two cannot disagree:
+#
+#   python .github/scripts/mutation_shards.py models   # scope to one shard
+#   python .github/scripts/mutation_shards.py --clear  # mutate everything again
+#
+# The map is asserted against the filesystem by tests/test_mutation_shards.py,
+# so no module can quietly belong to no shard. See KNOWN_ISSUES/10.
+# One child at a time is deliberately NOT set here, because it cannot be:
+# `max_children` is a flag on `mutmut run`, not a config key, and mutmut
+# discards keys it does not recognise without a word. So every invocation has
+# to pass `--max-children 1` on the command line, and tests/test_mutmut_config.py
+# fails if this file pretends otherwise.
+#
+# It matters more than a tuning knob should. Every test process talks to the
+# same Postgres test database, so parallel children race each other's schema,
+# tests fail for reasons that have nothing to do with the mutation, and every
+# mutant is recorded as killed. That is not a hypothetical: a full local run
+# reported 2,209 killed and 0 survived, while one of the mutants it called
+# killed leaves the whole suite passing -- 884 tests, checked by hand. The
+# failure mode is a green report.
+#
+# Parallelism comes from sharding across CI jobs instead -- see
+# .github/scripts/mutation_shards.py -- which needs no per-child database.
+# The per-mutant wall limit, which mutmut computes as
+# (estimated_time_of_tests + timeout_constant) * timeout_multiplier.
+#
+# The defaults (1.0 and 15.0) do not work here, and the reason is subtle enough
+# to have cost a full CI run. `estimated_time_of_tests` is summed over the tests
+# mutmut's tracing associates with the mutant. Back when pytest_add_cli_args
+# appended `tests/`, pytest collected the whole suite regardless, so the limit
+# was calibrated against a fraction of the work that actually ran: ~16s for a
+# mutant whose traced subset is near zero, against a full pass of 69-97s on a
+# runner. A killed mutant exits at the first failing test and never notices; a
+# survivor has to reach the end, so it was cut off and filed as `timeout`.
+# `survived` was structurally unreachable, and a run reporting 0 survivors and
+# 230 timeouts was reporting 230 survivors it could not name.
+#
+# Phase one no longer appends `tests/`, so the estimate and the work now match
+# and the defaults would probably do. The flat limit stays anyway: it costs
+# nothing when nothing hangs, and the estimate is a sum of traced test
+# durations, which is only as good as the tracing.
+#
+# So: a flat ~15 minutes, roughly ten full passes, which is "no limit" for any
+# mutant that terminates. Not removed altogether, because a mutant that
+# deadlocks on a lock rather than spinning would otherwise consume its entire
+# 6-hour shard and the run would report nothing at all -- and a run that never
+# finishes never writes a cache, which is the loop this was stuck in.
+#
+# Changing either value resets *only* timeout verdicts, never killed ones.
+timeout_multiplier = 1.0
+timeout_constant = 900.0
 
 [tool.coverage.run]
 source = ["django_overlay"]
