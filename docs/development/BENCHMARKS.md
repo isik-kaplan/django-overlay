@@ -45,6 +45,47 @@ view's fault or the query's.
 
 `--smoke` runs `shapes` and `ban`, which is what CI does on every push.
 
+## Turning the optimisations off
+
+The library carries four query optimisations, all on by default. Each one has a
+flag, so the question the benchmark answers is not only "overlay against a plain
+table" but "this rewrite against no rewrite":
+
+```bash
+uv run django-overlay benchmark --scale 1.0 --save-results   # every one on
+uv run django-overlay benchmark --scale 1.0 --no-optimisations
+```
+
+| flag | setting it moves |
+|---|---|
+| `--no-rewrite-traversals` | `DJANGO_OVERLAY_REWRITE_TRAVERSALS` |
+| `--no-redirect-select-related` | `DJANGO_OVERLAY_REDIRECT_SELECT_RELATED` |
+| `--no-force-hash-joins` | `DJANGO_OVERLAY_FORCE_HASH_JOINS` |
+| `--no-array-subquery-in` | `DJANGO_OVERLAY_ARRAY_SUBQUERY_IN` |
+
+`--no-optimisations` turns all four off. An individual flag still wins against
+it, so `--no-optimisations --force-hash-joins` prices the nested-loop ban on its
+own rather than the four together. The names live in `benchmark/switches.py`,
+which the CLI, the settings module and the environment record all read, and a
+test asserts each flag reaches the library's own gate — a flag that moves a
+setting nothing reads reports the default arm under the other arm's name.
+
+Comparing against `master` is **not** the same measurement. None of these
+mechanisms exists there, and neither does this harness.
+
+Two things follow from the switches being recorded in each run's environment:
+
+- a switch difference **does not** block the delta column, unlike every other
+  environment key. That comparison is the measurement. But the note says which
+  optimisation moved, because a `+21950%` column from a flag and a `+21950%`
+  column from a regression look identical.
+- the default `--label` carries the arm, so both halves of an A/B taken at one
+  commit do not overwrite each other.
+
+Mutation testing cannot reach any of this: every mutant runs under the default
+settings, so the non-default configurations are invisible to it by construction.
+The flags are how they get exercised at all.
+
 ## Scale
 
 `--scale 1.0` is 1,000,000 people, 800,000 addresses, and 3,000,000 label
@@ -124,6 +165,8 @@ producing a baseline, not for using one. Two rules keep the deltas honest:
   than offering no comparison: it dresses noise up as a regression.
 - a change under **20%** is not shown at all. The harness cannot resolve a 5%
   move, and printing one invites a hunt for measurement error.
+- a run with **different optimisations enabled is** compared, and told to say
+  so. See the section above.
 
 `benchmark/results/` is gitignored. Saved runs are machine-specific by
 construction.
@@ -199,6 +242,7 @@ benchmark/
   environment.py what the machine was
   docker.py      compose lifecycle
   settings.py    Django settings for a benchmark run
+  switches.py    the four optimisation flags, and the settings they move
   suites/        one module per suite
   compose/       docker-compose.yml
 ```

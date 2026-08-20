@@ -76,6 +76,24 @@ def _suite_names():
 @click.option("--no-compare", is_flag=True, help="Do not add a delta column.")
 @click.option("--clear-results", is_flag=True, help="Delete every saved run and exit.")
 @click.option("--interactive", is_flag=True, help="Ask for the settings instead of taking flags.")
+# The four library optimisations. Paired flags with no default of their own, so
+# that "not given" is distinguishable from "given as on" -- which is what lets
+# --no-optimisations move the floor under all four while an explicit
+# --force-hash-joins lifts one back out of it. Each flag's name and help text
+# is the same string as its entry in benchmark/switches.py, which is where
+# settings.py and the environment record read them from; a test asserts the
+# two spellings agree, because a flag the table does not know about moves
+# nothing.
+@click.option("--no-optimisations", "all_off", is_flag=True,
+              help="Turn all four query optimisations off. The other arm of the A/B.")
+@click.option("--rewrite-traversals/--no-rewrite-traversals", default=None,
+              help="Rewrite a filter that traverses between two overlay views into a subquery.")
+@click.option("--redirect-select-related/--no-redirect-select-related", default=None,
+              help="Route select_related() across views through prefetch_related() instead.")
+@click.option("--force-hash-joins/--no-force-hash-joins", default=None,
+              help="Ban nested loops for a query joining several overlay views.")
+@click.option("--array-subquery-in/--no-array-subquery-in", default=None,
+              help="Fence an __in subquery as `lhs = ANY (ARRAY(subquery))`.")
 @click.option("--yes", is_flag=True, help="Do not prompt before a long run.")
 def benchmark(**options):
     """Measure django-overlay against plain tables holding identical rows."""
@@ -86,6 +104,16 @@ def benchmark(**options):
         click.echo(f"removed {removed} saved run(s) from {results.DIRECTORY}")
         return
 
+    if options["interactive"]:
+        options = _ask(options)
+
+    # Ahead of everything that brings Django up, because settings.py reads
+    # these off the environment at import time and django.setup() imports it.
+    # A flag resolved after that point would be reported as set and obeyed by
+    # nothing -- which is what an A/B that measured one arm twice and called it
+    # a result looks like from the outside.
+    _apply_switches(options)
+
     if options["list_suites"]:
         # Importing a suite reaches django_overlay.models, which reads
         # settings at import time, so the app registry has to be up even for
@@ -93,9 +121,6 @@ def benchmark(**options):
         _configure_django()
         _print_suites()
         return
-
-    if options["interactive"]:
-        options = _ask(options)
 
     suites = list(options["suites"])
     if options["smoke"]:
@@ -164,7 +189,10 @@ def benchmark(**options):
     _write_output(outcome, options, cap_ms)
 
     if options["save_results"]:
-        label = options["label"] or outcome["environment"]["git_sha"]
+        # The default label is the sha, which is the same string for both arms
+        # of a switch A/B -- so the second run would overwrite the first and
+        # the comparison would be against itself. The arm goes in the name.
+        label = options["label"] or _default_label(outcome["environment"])
         path = results.save(label, outcome["environment"], outcome["suites"])
         click.echo(f"\nsaved as {path}")
 
@@ -174,6 +202,21 @@ def benchmark(**options):
 
     if outcome["disagreements"]:
         raise SystemExit(1)
+
+
+def _default_label(env):
+    """The git sha, plus which optimisations were off if any were.
+
+    Four names concatenated would be a filename nobody can read, and the
+    all-off arm is the common one, so it gets a name of its own.
+    """
+    from benchmark import switches
+    off = switches.describe(env.get("switches") or {})
+    if not off:
+        return env["git_sha"]
+    if len(off) == len(switches.SWITCHES):
+        return f"{env['git_sha']}-no-optimisations"
+    return env["git_sha"] + "".join(f"-no-{flag}" for flag in off)
 
 
 def _print_suites():
@@ -214,6 +257,18 @@ def _ask(options):
         click.echo("docker is not available here.")
         options["database_url"] = click.prompt("Postgres URL", default=options["database_url"])
 
+    # Asked as one question rather than four, because the four-off arm is what
+    # anybody prompting their way through this actually wants, and offering
+    # sixteen combinations to somebody who did not want to remember a flag name
+    # is not a kindness. The individual flags stay available for the case the
+    # combinations are the point.
+    from benchmark import switches
+    if not click.confirm("Leave every query optimisation on?", default=not options["all_off"]):
+        options["all_off"] = True
+        for switch in switches.SWITCHES:
+            name = switches.option_name(switch)
+            options[name] = click.confirm(f"  keep {switch.flag}?", default=False)
+
     options["save_results"] = click.confirm(
         "Save this run as a baseline?", default=options["save_results"])
     # `yes` is deliberately left alone. Somebody who just typed a scale into a
@@ -221,12 +276,36 @@ def _ask(options):
     return options
 
 
+def _apply_switches(options):
+    """Resolve the optimisation flags and put them where settings.py reads them.
+
+    Announced when anything is off, and announced loudly. A run with the
+    rewrites disabled produces numbers eighty times worse than the same command
+    without the flag, and a table of those pasted into an issue with no header
+    saying which arm it was is worse than no measurement at all.
+    """
+    from benchmark import switches
+    chosen = switches.resolve(options, all_off=options["all_off"])
+    switches.apply(chosen)
+    off = switches.describe(chosen)
+    if off:
+        click.echo(click.style(
+            f"optimisations OFF for this run: {', '.join(off)}", fg="yellow", bold=True))
+
+
 def _configure_django(database_url=None):
     """Bring the app registry up. Touches no database."""
     import django
     if database_url:
         os.environ["OVERLAY_BENCH_DATABASE_URL"] = database_url
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "benchmark.settings")
+    # Set, not setdefault. benchmark/settings.py is not a default anybody would
+    # want to override: it names the bench apps, the bench database and the four
+    # optimisation switches. An exported DJANGO_SETTINGS_MODULE -- which is the
+    # normal state of a Django developer's shell, and of a pytest run -- used to
+    # win here, and then --no-optimisations moved a setting nothing read. Every
+    # switch was inert and the run reported the default arm under the other
+    # arm's name.
+    os.environ["DJANGO_SETTINGS_MODULE"] = "benchmark.settings"
     root = str(_repository_root())
     if root not in sys.path:
         sys.path.insert(0, root)
