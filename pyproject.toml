@@ -185,8 +185,9 @@ do_not_mutate = ["django_overlay/operations.py"]
 # same Postgres test database, so parallel children race each other's schema,
 # tests fail for reasons that have nothing to do with the mutation, and every
 # mutant is recorded as killed. That is not a hypothetical: a full local run
-# reported 2,209 killed and 0 survived, and re-running uniqueness.py alone
-# serially found eight survivors. The failure mode is a green report.
+# reported 2,209 killed and 0 survived, while one of the mutants it called
+# killed leaves the whole suite passing -- 884 tests, checked by hand. The
+# failure mode is a green report.
 #
 # Parallelism comes from sharding across CI jobs instead -- see
 # .github/scripts/mutation_shards.py -- which needs no per-child database.

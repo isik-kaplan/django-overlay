@@ -136,6 +136,73 @@ def test_every_violation_is_reported_in_one_error():
 
 
 @isolate_apps("tests.testapp")
+def test_the_whole_error_is_exactly_what_the_developer_reads():
+    """Every sentence of it, not a phrase from it.
+
+    Fourteen mutants lived inside this message while the assertions around it
+    picked out substrings: capitalisation, sentence boundaries, and the newline
+    joining one complaint to the next. A developer hitting this at boot reads
+    all of it, so all of it is asserted -- and with two problems rather than
+    one, so the joins have something to join.
+    """
+    model, problems = _uniqueness_problems(
+        meta_attrs={"unique_together": [("first_name", "last_name")]},
+        field_kwargs={"unique": True},
+    )
+    error = uniqueness_error(model, problems)
+
+    assert error.id == "django_overlay.E003"
+    assert error.obj is model
+    assert error.msg == (
+        f"{model.__name__} declares uniqueness django_overlay can't honour:\n"
+        "\n"
+        "  - Meta.unique_together = ['first_name', 'last_name']\n"
+        "  - email declares unique=True\n"
+        "\n"
+        "An overlay model is queried through a view spanning your table and the source "
+        "table, so uniqueness has to hold across both. Every one of the above compiles "
+        "down to a single index on your table alone, which would accept a value that "
+        "already exists in the source. OverlayUniqueConstraint adds the source-side check."
+    )
+    assert error.hint == (
+        "Declare them as OverlayUniqueConstraint in Meta.constraints instead:\n"
+        "\n"
+        "    constraints = [\n"
+        '        OverlayUniqueConstraint(fields=["first_name", "last_name"], '
+        'name="probe_banned_first_name_last_name_uniq"),\n'
+        '        OverlayUniqueConstraint(fields=["email"], name="probe_banned_email_uniq"),\n'
+        "    ]\n"
+        "\n"
+        "Those names are the ones django_overlay would have generated; any name that's "
+        "unique across your models will do."
+    )
+
+
+@isolate_apps("tests.testapp")
+def test_the_conditional_paragraph_is_exactly_what_it_says():
+    """The extra paragraph is appended only for conditions, and it too was
+    four mutants deep in unasserted prose."""
+    model, problems = _uniqueness_problems(
+        meta_attrs={
+            "constraints": [
+                models.UniqueConstraint(fields=["email"], condition=models.Q(email__gt=""), name="probe_cond")
+            ]
+        }
+    )
+    hint = uniqueness_error(model, problems).hint
+
+    assert hint.endswith(
+        "\n"
+        "\n"
+        "Conditional uniqueness isn't supported at all: the source-side trigger has no "
+        "way to apply the condition, so it would check for collisions the condition "
+        "should have excluded. If you genuinely want a condition over your own rows "
+        "only, add the partial index by hand in a RunSQL migration and leave it out of "
+        "Meta."
+    )
+
+
+@isolate_apps("tests.testapp")
 def test_the_rejection_applies_without_soft_delete_too():
     # Nothing to do with tombstones: a plain unique index never covers the
     # source table, whether or not the model soft-deletes.
@@ -579,3 +646,54 @@ def test_a_null_still_does_not_excuse_a_collision_on_another_column():
     with pytest.raises(IntegrityError):
         with transaction.atomic():
             SoftDeletePlainUniqueTest.objects.create(code="dup", vendor=None)
+
+
+def test_a_condition_on_the_overlay_constraint_itself_is_refused():
+    """The constraint's own refusal, which nothing had ever read.
+
+    Seven mutants lived in this message. It is the one telling an author why
+    the thing they wrote cannot work, so a garbled version is worse than none.
+    """
+    from django_overlay.exceptions import OverlayConfigurationError
+
+    with pytest.raises(OverlayConfigurationError) as raised:
+        OverlayUniqueConstraint(fields=["ssn"], name="n", condition=models.Q(ssn__gt=""))
+
+    assert str(raised.value) == (
+        "OverlayUniqueConstraint doesn't support condition= — the source-vs-base trigger "
+        "has no way to apply it, so it would silently check for collisions the condition "
+        "should have excluded."
+    )
+
+
+def test_a_soft_delete_condition_is_not_mistaken_for_a_caller_supplied_one():
+    """The flag sets a condition internally, after the check above."""
+    constraint = OverlayUniqueConstraint(fields=["ssn"], name="n", soft_delete=True)
+
+    assert constraint.condition == models.Q(_overlay_deleted=False)
+    assert constraint.soft_delete is True
+
+
+def test_an_expression_constraint_keeps_its_expressions():
+    """UniqueConstraint takes expressions positionally, and they ride in *args.
+
+    Nothing here had ever built one that way, so both places that forward
+    *args -- the constructor and without_soft_delete_narrowing -- could drop
+    them and every test still passed, while in practice the constraint would
+    silently become one over no columns at all.
+    """
+    from django.db.models.functions import Lower
+
+    constraint = OverlayUniqueConstraint(Lower("ssn"), name="expr_constraint")
+
+    assert constraint.deconstruct()[1] == (Lower("ssn"),)
+
+
+def test_dropping_the_narrowing_keeps_the_expressions_too():
+    from django.db.models.functions import Lower
+
+    narrowed = OverlayUniqueConstraint(Lower("ssn"), name="expr_constraint", soft_delete=True)
+    plain = narrowed.without_soft_delete_narrowing()
+
+    assert plain.deconstruct()[1] == (Lower("ssn"),)
+    assert plain.condition is None

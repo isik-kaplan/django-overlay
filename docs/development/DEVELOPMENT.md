@@ -88,6 +88,19 @@ accepts it only as a flag and ignores unknown config keys silently — so
 the same reason, nothing else may touch the test database while a run is going,
 including a stray `pytest` in another terminal.
 
+Some mutants no test can kill, because the mutated code behaves identically —
+`standalone_mode=False` becoming `None`, where the library being called tests it
+with `if not`. Put `# pragma: no mutate` on the line, with a comment saying why.
+Where mutmut cannot see a pragma — it reads them only from standalone comment
+lines attached to a statement, so a keyword argument inside a multi-line call is
+out of reach — name the mutant in `.github/mutation-equivalents.toml` instead.
+
+That file is an escape hatch from a policy and is guarded like one: every entry
+needs a reason long enough to be an actual explanation, an entry whose mutant no
+longer exists fails the build, and so does one whose mutant is now killed. An
+exemption that has stopped earning its place has to be revisited rather than
+left sitting there.
+
 **Policy: no mutant survives.** A mutant that lives is a change to the
 package that no test objects to — either a test is missing or the code is
 dead. CI enforces this (`.github/workflows/mutation.yml`): `check_mutants.py`

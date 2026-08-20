@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
@@ -112,9 +114,17 @@ def test_default_strategy_reads_from_settings_when_configured():
 
 
 def test_default_strategy_rejects_a_non_strategy_value():
+    # Compared whole. Matching the setting name alone left the rest of the
+    # sentence unpinned -- and the rest is what says a Strategy member is
+    # wanted and gives an example of one, which is the actionable part.
     with override_settings(DJANGO_OVERLAY_DEFAULT_STRATEGY="negative_id"):
-        with pytest.raises(ImproperlyConfigured, match="DJANGO_OVERLAY_DEFAULT_STRATEGY"):
+        with pytest.raises(ImproperlyConfigured) as raised:
             _default_strategy()
+
+    assert str(raised.value) == (
+        "settings.DJANGO_OVERLAY_DEFAULT_STRATEGY must be a django_overlay.strategies.Strategy "
+        "member (e.g. Strategy.NEGATIVE_ID), got 'negative_id'."
+    )
 
 
 def test_overlay_meta_strategy_rejects_a_non_strategy_value():
@@ -237,7 +247,10 @@ def test_meta_permissions_is_rejected():
 def test_meta_default_permissions_is_rejected():
     with pytest.raises(
         OverlayConfigurationError,
-        match="default_permissions isn't supported on an OverlayModel — there's no model to attach it to",
+        match=re.escape(
+            "default_permissions isn't supported on an OverlayModel — there's no model to attach "
+            "it to that makes sense (see _UNSUPPORTED_META_OPTIONS)."
+        ),
     ):
 
         class HasDefaultPermissions(OverlayModel):

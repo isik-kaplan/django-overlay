@@ -137,12 +137,69 @@ def test_select_for_update_is_refused_rather_than_silently_useless():
 
 
 def test_the_refusal_points_at_something_that_works():
+    """The whole message, because the whole message is the point.
+
+    This refusal is the only place a developer learns what to do instead, and
+    it was asserted by two substrings -- which left twenty-seven mutants alive
+    in the rest of it: sentences uppercased, clauses blanked, the worked
+    example garbled. A message that says the wrong thing is worse than no
+    message, because the reader acts on it.
+    """
     with pytest.raises(OverlayConfigurationError) as exc_info:
         Person.objects.select_for_update()
 
-    message = str(exc_info.value)
-    assert "update(field=F('field') + 1)" in message
-    assert "pg_advisory_xact_lock" in message
+    assert str(exc_info.value) == (
+        "select_for_update() isn't supported on Person — it's an overlay model, so the "
+        "query targets a view, and Postgres accepts FOR UPDATE against a view with "
+        "INSTEAD OF triggers without locking any rows. It would appear to work and "
+        "protect nothing.\n"
+        "\n"
+        "For a read-modify-write, do it in one statement: `.update(field=F('field') + 1)` "
+        "is atomic here, because an expression that reads its own row is routed around "
+        "the view and applied to the base table directly. For a longer critical section, "
+        "take an advisory lock on the row's id:\n"
+        "\n"
+        "    with transaction.atomic(), connection.cursor() as cursor:\n"
+        "        cursor.execute('SELECT pg_advisory_xact_lock(%s, %s)', [TABLE_KEY, row_id])\n"
+        "        ...  # read, modify, write\n"
+        "\n"
+        "See docs/operations/LIMITATIONS.md."
+    )
+
+
+def test_the_refusal_names_the_model_it_refused():
+    """The model name is interpolated, so it has to be the right model."""
+    with pytest.raises(OverlayConfigurationError) as exc_info:
+        UniqueTestNoSource.objects.select_for_update()
+
+    assert str(exc_info.value).startswith(
+        "select_for_update() isn't supported on UniqueTestNoSource — "
+    )
+
+
+def test_djangos_own_internal_lock_gets_its_arguments_forwarded():
+    """update_or_create() takes the lock internally, and its arguments matter.
+
+    The refusal is bypassed while the internal flag is set, and that path just
+    forwards to super(). Nothing asserted the forwarding, so dropping *args or
+    **kwargs from the call changed nothing any test could see -- while in
+    reality it would quietly turn a `nowait` lock into a blocking one.
+    """
+    from django_overlay.models import _django_internal_lock
+
+    token = _django_internal_lock.set(True)
+    try:
+        # nowait positionally, of= by keyword. They cannot both be nowait and
+        # skip_locked -- Django rejects that pair -- so each argument style
+        # gets its own observable flag.
+        positional = Person.objects.select_for_update(True)
+        keyword = Person.objects.select_for_update(skip_locked=True)
+    finally:
+        _django_internal_lock.reset(token)
+
+    assert positional.query.select_for_update is True
+    assert positional.query.select_for_update_nowait is True, "the positional argument was dropped"
+    assert keyword.query.select_for_update_skip_locked is True, "the keyword argument was dropped"
 
 
 def test_it_is_refused_on_a_source_less_overlay_model_too():

@@ -156,7 +156,15 @@ def _nested_queries(query):
             if hasattr(inner, "alias_map"):
                 found.append(inner)
     for annotation in getattr(query, "annotations", {}).values():
-        inner = getattr(annotation, "query", None)
+        # `annotation`, not None, as the fallback -- the same shape as the
+        # rhs/lhs line above and for the same reason. Django does not keep a
+        # Subquery annotation as a Subquery: resolving it stores the inner
+        # Query itself, which has no `.query` of its own, so falling back to
+        # None dropped exactly the annotation this walk exists to find.
+        # `Exists` keeps its query on `.query` and still resolves through the
+        # first branch; an aggregate like Count() has neither and is skipped by
+        # the alias_map check, which is what should happen to it.
+        inner = getattr(annotation, "query", annotation)
         if hasattr(inner, "alias_map"):
             found.append(inner)
     return found
@@ -917,13 +925,12 @@ class OverlayQuerySet(models.QuerySet):
                 "there to detect a conflict against. Catch IntegrityError around a plain "
                 "bulk_create(), or filter the batch against the view first."
             )
-        return super().bulk_create(
-            objs,
-            batch_size=batch_size,
-            ignore_conflicts=ignore_conflicts,
-            update_conflicts=update_conflicts,
-            **kwargs,
-        )
+        # Neither flag is forwarded: the branch above returns unless both are
+        # falsy, so passing them says something the reader has to re-derive,
+        # and Django cannot tell False from the default anyway. update_fields
+        # and unique_fields ride along in kwargs, where Django rejects them
+        # without update_conflicts -- which is its job, not this method's.
+        return super().bulk_create(objs, batch_size=batch_size, **kwargs)
 
 
 OverlayManager = models.Manager.from_queryset(OverlayQuerySet)

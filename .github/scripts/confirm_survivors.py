@@ -28,9 +28,11 @@ import glob
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 
@@ -39,11 +41,19 @@ REPORT = Path("mutants/mutmut-confirmed.json")
 # runs, the same way phase one's verdicts travel.
 CACHE = Path("mutants/mutmut-confirmed-cache.json")
 CACHE_VERSION = 1
+EQUIVALENTS = Path(__file__).resolve().parent.parent / "mutation-equivalents.toml"
+# Long enough that "equivalent" or "n/a" does not pass for an explanation.
+SHORTEST_USEFUL_REASON = 40
 
 # Exit codes mutmut treats as a kill. Anything else left the mutant alive in
-# phase one and therefore needs settling here. Kept in step with
-# mutmut.__main__.status_by_exit_code.
-KILLED_CODES = (1, 3, -24)
+# phase one and therefore needs settling here.
+#
+# Read mutmut.__main__.status_by_exit_code carefully before touching this. That
+# dict literal lists `-24: "killed"` near the top and `-24: "timeout"` fifteen
+# lines further down; the later key wins, so -24 is a timeout. It was in here as
+# a kill, which meant a mutant that hung until the CPU limit shot it was counted
+# as dead and never confirmed. The models shard had exactly one.
+KILLED_CODES = (1, 3)
 # ...except this one, which is not a verdict at all.
 SKIPPED_CODE = 34
 
@@ -53,23 +63,26 @@ DEFAULT_TIMEOUT = 900
 
 
 def alive_from_meta(root="mutants"):
-    """(alive, unchecked) mutant names out of the .meta files mutmut writes.
+    """(alive, unchecked, total) out of the .meta files mutmut writes.
 
     Read from the meta files rather than from export-cicd-stats, because the
-    stats are counts and this needs names.
+    stats are counts and this needs names. `total` is returned so the caller can
+    tell "every mutant died" from "there were no mutants", which produce
+    identical survivor lists and mean opposite things.
     """
-    alive, unchecked = [], []
+    alive, unchecked, total = [], [], 0
     for path in sorted(glob.glob(f"{root}/**/*.meta", recursive=True)):
         try:
             codes = json.loads(Path(path).read_text()).get("exit_code_by_key", {})
         except (OSError, json.JSONDecodeError):
             continue
         for name, code in codes.items():
+            total += 1
             if code is None:
                 unchecked.append(name)
             elif code not in KILLED_CODES and code != SKIPPED_CODE:
                 alive.append(name)
-    return sorted(alive), sorted(unchecked)
+    return sorted(alive), sorted(unchecked), total
 
 
 def run_full_suite(name, timeout=DEFAULT_TIMEOUT, root="mutants"):
@@ -193,6 +206,98 @@ def reusable(entry, mutant_name, hashes, root="mutants"):
     return entry.get("test_file_hash") == sha(Path(root) / test_file)
 
 
+def read_equivalents(path=EQUIVALENTS):
+    """(name -> reason, problems) for mutants no test can kill.
+
+    Returns problems rather than raising, so a malformed file fails the run
+    with every fault listed instead of one at a time.
+    """
+    try:
+        entries = tomllib.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return {}, []
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        return {}, [f"{path} could not be read: {error}"]
+
+    reasons, problems = {}, []
+    for name, entry in entries.items():
+        reason = (entry.get("reason") or "").strip() if isinstance(entry, dict) else ""
+        if len(reason) < SHORTEST_USEFUL_REASON:
+            problems.append(
+                f"{name} is exempted with no real reason given. An exemption is a "
+                "claim that no test could ever kill it, which needs saying in full."
+            )
+            continue
+        reasons[name] = reason
+    return reasons, problems
+
+
+def module_of(mutant_name):
+    """django_overlay.cli.x_main__mutmut_40 -> mutants/django_overlay/cli.py.meta"""
+    module = mutant_name.partition("__mutmut_")[0].rpartition(".")[0]
+    return Path("mutants") / (module.replace(".", "/") + ".py.meta")
+
+
+def stale_exemptions(reasons, root="mutants"):
+    """Exemptions this run can prove are no longer earning their place.
+
+    Only judged where the module was actually mutated -- a shard that does not
+    cover cli.py has nothing to say about an exemption in it -- so this is
+    quiet in the shards it does not concern and exact in the one it does.
+    """
+    problems = []
+    for name in sorted(reasons):
+        meta = Path(root) / module_of(name).relative_to("mutants")
+        if not meta.exists():
+            continue
+        try:
+            codes = json.loads(meta.read_text()).get("exit_code_by_key", {})
+        except (OSError, json.JSONDecodeError):
+            continue
+        if name not in codes:
+            problems.append(
+                f"{name} is exempted but no longer exists. The code it was about has "
+                "changed, so the exemption has to be made again or dropped."
+            )
+        elif codes[name] in KILLED_CODES:
+            problems.append(
+                f"{name} is exempted but something kills it now, so the exemption is "
+                "doing nothing except making the policy look smaller than it is."
+            )
+    return problems
+
+
+# What phase two needs current copies of inside mutants/: the suite it runs, and
+# the scripts and workflow that some of that suite reads.
+REFRESHED = ("tests", ".github")
+
+
+def refresh_copies(root="mutants", sources=REFRESHED):
+    """Copy the current tests and scripts over the snapshots inside mutants/.
+
+    mutmut copies these when it runs, and phase two runs pytest from inside
+    mutants/ -- so a test written after the last `mutmut run` is simply not in
+    the suite phase two executes. It then reports survivors that the current
+    suite kills, which is the same stale-copy trap that once had eleven hours of
+    runs mutating current Python against old SQL templates.
+
+    .github/ is refreshed for the same reason tests/ is: parts of the suite read
+    the shard map and these scripts out of it, and against a stale copy they
+    test a version of this file that no longer exists.
+
+    Cheap enough to do unconditionally, and being wrong here means confirming
+    against a suite nobody has.
+    """
+    if not Path(root).is_dir():
+        return False
+    copied = False
+    for source in sources:
+        if Path(source).is_dir():
+            shutil.copytree(source, Path(root) / source, dirs_exist_ok=True)
+            copied = True
+    return copied
+
+
 def baseline_is_clean(run=run_full_suite, say=print):
     """Whether the suite passes inside mutants/ with no mutant active.
 
@@ -217,7 +322,24 @@ def baseline_is_clean(run=run_full_suite, say=print):
 Outcome = collections.namedtuple("Outcome", "confirmed killed hung reused verdicts")
 
 
-def confirm(names, run=run_full_suite, say=print, cache=None, hashes=None, root="mutants"):
+def write_cache(verdicts, path=CACHE):
+    """Persist what has been settled so far.
+
+    Written after every verdict rather than at the end, because the end is not
+    guaranteed to arrive: a shard that runs into the job's time limit is killed
+    where it stands, and a cache written only on the way out would throw away
+    hours of confirmations that were already paid for. The next run then starts
+    from cold and hits the same limit -- which is the loop this whole cache
+    exists to break.
+    """
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(
+        {"version": CACHE_VERSION, "verdicts": verdicts}, indent=2, sort_keys=True
+    ) + "\n")
+
+
+def confirm(names, run=run_full_suite, say=print, cache=None, hashes=None, root="mutants",
+            save=write_cache):
     """Settle each survivor, reusing the kills that are still answerable."""
     cache = read_cache() if cache is None else cache
     hashes = function_hashes(root) if hashes is None else hashes
@@ -238,6 +360,10 @@ def confirm(names, run=run_full_suite, say=print, cache=None, hashes=None, root=
             else:
                 confirmed.append(name)
                 say(f"{where} cached    {name} (survives; no test has changed)")
+            # Saved as well as re-run verdicts: what is not written here is
+            # dropped from the cache this run leaves behind, so a shard that is
+            # killed part-way would lose entries it never had to recompute.
+            save(verdicts)
             continue
 
         code, seconds, killed_by = run(name)
@@ -263,16 +389,18 @@ def confirm(names, run=run_full_suite, say=print, cache=None, hashes=None, root=
                     "function_hash": function_hash_for(name, hashes),
                     "test_file_hash": sha(Path(root) / killed_by.partition("::")[0]),
                 }
+        save(verdicts)
     return Outcome(confirmed, killed, hung, reused, verdicts)
 
 
-def write_report(path, label, confirmed, killed, hung, unchecked):
+def write_report(path, label, confirmed, killed, hung, unchecked, exempt=()):
     payload = {
         "label": label,
         "confirmed": confirmed,
         "killed_by_full_suite": killed,
         "hung": hung,
         "unchecked": unchecked,
+        "exempt": list(exempt),
     }
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(payload, indent=2) + "\n")
@@ -294,7 +422,8 @@ def find_reports(directory):
 
 def render(rows):
     """One line per shard, then the names that matter."""
-    lines = [f"{'shard':<12} {'survived':>8} {'killed here':>12} {'hung':>6} {'unchecked':>10}"]
+    lines = [f"{'shard':<12} {'survived':>8} {'killed here':>12} {'hung':>6} "
+             f"{'unchecked':>10} {'exempt':>7}"]
     lines.append("-" * len(lines[0]))
     for label, payload in rows:
         if "unreadable" in payload:
@@ -304,6 +433,7 @@ def render(rows):
             f"{label:<12} {len(payload.get('confirmed', [])):>8}"
             f" {len(payload.get('killed_by_full_suite', [])):>12}"
             f" {len(payload.get('hung', [])):>6} {len(payload.get('unchecked', [])):>10}"
+            f" {len(payload.get('exempt', [])):>7}"
         )
     names = [name for _, payload in rows for name in payload.get("confirmed", [])]
     hung = [name for _, payload in rows for name in payload.get("hung", [])]
@@ -375,20 +505,49 @@ def main(argv=None):
         print("\nno surviving mutants")
         return 0
 
-    names, unchecked = (options.names, []) if options.names else alive_from_meta()
+    if options.names:
+        names, unchecked, total = options.names, [], len(options.names)
+    else:
+        names, unchecked, total = alive_from_meta()
+
+    # "Nothing survived" and "nothing was ever mutated" produce the same empty
+    # list. Observed for real: the step that computes the cache key failed, the
+    # mutation step was skipped, mutants/ did not exist, and this reported a
+    # clean shard. The same green-out-of-nothing this file exists to prevent.
+    if not total:
+        print(f"{options.label}: no mutants found under mutants/ at all. `mutmut run` did not "
+              "get as far as\ngenerating them, so there is nothing here to confirm and nothing "
+              "to pass.")
+        return 1
+    # Read through the module attribute rather than the default, which binds
+    # at definition time and cannot be pointed elsewhere.
+    reasons, problems = read_equivalents(EQUIVALENTS)
+    problems += stale_exemptions(reasons)
+    if problems:
+        print("\n".join(problems))
+        print("\nSee .github/mutation-equivalents.toml.")
+        return 1
+
+    exempt = [name for name in names if name in reasons]
+    if exempt:
+        names = [name for name in names if name not in reasons]
+        print(f"{len(exempt)} mutant(s) exempted as equivalent, and not re-run:")
+        for name in exempt:
+            print(f"  {name}: {reasons[name].splitlines()[0]}")
+
     runner = lambda name: run_full_suite(name, timeout=options.timeout)  # noqa: E731
     if not names:
         print(f"{options.label}: nothing survived phase one, so there is nothing to confirm")
     else:
         print(f"{options.label}: confirming {len(names)} survivor(s) against the whole suite")
+        if refresh_copies():
+            print(f"refreshed {'/, '.join(REFRESHED)}/ inside mutants/")
         if not baseline_is_clean(run=runner):
             return 1
     outcome = confirm(names, run=runner)
     payload = write_report(REPORT, options.label, outcome.confirmed, outcome.killed,
-                           outcome.hung, unchecked)
-    CACHE.write_text(json.dumps(
-        {"version": CACHE_VERSION, "verdicts": outcome.verdicts}, indent=2, sort_keys=True
-    ) + "\n")
+                           outcome.hung, unchecked, exempt)
+    write_cache(outcome.verdicts)
     if outcome.reused:
         print(f"{len(outcome.reused)} of {len(names)} verdict(s) came from the cache, "
               "each still pinned to the test that produced it")

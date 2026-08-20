@@ -45,6 +45,14 @@ carries its own Django models, migrations and docker compose setup. To run it:
 """
 
 
+# click's `main()` tests this with `if not standalone_mode`, so False and None
+# behave identically and no test can tell a mutation of it from the original.
+# It is named here rather than written into the call because that is where a
+# pragma can sit: mutmut reads pragmas off standalone comment lines attached to
+# a statement, and a comment inside an argument list never reaches it.
+_CLICK_STANDALONE_MODE = False  # pragma: no mutate
+
+
 def load_benchmark():
     """The benchmark command, or None when it is not in this installation."""
     try:
@@ -57,7 +65,13 @@ def load_benchmark():
 def _version():
     from importlib.metadata import PackageNotFoundError, version
     try:
-        return version("django-overlay")
+        # pragma: no mutate on the next line -- importlib.metadata normalises
+        # distribution names per PEP 503, so "DJANGO-OVERLAY" resolves to this
+        # same package and the mutant is indistinguishable from the original.
+        # It suppresses the mutant that garbles the name too, which the version
+        # assertion in test_cli.py does catch; that check lives in the test now
+        # rather than here.
+        return version("django-overlay")  # pragma: no mutate
     except PackageNotFoundError:  # pragma: no cover - only when run from a raw tree
         return "unknown"
 
@@ -95,7 +109,7 @@ def main(argv=None):
                 # reads `django-overlay [OPTIONS]`, which is not a command
                 # anyone can type.
                 prog_name="django-overlay benchmark",
-                standalone_mode=False,
+                standalone_mode=_CLICK_STANDALONE_MODE,
             ) or 0
         except click.ClickException as error:
             error.show()

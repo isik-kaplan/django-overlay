@@ -19,6 +19,14 @@ DATABASES = {
     }
 }
 
+# A second alias over the same test database, so that routing can be asserted
+# at all. update() and _update() take `using=self.db` in three places, and with
+# one alias configured `using(self.db)` and `using(None)` are the same call --
+# every mutation of them survived. MIRROR means Django creates no second
+# database and runs no second set of migrations; it is the same connection
+# under another name, which is exactly enough to tell the two apart.
+DATABASES["other"] = {**DATABASES["default"], "TEST": {"MIRROR": "default"}}
+
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
