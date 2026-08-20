@@ -45,10 +45,29 @@ def _force_hash_joins_enabled() -> bool:
 # a hash build over a large relation for nothing. One hop, no LIMIT, must be
 # left alone.
 #
-# Both numbers come from tests/probe_hash_join_ban.py, two passes agreeing
-# against a noise floor measured at 1.0x. An earlier single threshold of 2
-# shipped that 7ms -> 60ms regression; an earlier single threshold of 4 blocked
-# the 14x ordered-page win. Neither number alone fits the data.
+# Both numbers come from what is now benchmark/suites/ban.py -- two passes
+# agreeing against a noise floor measured at 1.0x -- and from suites/hops.py for
+# how they hold as a saved search gets deeper. (The measurements were taken in
+# tests/probe_hash_join_ban.py, which those suites replaced; see
+# docs/development/BENCHMARKS.md for the mapping.)
+#
+# An earlier single threshold of 2 shipped that 7ms -> 60ms regression; an
+# earlier single threshold of 4 blocked the 14x ordered-page win. Neither number
+# alone fits the data.
+#
+# Worth knowing what these numbers are and are not. They are a boundary rather
+# than an optimum: one m2m hop is 3 views and two are 5, so 4 and 5 behave
+# identically on every m2m shape, and 4 is simply the smallest integer above
+# one hop. The evidence either side of the line is about 3-view queries; a
+# 4-view shape -- a foreign-key chain plus a second join -- was never measured
+# on its own.
+#
+# And the unsliced number is the one currently in question. At scale 0.3 the ban
+# costs 5% at two hops and 13% at three, only paying for itself at four, where
+# it is the difference between 857ms and not finishing. It may be a hop too low,
+# or the cost may invert at scale 1.0 as the comment above predicts -- the hash
+# it forces is built over a larger relation as scale grows. Measure before
+# moving it.
 _HASH_JOIN_THRESHOLD = 4
 _HASH_JOIN_THRESHOLD_LIMITED = 2
 
