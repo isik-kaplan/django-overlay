@@ -8,8 +8,6 @@ and prints an OK / DIVERGES / ERROR table at the end. Run with:
         -s -q -p no:cacheprovider --no-cov
 """
 
-import traceback
-
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection, models, transaction
@@ -480,4 +478,7 @@ def test_orm_conformance_probe():
     for name, status, detail in RESULTS:
         print(f"{status:9} {name:<{width}}  {detail}")
     print(f"\n{sum(1 for _, s, _ in RESULTS if s == 'OK')} OK / {sum(1 for _, s, _ in RESULTS if s != 'OK')} not OK")
-    print(traceback.format_exc() if False else "")
+
+    # The gate. Without it this reports a divergence and still passes, which is
+    # how it can run in CI and mean something.
+    assert [name for name, status, _ in RESULTS if status != "OK"] == []

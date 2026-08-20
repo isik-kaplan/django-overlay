@@ -209,3 +209,8 @@ def test_soft_delete_orm_compatibility():
         print(f"{status:9} {name:<{width}}  {detail}")
     ok = sum(1 for _, s, _ in RESULTS if s == "OK")
     print(f"\n{ok} OK / {len(RESULTS) - ok} not OK")
+
+    # Pinned rather than asserted clean: the pk one is inherent (a tombstone
+    # holds its row, and Postgres has no partial primary key). A *second*
+    # divergence, or this one disappearing, both deserve a failure.
+    assert [name for name, status, _ in RESULTS if status != "OK"] == ["re-inserting the same pk after delete"]

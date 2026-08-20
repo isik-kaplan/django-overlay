@@ -2,6 +2,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.test import override_settings
+from django.test.utils import isolate_apps
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -217,7 +218,9 @@ def test_meta_managed_is_rejected():
 
 
 def test_meta_permissions_is_rejected():
-    with pytest.raises(OverlayConfigurationError, match="permissions"):
+    # Matches the explanation, not just the option name: the reason is the part
+    # a reader needs, and asserting only "permissions" leaves it unpinned.
+    with pytest.raises(OverlayConfigurationError, match="permissions isn't supported on an OverlayModel"):
 
         class HasPermissions(OverlayModel):
             class Meta:
@@ -232,7 +235,10 @@ def test_meta_permissions_is_rejected():
 
 
 def test_meta_default_permissions_is_rejected():
-    with pytest.raises(OverlayConfigurationError, match="default_permissions"):
+    with pytest.raises(
+        OverlayConfigurationError,
+        match="default_permissions isn't supported on an OverlayModel — there's no model to attach it to",
+    ):
 
         class HasDefaultPermissions(OverlayModel):
             class Meta:
@@ -340,3 +346,41 @@ def test_private_meta_attributes_are_not_forwarded_as_options():
     assert view_options == {"ordering": ["x"]}
     assert base_options == {}
     assert not any(key.startswith("_") for key in {**base_options, **view_options})
+
+
+def test_multi_table_inheritance_from_a_concrete_overlay_model_is_rejected_by_name():
+    """The message has to name the real problem. Before this it complained
+    about a missing OverlayMeta, which sent you off writing one for a model
+    that could never work."""
+    with pytest.raises(OverlayConfigurationError, match="Multi-table inheritance isn't supported"):
+
+        class Child(Person):
+            extra = models.CharField(max_length=10)
+
+
+@isolate_apps("tests.testapp")
+def test_an_abstract_overlay_base_is_still_allowed():
+    """The escape hatch the message points at. isolate_apps because this one
+    actually builds — left in the real registry it would be a managed model
+    whose table no migration ever created."""
+
+    class Shared(OverlayModel):
+        nickname = models.CharField(max_length=10)
+
+        class Meta:
+            abstract = True
+            app_label = "testapp"
+
+    class Concrete(Shared):
+        class Meta:
+            app_label = "testapp"
+
+        class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+            table_name = "abstract_base_child"
+
+            @staticmethod
+            def get_source():
+                return None
+
+    assert Concrete._meta.get_field("nickname") is not None
+    assert Concrete.base_table()._meta.db_table == "abstract_base_child"

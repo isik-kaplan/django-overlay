@@ -271,7 +271,12 @@ def _split_meta_options(model_name: str, user_meta) -> tuple[dict, dict]:
 
 class OverlayMeta:
     """Base class for a model's inner OverlayMeta. Subclass it (directly,
-    or via with_strategy()) and add table_name / get_source()."""
+    or via with_strategy()) and add table_name / get_source().
+
+    No get_source() stub here on purpose: the metaclass requires every concrete
+    overlay model to define one in its own OverlayMeta, so a NotImplementedError
+    fallback could never run — and it read as reachable while being invisible to
+    coverage, which excludes `raise NotImplementedError`."""
 
     Strategy = Strategy
     strategy = _default_strategy()
@@ -281,10 +286,6 @@ class OverlayMeta:
     @classmethod
     def with_strategy(cls, strategy: Strategy):
         return type(f"OverlayMeta_{strategy.value}", (cls,), {"strategy": strategy})
-
-    @staticmethod
-    def get_source():
-        raise NotImplementedError("OverlayMeta subclasses must implement get_source().")
 
 
 def _base_field_copy(field):
@@ -317,6 +318,21 @@ class OverlayModelBase(models.base.ModelBase):
         meta = namespace.get("Meta")
         if not is_overlay_subclass or (meta is not None and getattr(meta, "abstract", False)):
             return super().__new__(mcs, name, bases, namespace, **kwargs)
+
+        inherited = [base for base in bases if getattr(base, "_is_overlay_view_model", False)]
+        if inherited:
+            # Multi-table inheritance from a concrete overlay model. Django
+            # would give the child a parent link to the *view*, which is
+            # unmanaged and has no table of its own to point at. Caught here
+            # because the next check would otherwise report a missing
+            # OverlayMeta — true, but it sends you off writing one for a model
+            # that can't work either way.
+            raise OverlayConfigurationError(
+                f"{name} subclasses {inherited[0].__name__}, which is an overlay model. Multi-table "
+                "inheritance isn't supported: the parent link would point at a view rather than a "
+                "table. Declare a separate OverlayModel, or put the shared fields on an abstract "
+                "base (Meta.abstract = True) that both inherit."
+            )
 
         overlay_meta = namespace.pop("OverlayMeta", None)
         if overlay_meta is None or not issubclass(overlay_meta, OverlayMeta):

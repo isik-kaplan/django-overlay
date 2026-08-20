@@ -1,8 +1,17 @@
 import pytest
 from django.db import IntegrityError, transaction
 
-from tests.testapp.models import UniqueTest, UniqueTestComposite, UniqueTestNoSource
-from tests.testapp_shared.models import UniqueTestCompositeSource, UniqueTestSource
+from tests.testapp.models import (
+    NullableUniqueTest,
+    UniqueTest,
+    UniqueTestComposite,
+    UniqueTestNoSource,
+)
+from tests.testapp_shared.models import (
+    NullableUniqueTestSource,
+    UniqueTestCompositeSource,
+    UniqueTestSource,
+)
 
 
 pytestmark = pytest.mark.django_db
@@ -103,3 +112,54 @@ def test_updating_the_constrained_column_itself_still_rejects_a_drifted_collisio
         with transaction.atomic():
             UniqueTest.objects.filter(id=row.id).update(ssn="111-22-3333")
             db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
+# A nullable constrained column, which is the only way to reach the
+# `NEW.<col> IS NOT NULL` guard in the source-side trigger. SQL treats NULLs as
+# non-colliding; the trigger has to agree, or one NULL badge in the source
+# would block every NULL badge of your own.
+
+
+def test_a_null_never_collides_with_a_null_in_the_source(db_cursor):
+    NullableUniqueTestSource.objects.create(badge=None, label="src")
+
+    NullableUniqueTest.objects.create(badge=None, label="mine")
+
+    assert NullableUniqueTest.objects.filter(badge__isnull=True).count() == 2
+
+
+def test_many_nulls_of_your_own_are_all_allowed():
+    NullableUniqueTest.objects.create(badge=None, label="a")
+    NullableUniqueTest.objects.create(badge=None, label="b")
+    NullableUniqueTest.objects.create(badge=None, label="c")
+
+    assert NullableUniqueTest.objects.count() == 3
+
+
+def test_a_non_null_value_still_collides_with_the_source():
+    NullableUniqueTestSource.objects.create(badge="B-1", label="src")
+
+    with pytest.raises(IntegrityError, match="overlay unique violation"):
+        with transaction.atomic():
+            NullableUniqueTest.objects.create(badge="B-1", label="mine")
+
+
+def test_a_null_does_not_stop_a_later_non_null_collision_being_caught():
+    """The guard is a short-circuit — it must not leave the check switched off
+    for the rows that do have a value."""
+    NullableUniqueTestSource.objects.create(badge=None, label="src-null")
+    NullableUniqueTestSource.objects.create(badge="B-2", label="src")
+    NullableUniqueTest.objects.create(badge=None, label="mine-null")
+
+    with pytest.raises(IntegrityError, match="overlay unique violation"):
+        with transaction.atomic():
+            NullableUniqueTest.objects.create(badge="B-2", label="mine")
+
+
+def test_updating_a_row_to_null_frees_its_value():
+    NullableUniqueTest.objects.create(badge="B-3", label="a")
+
+    NullableUniqueTest.objects.filter(label="a").update(badge=None)
+    NullableUniqueTest.objects.create(badge="B-3", label="b")
+
+    assert NullableUniqueTest.objects.filter(badge="B-3").count() == 1

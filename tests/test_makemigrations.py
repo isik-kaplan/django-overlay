@@ -449,3 +449,13 @@ def test_the_rebuild_is_not_emitted_twice():
 
     rebuilt = [o for o in extra_ops if isinstance(o, AddOverlayConstraint)]
     assert len(rebuilt) == len({(o.model_name, o.field_name) for o in rebuilt})
+
+
+def test_the_overridden_makemigrations_is_the_one_django_resolves():
+    """Django resolves a command name to whichever app declares it last in
+    INSTALLED_APPS. If another app overrides makemigrations too, the loser is
+    silently unused — and if that were ours, view and trigger operations would
+    quietly stop being generated. See docs/operations/MIGRATIONS.md."""
+    from django.core.management import get_commands
+
+    assert get_commands()["makemigrations"] == "django_overlay"

@@ -145,3 +145,14 @@ class SoftDeleteUniqueTestSource(models.Model):
 
     class Meta:
         app_label = "testapp_shared"
+
+
+class NullableUniqueTestSource(models.Model):
+    """Source half of the nullable-unique pair. `badge` is nullable on both
+    sides so the source-side uniqueness trigger's NULL guard is reachable."""
+
+    badge = models.CharField(max_length=20, null=True)
+    label = models.CharField(max_length=50, blank=True, default="")
+
+    class Meta:
+        app_label = "testapp_shared"

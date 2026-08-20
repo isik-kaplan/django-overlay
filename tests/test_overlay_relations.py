@@ -6,8 +6,13 @@ django_overlay.models._base_field_copy.
 """
 
 import pytest
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, connection, models, transaction
+from django.test.utils import isolate_apps
 
+from django_overlay import checks
+from django_overlay.fields import OverlayForeignKey
+from django_overlay.models import OverlayMeta, OverlayModel
+from django_overlay.strategies import Strategy
 from tests.testapp.models import Person, PersonNote, Vendor, VendorThing
 from tests.testapp_shared.models import PersonSource
 
@@ -143,3 +148,29 @@ def test_a_dangling_reference_still_fails_at_commit():
                 PersonNote.objects.create(person_id=-999999, text="nope")
     finally:
         PersonNote.objects.all().delete()
+
+
+@isolate_apps("tests.testapp")
+def test_a_self_referential_overlay_foreign_key_builds_and_hides_only_the_base_side():
+    """The shape most likely to trip the reverse-accessor hiding, because both
+    ends of the relation are the same pair of models. Probed before; pinned
+    here so a regression fails the suite rather than a report."""
+
+    class SelfRef(OverlayModel):
+        parent = OverlayForeignKey("self", null=True, on_delete=models.SET_NULL, related_name="children")
+
+        class Meta:
+            app_label = "testapp"
+
+        class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+            table_name = "selfref_relations"
+
+            @staticmethod
+            def get_source():
+                return None
+
+    assert SelfRef._meta.get_field("parent").remote_field.model is SelfRef
+    assert SelfRef._meta.get_field("parent").remote_field.related_name == "children"
+    assert SelfRef._base_model._meta.get_field("parent").remote_field.related_name == "+"
+    assert [rel.get_accessor_name() for rel in SelfRef._meta.related_objects].count("children") == 1
+    assert not checks.check_no_plain_fk_to_overlay_models(None)
