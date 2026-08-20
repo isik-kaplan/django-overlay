@@ -35,12 +35,18 @@ def timed(fn):
 
 
 def reset(cursor):
+    # The delete-side FK trigger is deferred, and Postgres refuses to TRUNCATE
+    # a table with pending trigger events. Flushing them first is what an
+    # application would have to do too.
+    cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
     cursor.execute("TRUNCATE person, testapp_shared_personsource RESTART IDENTITY CASCADE")
+    cursor.execute("SET CONSTRAINTS ALL DEFERRED")
 
 
 def seed_base(cursor, n):
     cursor.execute(
-        "INSERT INTO person (first_name, age) SELECT 'seed' || g, g FROM generate_series(1, %s) g",
+        "INSERT INTO person (first_name, age, _overlay_deleted) "
+        "SELECT 'seed' || g, g, FALSE FROM generate_series(1, %s) g",
         [n],
     )
 
@@ -67,7 +73,8 @@ def test_write_cost_by_batch_size():
             def insert_table(n=n, cursor=cursor):
                 reset(cursor)
                 cursor.execute(
-                    "INSERT INTO person (first_name, age) SELECT 't' || g, g FROM generate_series(1, %s) g",
+                    "INSERT INTO person (first_name, age, _overlay_deleted) "
+                    "SELECT 't' || g, g, FALSE FROM generate_series(1, %s) g",
                     [n],
                 )
 

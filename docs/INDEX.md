@@ -10,6 +10,9 @@
 - [concepts/UNIQUENESS.md](concepts/UNIQUENESS.md) — `OverlayUniqueConstraint`, indexing, benchmarks
 - [concepts/DELETION.md](concepts/DELETION.md) — delete semantics, `soft_delete`, `reset_to_source()`
 
+**Reference**
+- [reference/COMPATIBILITY.md](reference/COMPATIBILITY.md) — measured tables of what matches a plain Django model and what doesn't
+
 **Operations**
 - [operations/MIGRATIONS.md](operations/MIGRATIONS.md) — what `makemigrations` handles for you, and what it can't
 - [operations/LIMITATIONS.md](operations/LIMITATIONS.md) — what's left to you, and unsupported `Meta` options

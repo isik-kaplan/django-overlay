@@ -93,6 +93,29 @@ MUTANTS = [
         "    if isinstance(constraint, OverlayUniqueConstraint):\n        path, args, kwargs = constraint.deconstruct()",
         "    if False:\n        path, args, kwargs = constraint.deconstruct()",
     ),
+    # ---- dataclass field defaults: evaluated at import, so mutmut reports
+    # "could not find any test case for any mutant" for the whole module.
+    (
+        "sources",
+        "SourceTable stops defaulting its id column to id",
+        "django_overlay/sources.py",
+        '    id_column: str = "id"',
+        '    id_column: str = "XXidXX"',
+    ),
+    (
+        "sources",
+        "SourceTable defaults extra_where to a non-empty predicate",
+        "django_overlay/sources.py",
+        '    extra_where: str = ""',
+        '    extra_where: str = "XXXX"',
+    ),
+    (
+        "uniqueness",
+        "narrow_for_soft_delete drops every constraint before narrowing it",
+        "django_overlay/uniqueness.py",
+        '    declared = options.get("constraints") or []',
+        '    declared = options.get("constraints") and []',
+    ),
     (
         "uniqueness",
         "narrow_for_soft_delete returns the options untouched",
@@ -260,13 +283,14 @@ MUTANTS = [
         "       {%- if soft_delete %}",
         "       {%- if False %}",
     ),
-    # "the unique trigger checks NULL columns for collisions" used to live here.
-    # Removed rather than left flapping: the IS NOT NULL guard is a
-    # short-circuit, not a correctness rule -- with it gone the EXISTS still
-    # compares src.col = NEW.col against a NULL, which is never true -- so
-    # whether the suite happens to kill it depends on incidental test data
-    # rather than on behaviour. An entry that changes verdict for reasons
-    # nobody can name makes the whole list less trustworthy.
+    # "the unique trigger checks NULL columns for collisions" is deliberately
+    # absent. The IS NOT NULL guard is a short-circuit, not a correctness rule:
+    # with it gone the EXISTS still compares src.col = NEW.col against a NULL,
+    # which is never true, so the outcome is identical and only the scan is
+    # wasted. Re-tested once tests/testapp NullableUniqueTest gave the source
+    # side a genuinely nullable constrained column -- the mutation still
+    # survives, which settles it as equivalent rather than untested. The
+    # behaviour it guards is pinned by tests/test_unique_constraint.py.
     (
         "sql",
         "the insert trigger stops defaulting the pk",

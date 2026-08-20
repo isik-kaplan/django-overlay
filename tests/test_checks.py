@@ -47,7 +47,28 @@ def test_appconfig_ready_refuses_to_boot_with_the_bad_many_to_manys_auto_created
     assert any("BadManyToMany" in line for line in matching_e001_lines)
 
 
-def test_ready_raises_improperly_configured_for_a_bad_fk_and_m2m():
+@pytest.fixture
+def registry_restored():
+    """Undo the app-registry entries a test body's models leave behind.
+
+    A model declared inside a test is registered for the life of the process,
+    and a plain ManyToManyField's auto-created through model is `managed=True`
+    — so Django believes a table exists that no migration ever created. Any
+    later delete that cascades into it fails with `relation ... does not
+    exist`. It didn't bite the default ordering, which is why it sat here; it
+    did bite mutmut, whose baseline run never got past it.
+    """
+    registry = apps.all_models["testapp"]
+    before = dict(registry)
+    try:
+        yield
+    finally:
+        for name in set(registry) - set(before):
+            del registry[name]
+        apps.clear_cache()  # models cache related_objects, which now include the leak
+
+
+def test_ready_raises_improperly_configured_for_a_bad_fk_and_m2m(registry_restored):
     # Same assertions as the subprocess tests above, but in-process: ready()
     # already ran once at startup, so calling it again here doesn't repeat
     # that — it just re-scans the (now-bad) registry, which is enough to
@@ -179,3 +200,12 @@ def test_the_uniqueness_error_carries_an_id_and_the_offending_model(uniqueness_m
 
     assert uniqueness_message.id == "django_overlay.E003"
     assert uniqueness_message.obj is SoftDeleteUniqueTest
+
+
+@pytest.mark.django_db
+def test_a_test_declared_model_does_not_outlive_its_test():
+    """The guard for the fixture above. Without it the leaked through table
+    breaks any later delete that cascades into it, in whatever test happens to
+    run next."""
+    assert not [name for name in apps.all_models["testapp"] if name.startswith("transient")]
+    Address.objects.all().delete()

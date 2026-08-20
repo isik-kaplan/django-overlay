@@ -34,6 +34,9 @@ def result(label, fn):
     hammer(lambda: fn(p.pk))
     got = Person.objects.get(pk=p.pk).age
     print(f"{label:34} {got:4}/{THREADS * PER} {'OK' if got == THREADS * PER else 'LOST UPDATES'}")
+    # Not statistical: every route is routed around the view now, so anything
+    # short of the full count is a lost update, not a slow machine.
+    assert got == THREADS * PER, f"{label} lost {THREADS * PER - got} of {THREADS * PER} increments"
 
 
 def test_all_routes():

@@ -560,3 +560,22 @@ def test_the_conditional_note_is_appended_to_the_complaint_not_substituted():
     )
 
     assert problems[0][0] == "Meta.constraints has a plain UniqueConstraint 'probe_cond' (with a condition)"
+
+
+def test_null_values_do_not_collide_under_an_overlay_unique_constraint():
+    """SQL treats NULLs as non-colliding, and the partial unique index has to
+    agree — otherwise a single nullable column could only ever be empty on one
+    row. `vendor` is the OneToOneField, so this is the constraint that replaced
+    its implicit uniqueness."""
+    SoftDeletePlainUniqueTest.objects.create(code="n1", vendor=None)
+    SoftDeletePlainUniqueTest.objects.create(code="n2", vendor=None)
+
+    assert SoftDeletePlainUniqueTest.objects.filter(vendor__isnull=True).count() == 2
+
+
+def test_a_null_still_does_not_excuse_a_collision_on_another_column():
+    SoftDeletePlainUniqueTest.objects.create(code="dup", vendor=None)
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            SoftDeletePlainUniqueTest.objects.create(code="dup", vendor=None)

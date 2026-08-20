@@ -63,6 +63,31 @@ jobs:
         run: |
           uv run pytest tests/test_tenants -o addopts="" --create-db
 
+      # Probes are named probe_*.py, so pytest's default python_files pattern
+      # never collects them in the run above. That is deliberate -- they are
+      # reports, and a couple are slow or measure timings -- but it also meant
+      # nothing ran them, and two of them rotted unnoticed against changes to
+      # the code they measure. Named explicitly here so they at least have to
+      # execute; the ones that can pin an expected outcome now assert it.
+      - name: Run probes
+        run: |
+          uv run pytest \
+            tests/probe_orm_conformance.py \
+            tests/probe_soft_delete_compat.py \
+            tests/probe_constraint_kinds.py \
+            tests/probe_declaration_shapes.py \
+            tests/probe_unique_after_soft_delete.py \
+            tests/probe_f_routes.py \
+            tests/probe_write_cost.py \
+            -o addopts="" -q -s
+
+      # Separate because it races threads against a lossy path on purpose --
+      # its numbers are statistical, so it reports rather than gates.
+      - name: Run the lost-update measurement (report only)
+        continue-on-error: true
+        run: |
+          uv run pytest tests/probe_lost_updates.py -o addopts="" -q -s
+
   mutation:
     # Policy: no mutant survives. A mutant that lives is a change to
     # django_overlay/ that no test objects to — either the test is missing or

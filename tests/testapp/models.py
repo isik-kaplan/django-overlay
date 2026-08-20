@@ -620,3 +620,26 @@ class SoftDeletePlainUniqueTest(OverlayModel):
         @staticmethod
         def get_source():
             return None
+
+
+class NullableUniqueTest(OverlayModel):
+    """A sourced model with a nullable constrained column.
+
+    Every other unique model here constrains a NOT NULL column, which left the
+    `NEW.<col> IS NOT NULL` guard in unique_constraint_trigger.sql.j2 with no
+    way to be exercised — SQL treats NULLs as non-colliding and the trigger has
+    to agree, or one NULL badge in the source would block every NULL badge of
+    your own."""
+
+    badge = models.CharField(max_length=20, null=True)
+    label = models.CharField(max_length=50, blank=True, default="")
+
+    class Meta:
+        constraints = [OverlayUniqueConstraint(fields=["badge"], name="nullableuniquetest_badge_uniq")]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "nullableuniquetest"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_nullableuniquetestsource")

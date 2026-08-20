@@ -169,3 +169,5 @@ def test_freeing_a_unique_value_with_a_soft_delete():
         print(f"{status:5} {name:<{width}}  {detail}")
     failed = [r for r in RESULTS if r[1] != "OK"]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} as predicted")
+
+    assert not failed, failed
