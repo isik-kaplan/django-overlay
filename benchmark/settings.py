@@ -13,6 +13,8 @@ and otherwise from the same POSTGRES_* variables the test suite uses.
 import os
 from urllib.parse import unquote, urlparse
 
+from benchmark import switches
+
 
 SECRET_KEY = "not-a-secret-just-for-benchmarks"
 
@@ -61,19 +63,15 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 # The four query optimisations, switchable from the environment.
 #
 # A benchmark that cannot turn an optimisation off cannot say what it is worth,
-# and until now this module left all four at their library defaults -- so the
+# and this module used to leave all four at their library defaults -- so the
 # only measurable question was "overlay against a plain table", never "this
 # rewrite against no rewrite". Comparing against master is not an option: none
 # of these mechanisms exists there, and neither does this harness.
 #
-# Real bools, not strings: the library raises ImproperlyConfigured for anything
-# else, which is deliberate and would otherwise fire here first.
-def _switch(name: str, default: bool = True) -> bool:
-    raw = os.environ.get(name)
-    return default if raw is None else raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-DJANGO_OVERLAY_REWRITE_TRAVERSALS = _switch("DJANGO_OVERLAY_REWRITE_TRAVERSALS")
-DJANGO_OVERLAY_REDIRECT_SELECT_RELATED = _switch("DJANGO_OVERLAY_REDIRECT_SELECT_RELATED")
-DJANGO_OVERLAY_FORCE_HASH_JOINS = _switch("DJANGO_OVERLAY_FORCE_HASH_JOINS")
-DJANGO_OVERLAY_ARRAY_SUBQUERY_IN = _switch("DJANGO_OVERLAY_ARRAY_SUBQUERY_IN")
+# The names come from benchmark/switches.py, which the CLI reads too, so a flag
+# and the setting it moves cannot drift apart. Absent means on, matching the
+# library's own `getattr(settings, name, True)`.
+DJANGO_OVERLAY_REWRITE_TRAVERSALS = switches.read(switches.REWRITE_TRAVERSALS)
+DJANGO_OVERLAY_REDIRECT_SELECT_RELATED = switches.read(switches.REDIRECT_SELECT_RELATED)
+DJANGO_OVERLAY_FORCE_HASH_JOINS = switches.read(switches.FORCE_HASH_JOINS)
+DJANGO_OVERLAY_ARRAY_SUBQUERY_IN = switches.read(switches.ARRAY_SUBQUERY_IN)

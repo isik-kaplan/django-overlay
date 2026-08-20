@@ -15,12 +15,13 @@ any of them produces a plausible number rather than an obvious failure.
 None of this needs a database.
 """
 
+import pathlib
 import time
 
 import pytest
 from django.db import OperationalError
 
-from benchmark import environment, estimates, harness, results
+from benchmark import environment, estimates, harness, results, switches
 from benchmark.cli import parse_duration
 
 
@@ -472,3 +473,306 @@ def test_the_smoke_selection_is_a_real_subset():
     from benchmark.suites import SMOKE, SUITE_NAMES
 
     assert set(SMOKE) < set(SUITE_NAMES)
+
+
+# ------------------------------------------------- the optimisation switches
+#
+# The four library optimisations are what the benchmark exists to price, and
+# until the CLI could turn them off the only question it could answer was
+# "overlay against a plain table". Comparing against master is not the same
+# question: none of these mechanisms exists there, and neither does this
+# harness. So each one is a flag, and the flags have to reach the library --
+# an arm that silently ran with everything on would report the default arm
+# twice and call the difference noise.
+
+
+def _tri_state_flags():
+    """The CLI's paired flags that have no default of their own.
+
+    That is exactly what a switch is and nothing else in the command is one:
+    `--keep-up/--down` defaults to True, `--no-optimisations` to False. So the
+    set is checkable in both directions without a name heuristic -- a switch
+    with no flag fails, and a flag the switch table has never heard of fails
+    too, which is the one that would move nothing.
+    """
+    from benchmark.cli import benchmark as command
+
+    return {
+        parameter.name: parameter for parameter in command.params
+        if getattr(parameter, "is_bool_flag", False) and parameter.default is None
+    }
+
+
+def test_the_cli_exposes_exactly_the_switch_table():
+    assert set(_tri_state_flags()) == {switches.option_name(s) for s in switches.SWITCHES}
+
+
+def test_each_flag_is_spelled_the_way_the_table_spells_it():
+    """The table's spelling is the one settings.py and the saved environment
+    use. A flag that disagrees with it is a flag that moves nothing."""
+    flags = _tri_state_flags()
+    for switch in switches.SWITCHES:
+        parameter = flags[switches.option_name(switch)]
+        assert f"--{switch.flag}" in parameter.opts
+        assert f"--no-{switch.flag}" in parameter.secondary_opts
+        assert parameter.help == switch.help, (
+            f"{switch.flag} explains itself differently in the CLI and the table"
+        )
+
+
+def test_an_unset_switch_reads_as_on():
+    """Matching the library's own getattr(settings, name, True)."""
+    assert switches.read(switches.FORCE_HASH_JOINS, {}) is True
+
+
+@pytest.mark.parametrize("text", ["1", "true", "TRUE", "yes", "on", " on "])
+def test_the_spellings_of_on(text):
+    assert switches.read(switches.FORCE_HASH_JOINS, {"DJANGO_OVERLAY_FORCE_HASH_JOINS": text})
+
+
+@pytest.mark.parametrize("text", ["0", "false", "no", "off", "", "  "])
+def test_everything_else_is_off(text):
+    """Including the empty string. `FOO=` in a shell script is a fumbled set,
+    and off is the safer reading of the two."""
+    assert not switches.read(switches.FORCE_HASH_JOINS, {"DJANGO_OVERLAY_FORCE_HASH_JOINS": text})
+
+
+def test_a_bool_is_returned_not_the_string_that_carried_it():
+    """The library raises ImproperlyConfigured for a non-bool, which would fire
+    here first and read as its bug rather than the harness's."""
+    value = switches.read(switches.FORCE_HASH_JOINS, {"DJANGO_OVERLAY_FORCE_HASH_JOINS": "yes"})
+    assert value is True
+
+
+def test_nothing_given_leaves_every_switch_on():
+    assert switches.resolve({}) == {
+        switches.option_name(s): True for s in switches.SWITCHES
+    }
+
+
+def test_no_optimisations_turns_all_four_off():
+    assert switches.resolve({}, all_off=True) == {
+        switches.option_name(s): False for s in switches.SWITCHES
+    }
+
+
+def test_one_switch_can_be_lifted_back_out_of_no_optimisations():
+    """The useful combination: what is one optimisation worth on its own, as
+    opposed to what are the four worth together."""
+    chosen = switches.resolve({"force_hash_joins": True}, all_off=True)
+    assert chosen["force_hash_joins"] is True
+    assert chosen["rewrite_traversals"] is False
+
+
+def test_one_switch_can_be_dropped_out_of_the_default():
+    chosen = switches.resolve({"force_hash_joins": False})
+    assert chosen["force_hash_joins"] is False
+    assert chosen["rewrite_traversals"] is True
+
+
+def test_applying_writes_the_names_settings_reads():
+    environ = {}
+    switches.apply(switches.resolve({"force_hash_joins": False}), environ)
+    assert environ["DJANGO_OVERLAY_FORCE_HASH_JOINS"] == "0"
+    assert environ["DJANGO_OVERLAY_REWRITE_TRAVERSALS"] == "1"
+    # And reads back as what was asked for, which is the round trip settings.py
+    # actually performs.
+    assert switches.state(environ) == {
+        "rewrite_traversals": True, "redirect_select_related": True,
+        "force_hash_joins": False, "array_subquery_in": True,
+    }
+
+
+def test_the_off_switches_are_named_the_way_they_were_typed():
+    """`force-hash-joins`, not `force_hash_joins`. It goes into a message
+    telling somebody which flag produced the numbers they are looking at."""
+    assert switches.describe({"force_hash_joins": False, "rewrite_traversals": True}) == [
+        "force-hash-joins"
+    ]
+
+
+def test_the_record_is_read_from_settings_not_from_the_environment():
+    """What the library obeyed, not what the CLI asked for. The gap between
+    those two is exactly the plumbing bug worth catching."""
+    class Settings:
+        DJANGO_OVERLAY_FORCE_HASH_JOINS = False
+
+    recorded = switches.configured(Settings())
+    assert recorded["force_hash_joins"] is False
+    # Absent from the settings object means on, same as the library reads it.
+    assert recorded["rewrite_traversals"] is True
+
+
+# -------------------------------- comparing across arms rather than machines
+
+
+def test_two_arms_of_the_same_run_are_still_comparable():
+    """Turning an optimisation off is the measurement, not a confound. If it
+    landed in COMPARABILITY_KEYS the A/B would suppress its own result."""
+    on = an_environment(switches={"force_hash_joins": True})
+    off = an_environment(switches={"force_hash_joins": False})
+    assert environment.comparable(on, off)
+
+
+def test_a_switch_difference_is_named_in_the_note():
+    """A +21950% column from a flag looks exactly like one from a regression."""
+    baseline = {
+        "label": "all-on", "saved_at": "now",
+        "environment": an_environment(switches={"rewrite_traversals": True}),
+    }
+    note = results.comparison_note(
+        baseline, an_environment(switches={"rewrite_traversals": False}))
+    assert note.startswith("delta column")   # the runner tests this prefix
+    # Named the way it was typed, matching the summary line.
+    assert "rewrite-traversals on -> off" in note
+    assert "not a code change" in note
+
+
+def test_matching_arms_add_nothing_to_the_note():
+    baseline = {
+        "label": "all-on", "saved_at": "now",
+        "environment": an_environment(switches={"rewrite_traversals": True}),
+    }
+    note = results.comparison_note(
+        baseline, an_environment(switches={"rewrite_traversals": True}))
+    assert "optimisation change" not in note
+
+
+def test_a_run_saved_before_switches_existed_reads_as_all_on():
+    """Absent means on everywhere else; a saved run with no switches key must
+    not report four differences against a fresh all-on run."""
+    assert environment.switch_differences(
+        an_environment(), an_environment(switches=switches.resolve({}))) == []
+
+
+def test_the_summary_line_says_which_optimisations_were_off():
+    env = an_environment(
+        postgres_version="17.2", passes=2,
+        switches={"force_hash_joins": False, "rewrite_traversals": True},
+    )
+    line = environment.summarise(env)
+    assert "optimisations OFF: force-hash-joins" in line
+
+
+def test_the_summary_line_stays_quiet_when_nothing_is_off():
+    env = an_environment(postgres_version="17.2", passes=2,
+                         switches=switches.resolve({}))
+    assert "OFF" not in environment.summarise(env)
+
+
+# ------------------------------------------------------- the saved run's name
+
+
+def test_both_arms_of_an_ab_get_different_default_labels():
+    """Otherwise the second run overwrites the first and the comparison is
+    against itself -- the git sha is the same string for both arms."""
+    from benchmark.cli import _default_label
+
+    on = {"git_sha": "abc1234", "switches": switches.resolve({})}
+    off = {"git_sha": "abc1234", "switches": switches.resolve({}, all_off=True)}
+    assert _default_label(on) == "abc1234"
+    assert _default_label(off) == "abc1234-no-optimisations"
+    assert _default_label(on) != _default_label(off)
+
+
+def test_a_single_switch_off_is_named_in_the_label():
+    from benchmark.cli import _default_label
+
+    label = _default_label(
+        {"git_sha": "abc1234", "switches": switches.resolve({"force_hash_joins": False})})
+    assert label == "abc1234-no-force-hash-joins"
+
+
+# ------------------------------------- and does any of it reach the library?
+#
+# Everything above tests the wiring in pieces. This tests the whole run of it,
+# because the pieces were once all correct and the effect still did not happen:
+# `benchmark/suites/ban.py` set the threshold on the models package while the
+# module that read it had the name bound in its own namespace, so the suite
+# compared the unbanned query against itself for a whole branch, and passed.
+# The only check that would have caught it is the one that asks the library.
+#
+# A subprocess per arm, because settings.py reads the environment at import
+# time and django.setup() happens once per process. That is also the property
+# under test -- resolve the flags after setup and they move nothing.
+
+PROBE = """
+import json, sys
+from click.testing import CliRunner
+
+from benchmark.cli import benchmark
+
+outcome = CliRunner().invoke(benchmark, sys.argv[1:] + ["--list-suites"])
+if outcome.exit_code != 0:
+    raise SystemExit(f"{outcome.output}\\n{outcome.exception!r}")
+
+from django.conf import settings
+
+from django_overlay import fields
+from django_overlay.models import planning, query, queryset
+
+print("PROBE=" + json.dumps({
+    "rewrite_traversals": query._rewrite_traversals_enabled(),
+    "redirect_select_related": queryset._redirect_select_related_enabled(),
+    "force_hash_joins": planning._force_hash_joins_enabled(),
+    "array_subquery_in": fields._array_subquery_in_enabled(),
+}))
+print("SETTINGS=" + settings.SETTINGS_MODULE)
+"""
+
+
+def what_the_library_saw(*flags, want_settings_module=False):
+    """Run the real command with these flags, then ask the library itself."""
+    import json
+    import subprocess
+    import sys
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    finished = subprocess.run(
+        [sys.executable, "-c", PROBE, *flags],
+        cwd=root, capture_output=True, text=True, timeout=180, check=False,
+    )
+    assert finished.returncode == 0, finished.stdout + finished.stderr
+    lines = finished.stdout.splitlines()
+    line = next(text for text in lines if text.startswith("PROBE="))
+    if want_settings_module:
+        return next(text for text in lines if text.startswith("SETTINGS=")).removeprefix("SETTINGS=")
+    return json.loads(line.removeprefix("PROBE="))
+
+
+def test_by_default_the_library_has_every_optimisation_on():
+    assert what_the_library_saw() == {
+        "rewrite_traversals": True, "redirect_select_related": True,
+        "force_hash_joins": True, "array_subquery_in": True,
+    }
+
+
+def test_no_optimisations_reaches_all_four_gates_in_the_library():
+    assert what_the_library_saw("--no-optimisations") == {
+        "rewrite_traversals": False, "redirect_select_related": False,
+        "force_hash_joins": False, "array_subquery_in": False,
+    }
+
+
+@pytest.mark.parametrize("flag", [
+    "--no-rewrite-traversals",
+    "--no-redirect-select-related",
+    "--no-force-hash-joins",
+    "--no-array-subquery-in",
+])
+def test_each_flag_turns_off_its_own_gate_and_no_other(flag):
+    """One flag reaching the wrong setting is the mistake a table of names
+    invites, and it produces a plausible number rather than a failure."""
+    seen = what_the_library_saw(flag)
+    expected = flag.removeprefix("--no-").replace("-", "_")
+    assert seen[expected] is False
+    assert [name for name, on in seen.items() if not on] == [expected]
+
+
+def test_the_benchmark_settings_module_wins_over_an_exported_one():
+    """This test runs with DJANGO_SETTINGS_MODULE=tests.django_settings
+    exported, which is also the normal state of a Django developer's shell.
+    It used to win, and then every flag above moved a setting nothing read --
+    the run measured the default arm and filed it under the other arm's name.
+    """
+    assert what_the_library_saw(want_settings_module=True) == "benchmark.settings"

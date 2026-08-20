@@ -4,13 +4,16 @@
 run up automatically and adds a delta column, with no flag needed -- the flag
 is for producing a baseline, not for using one.
 
-Two rules keep the deltas honest:
+Three rules keep the deltas honest:
 
   * a run taken in a different environment is not compared, it is reported as
     incomparable with the reason (see environment.py);
   * a change smaller than the noise floor is not shown at all. The harness
     cannot resolve a 5% move, and printing one invites somebody to go looking
-    for a regression that is measurement error.
+    for a regression that is measurement error;
+  * a run with a different set of query optimisations enabled *is* compared --
+    that comparison is the whole point of the switches -- but the note says so,
+    because a delta from a flag and a delta from a regression look identical.
 """
 
 import json
@@ -134,7 +137,12 @@ def _delta_text(was, now):
 
 
 def comparison_note(baseline, env):
-    """One line about the baseline, or about why there isn't one."""
+    """One line about the baseline, or about why there isn't one.
+
+    The runner decides whether to use the baseline by testing this string for
+    its "delta" prefix, so the prefix is load-bearing: anything appended to a
+    usable note has to be appended, not prepended.
+    """
     if baseline is None:
         return None
     changed = environment.differences(baseline["environment"], env)
@@ -143,4 +151,12 @@ def comparison_note(baseline, env):
             f"no delta column: the baseline '{baseline['label']}' was taken in a "
             f"different environment ({'; '.join(changed)})"
         )
-    return f"delta column compares against '{baseline['label']}' from {baseline['saved_at']}"
+    note = f"delta column compares against '{baseline['label']}' from {baseline['saved_at']}"
+    # A switch difference keeps the delta column -- that comparison is the
+    # measurement, not a confound. But it gets named, because a column of
+    # +21950% from an optimisation somebody turned off on purpose looks exactly
+    # like a column of +21950% from a regression.
+    switched = environment.switch_differences(baseline["environment"], env)
+    if switched:
+        note += f" -- and measures an optimisation change, not a code change: {'; '.join(switched)}"
+    return note

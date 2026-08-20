@@ -18,6 +18,8 @@ import subprocess
 
 from django.db import connection
 
+from benchmark import switches
+
 
 # The settings that have actually moved a number in this project. Anything here
 # differing between two runs makes them incomparable.
@@ -76,7 +78,34 @@ def capture(scale, share, cap_ms, passes):
         "cap_ms": cap_ms,
         "passes": passes,
         "git_sha": _git_sha(),
+        # Which of the four library optimisations the run had on. Recorded from
+        # the settings object, so this says what the library obeyed rather than
+        # what the CLI asked for.
+        "switches": switches.configured(),
     }
+
+
+def switch_differences(left, right):
+    """Which optimisations were on in one run and off in the other.
+
+    Deliberately not in COMPARABILITY_KEYS -- the one thing recorded here that
+    is left out of it. Every key in that tuple invalidates a comparison: a
+    different work_mem makes two numbers unrelated, so no delta beats a wrong
+    one. The switches are the opposite. Turning one off and comparing *is* the
+    measurement, so suppressing the delta column would suppress the result.
+    What it must not do is happen quietly, which is what this is for.
+    """
+    before, after = left.get("switches") or {}, right.get("switches") or {}
+    flags = {switches.option_name(s): s.flag for s in switches.SWITCHES}
+    changed = []
+    for name in sorted(set(before) | set(after)):
+        # Absent means on, here as everywhere else: a run saved before the
+        # switches existed must not report four differences against a fresh one.
+        was, now = bool(before.get(name, True)), bool(after.get(name, True))
+        if was != now:
+            changed.append(f"{flags.get(name, name)} {'on' if was else 'off'} "
+                           f"-> {'on' if now else 'off'}")
+    return changed
 
 
 def differences(left, right):
@@ -93,9 +122,13 @@ def comparable(left, right):
 
 
 def summarise(environment):
-    return (
+    line = (
         f"postgres {environment['postgres_version']} on {environment['cores']} cores, "
         f"work_mem {environment['work_mem']}, shared_buffers {environment['shared_buffers']}, "
         f"scale {environment['scale']}, share {environment['share']}, "
         f"cap {environment['cap_ms'] // 1000}s, {environment['passes']} pass(es)"
     )
+    off = switches.describe(environment.get("switches") or {})
+    if off:
+        line += f"; optimisations OFF: {', '.join(off)}"
+    return line
