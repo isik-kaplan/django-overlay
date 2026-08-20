@@ -2,12 +2,21 @@ import contextvars
 import copy
 
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models, transaction
+from django.db.models import sql
+from django.db.models.constants import LOOKUP_SEP
+from django.db.models.sql.where import AND, WhereNode
 
 from . import uniqueness
 from .exceptions import OverlayConfigurationError
-from .fields import base_model_copy, hide_reverse_side
+from .fields import (
+    OverlayFencedIn,
+    OverlayForeignKey,
+    OverlayManyToManyField,
+    base_model_copy,
+    hide_reverse_side,
+)
 from .strategies import Strategy, default_id_field, negates_source_ids
 
 
@@ -38,8 +47,424 @@ def _reads_own_columns(value, model) -> bool:
     return any(_reads_own_columns(expression, model) for expression in source_expressions())
 
 
+def _rewrite_traversals_enabled() -> bool:
+    """settings.DJANGO_OVERLAY_REWRITE_TRAVERSALS turns OverlayQuery's rewrite
+    off. On by default, because leaving it off means every application author
+    has to remember a 987x cliff forever."""
+    configured = getattr(settings, "DJANGO_OVERLAY_REWRITE_TRAVERSALS", True)
+    if not isinstance(configured, bool):
+        raise ImproperlyConfigured(f"settings.DJANGO_OVERLAY_REWRITE_TRAVERSALS must be a bool, got {configured!r}.")
+    return configured
+
+
+_fence_suppressed = contextvars.ContextVar("django_overlay_fence_suppressed", default=False)
+
+
+def _redirect_select_related_enabled() -> bool:
+    """settings.DJANGO_OVERLAY_REDIRECT_SELECT_RELATED turns the
+    select_related -> prefetch_related routing off. On by default: a join
+    between two overlay views measured 76x-1304x a plain table, and
+    select_related() is the idiom every Django developer reaches for."""
+    configured = getattr(settings, "DJANGO_OVERLAY_REDIRECT_SELECT_RELATED", True)
+    if not isinstance(configured, bool):
+        raise ImproperlyConfigured(
+            f"settings.DJANGO_OVERLAY_REDIRECT_SELECT_RELATED must be a bool, got {configured!r}."
+        )
+    return configured
+
+
+class OverlayQuery(sql.Query):
+    """Rewrites `filter(fk__field=…)` across two overlay models into
+    `filter(fk_id__in=<subquery>)`.
+
+    A `UNION ALL` view is an appendrel and an appendrel parent carries no
+    statistics, so a join between two of them is estimated at 1/200 and `LIMIT`
+    then turns that into a nested loop that never terminates early. Measured at
+    900,000 view rows: the traversal is 6,199.5ms, the subquery form is 6.3ms.
+    See TODO/06 and tests/probe_join_fixes.py.
+
+    There is no lookup to register for this — `customer__city` is resolved by
+    `names_to_path()` well before lookups or transforms are consulted — so the
+    hook is `build_filter()`, which sees the whole `('customer__city', 'x')`
+    expression before any join is made.
+
+    A join and a semi-join are only interchangeable when the join cannot
+    multiply rows and cannot be negated into different NULL semantics, so the
+    rewrite is gated hard. Everything it refuses is listed in
+    `_traversal_rewrite()`, and tests/test_traversal_rewrite.py asserts the
+    rewritten and unrewritten forms return identical rows for each of them.
+    """
+
+    def build_filter(self, filter_expr, *args, **kwargs):
+        rewritten = self._traversal_rewrite(filter_expr, **kwargs)
+        if rewritten is not None:
+            return super().build_filter(rewritten, *args, **kwargs)
+
+        fence = self._m2m_fence(filter_expr, **kwargs)
+        clause, needed_inner = super().build_filter(filter_expr, *args, **kwargs)
+        if fence is None:
+            return clause, needed_inner
+
+        # AND, never replace. See `_m2m_fence()` — the join stays exactly as
+        # Django built it, so row multiplicity is untouched.
+        fenced, fenced_inner = super().build_filter(fence, *args, **kwargs)
+        combined = WhereNode([clause, fenced], connector=AND)
+        return combined, list(needed_inner) + list(fenced_inner)
+
+    def build_lookup(self, lookups, lhs, rhs):
+        """Resolve the fence's private lookup name without registering it anywhere.
+
+        `_m2m_fence()` returns `("pk__overlay_fenced_in", …)`, and a primary key
+        is an ordinary `UUIDField` or `AutoField` that this package does not
+        own — so the only way to make Django resolve that name through the
+        normal path was `models.Field.register_lookup()`, which installs it on
+        every field of every model in the importing project.
+
+        Django only needs the name to resolve *here*: `names_to_path()` runs
+        with `fail_on_missing=False`, so an unrecognised trailing name is
+        handed to this method as a lookup rather than rejected as a bad field.
+        Constructing the lookup directly therefore keeps the fence working and
+        leaves every field in the project untouched — including, deliberately,
+        overlay models' own primary keys. See `OverlayFencedIn` for why this is
+        not offered as a public way to scope a query.
+        """
+        if lookups == [OverlayFencedIn.lookup_name]:
+            return OverlayFencedIn(lhs, rhs)
+        return super().build_lookup(lookups, lhs, rhs)
+
+    def split_exclude(self, *args, **kwargs):
+        """`exclude()` across a multi-valued relation.
+
+        Django builds a fresh inner query here and then calls `trim_start()` on
+        it, which assumes a particular join layout and indexes into the alias
+        map by position. The inner query is an OverlayQuery too, and its filter
+        is no longer negated, so the fence would fire inside it, add a subquery
+        condition, and send `trim_start()` off the end of the list with an
+        IndexError.
+
+        Suppressing it costs nothing. The outer filter is negated, which the
+        fence already refuses — see `_m2m_fence()` — so this only makes the
+        inner query agree with the outer one.
+        """
+        token = _fence_suppressed.set(True)
+        try:
+            return super().split_exclude(*args, **kwargs)
+        finally:
+            _fence_suppressed.reset(token)
+
+    def _m2m_fence(self, filter_expr, **kwargs):
+        """An extra `(path, value)` to AND onto an m2m traversal, or None.
+
+        `filter(phones__number=…)` joins two views through a third, and every
+        one of them is an appendrel the planner has no statistics for. The
+        forward-FK rewrite cannot be reused here: it *replaces* the join with a
+        semi-join, and a semi-join does not multiply rows. A person with three
+        matching phones must appear three times, and measuring it showed
+        exactly that — the replacement returned 6 rows where the join returned
+        10.
+
+        So this adds a condition instead of replacing one:
+
+            pk = ANY (ARRAY(SELECT person FROM through WHERE phone IN (…)))
+
+        which is *implied by the join Django already emitted*. If a row
+        satisfies the join then some through row links it to a matching target,
+        so its pk is necessarily in that set. A conjunct implied by an existing
+        conjunct cannot change which rows match or how many times each appears
+        — it only hands the planner an InitPlan where it previously had a blind
+        estimate.
+
+        Measured on the production-shaped graph at 300,000 people: 306.6ms ->
+        0.4ms for a selective term, 7,896.5ms -> 105.9ms for a broad one, with
+        the row counts identical in both cases.
+        """
+        if kwargs.get("branch_negated") or kwargs.get("current_negated"):
+            # Under negation the conjunct stops being redundant: NOT (A AND B)
+            # is not NOT A. The whole argument above depends on the fence being
+            # ANDed with the thing that implies it.
+            return None
+        if _fence_suppressed.get():
+            return None
+        if not isinstance(filter_expr, (tuple, list)) or len(filter_expr) != 2:
+            return None
+        path, value = filter_expr
+        if not isinstance(path, str) or "__" not in path:
+            return None
+        if hasattr(value, "resolve_expression"):
+            return None
+        if not _rewrite_traversals_enabled():
+            return None
+
+        head, _, rest = path.partition("__")
+        try:
+            field = self.model._meta.get_field(head)
+        except FieldDoesNotExist:
+            return None
+
+        ends = self._m2m_ends(field)
+        if ends is None:
+            return None
+        through, target, to_here, to_there = ends
+
+        if not getattr(through, "_is_overlay_view_model", False):
+            return None
+        if not getattr(target, "_is_overlay_view_model", False):
+            return None
+        if not self._is_fenceable_tail(target, rest):
+            return None
+
+        # OverlayQuery again, so the inner `phone__number=` hop rewrites into
+        # its own fenced subquery and the whole thing nests.
+        links = models.QuerySet(model=through, query=OverlayQuery(through))
+        links = links.filter(**{f"{to_there}__{rest}": value})
+        return ("pk__overlay_fenced_in", links.values(to_here))
+
+    @staticmethod
+    def _m2m_ends(field):
+        """(through, other model, fk back to this model, fk to the other one).
+
+        Both directions, because the two matter for different reasons. Forward
+        is `filter(phones__kind=…)`, written by application code. Reverse is
+        `filter(people__id=…)` — which nobody writes, but it is what a related
+        manager and `prefetch_related()` emit, so it is the shape a detail page
+        actually runs.
+        """
+        if isinstance(field, OverlayManyToManyField):
+            declaring = field
+            through = field.remote_field.through
+            target = field.remote_field.model
+            forward = True
+        elif isinstance(field, models.ManyToManyRel) and isinstance(field.field, OverlayManyToManyField):
+            declaring = field.field
+            through = field.through
+            target = declaring.model
+            forward = False
+        else:
+            return None
+
+        try:
+            to_declaring = declaring.m2m_field_name()
+            to_related = declaring.m2m_reverse_field_name()
+        except Exception:  # noqa: BLE001 - a non-standard through model
+            return None
+
+        if forward:
+            return through, target, to_declaring, to_related
+        return through, target, to_related, to_declaring
+
+    @staticmethod
+    def _is_fenceable_tail(target, rest) -> bool:
+        """Is `rest` something the through model can filter on?
+
+        A field path is, including one ending at the far model's primary key —
+        unlike a forward FK, `people__id` still joins through the link table,
+        so there is a join here worth fencing.
+
+        `in` and `exact` are, because they are what `prefetch_related()` emits
+        (`filter(people__in=[…])`) and they still need that join.
+
+        Anything else — `isnull`, a transform, an unknown lookup — is not.
+        """
+        if rest in {"in", "exact"}:
+            return True
+        head = rest.split(LOOKUP_SEP)[0]
+        if head in {"pk"}:
+            return True
+        try:
+            target._meta.get_field(head)
+        except FieldDoesNotExist:
+            return False
+        return True
+
+    def _traversal_rewrite(self, filter_expr, **kwargs):
+        """The rewritten `(path, value)`, or None to leave it alone."""
+        if kwargs.get("branch_negated") or kwargs.get("current_negated"):
+            # exclude() / ~Q(). `NOT (col = ANY(ARRAY(…)))` and Django's
+            # anti-join construction differ on a NULL foreign key, and being
+            # subtly wrong here is worse than being slow.
+            return None
+        if not isinstance(filter_expr, (tuple, list)) or len(filter_expr) != 2:
+            return None
+        path, value = filter_expr
+        if not isinstance(path, str) or "__" not in path:
+            return None
+        if hasattr(value, "resolve_expression"):
+            # F(), OuterRef(), Subquery(): the expression would be resolved
+            # against the inner model instead of this one.
+            return None
+        if not _rewrite_traversals_enabled():
+            return None
+
+        head, _, rest = path.partition("__")
+        try:
+            field = self.model._meta.get_field(head)
+        except FieldDoesNotExist:
+            return None
+        # Forward relations only, which `isinstance` already guarantees: a
+        # reverse or m2m path resolves to a ManyToOneRel/ManyToManyField rather
+        # than to the OverlayForeignKey itself. That matters because a reverse
+        # or m2m traversal multiplies rows and a semi-join does not, so swapping
+        # one for the other would silently deduplicate.
+        if not isinstance(field, OverlayForeignKey) or not field.concrete:
+            return None
+
+        target = field.remote_field.model
+        if not getattr(target, "_is_overlay_view_model", False):
+            # view -> plain measured 1.2-1.3x; the plain side's statistics
+            # rescue the estimate and there is nothing to fence.
+            return None
+        if rest in {"pk", target._meta.pk.name, target._meta.pk.attname}:
+            # Django trims this to a local column and never joins at all.
+            return None
+        try:
+            target._meta.get_field(rest.split("__")[0])
+        except FieldDoesNotExist:
+            # `customer__isnull`, `customer__in`, `customer__exact`: a lookup
+            # on the relation itself, not a traversal through it.
+            return None
+
+        # Built without a manager on purpose: a custom default manager may
+        # filter rows, which would apply to the subquery and not to the join.
+        # OverlayQuery again, so a multi-hop path rewrites all the way down.
+        inner = models.QuerySet(model=target, query=OverlayQuery(target)).filter(**{rest: value})
+        return (f"{field.attname}__in", inner.values("pk"))
+
+
 class OverlayQuerySet(models.QuerySet):
     """Default queryset for every overlay view model."""
+
+    def __init__(self, model=None, query=None, using=None, hints=None):
+        # OverlayQuery is what rewrites cross-view traversals; installing it
+        # here rather than at each call site is also what makes the rewrite
+        # recursive, since the subquery it builds is an OverlayQuerySet too.
+        if query is None and model is not None:
+            query = OverlayQuery(model)
+        super().__init__(model=model, query=query, using=using, hints=hints)
+        self._overlay_redirected = ()
+
+    # ------------------------------------------------ select_related routing
+
+    def _clone(self):
+        clone = super()._clone()
+        clone._overlay_redirected = self._overlay_redirected
+        return clone
+
+    def select_related(self, *fields):
+        """Route overlay paths to `prefetch_related()`, keep the rest as joins.
+
+        `select_related('person')` compiles to a join between two views, and
+        both sides are appendrels the planner has no statistics for. On the
+        production-shaped graph a detail page that way is 15.2ms against a
+        0.2ms plain-table baseline; the same data fetched as two queries with
+        a literal id list — which is exactly what `prefetch_related()` emits —
+        is 0.1ms. 152x, for the identical result.
+
+        Nothing about attribute access changes. A forward FK prefetch leaves
+        `link.person` a single instance, populated from a cache rather than
+        from a join, and `None` where the FK is null. The trade is one extra
+        query per redirected path, and that the two queries are two snapshots
+        rather than one — inside a transaction, or against read-mostly vendor
+        data, that is not observable.
+
+        `select_related(None)` still clears, plain (non-overlay) targets still
+        join, and `DJANGO_OVERLAY_REDIRECT_SELECT_RELATED = False` turns the
+        whole thing off.
+        """
+        if not _redirect_select_related_enabled():
+            return super().select_related(*fields)
+        if fields == (None,):
+            # Clearing has to undo the routing too, or the prefetch it stands
+            # in for outlives the select_related() it replaced.
+            clone = super().select_related(None)
+            clone._prefetch_related_lookups = tuple(
+                lookup
+                for lookup in clone._prefetch_related_lookups
+                if lookup not in self._overlay_redirected
+            )
+            clone._overlay_redirected = ()
+            return clone
+        if self.query.combinator:
+            raise OverlayConfigurationError(
+                f"select_related() after .{self.query.combinator}() cannot be routed around the "
+                f"view, and joining two overlay views directly measured 76x-1304x a plain table. "
+                f"Fetch the related rows in a second query instead."
+            )
+
+        overlay, plain = self._split_select_related(fields)
+        clone = super().select_related(*plain) if plain else self._chain()
+        if overlay:
+            clone = clone.prefetch_related(*overlay)
+            clone._overlay_redirected = tuple(self._overlay_redirected) + tuple(overlay)
+        return clone
+
+    def _split_select_related(self, fields):
+        """(paths to prefetch, paths to leave as joins)."""
+        if not fields:
+            # Bare select_related() means "every forward relation". Naming them
+            # explicitly is the only way to join some and prefetch others.
+            fields = [
+                field.name
+                for field in self.model._meta.get_fields()
+                if field.concrete and (field.many_to_one or field.one_to_one)
+            ]
+        overlay, plain = [], []
+        for path in fields:
+            head = path.split(LOOKUP_SEP)[0]
+            try:
+                field = self.model._meta.get_field(head)
+            except FieldDoesNotExist:
+                plain.append(path)
+                continue
+            target = getattr(field, "related_model", None)
+            if target is not None and getattr(target, "_is_overlay_view_model", False):
+                overlay.append(path)
+            else:
+                plain.append(path)
+        return overlay, plain
+
+    def _refuse_after_redirect(self, what, remedy):
+        raise OverlayConfigurationError(
+            f"{what} cannot be combined with select_related() on an overlay model. "
+            f"select_related() is routed to prefetch_related() here, because joining two "
+            f"overlay views measured 76x-1304x a plain table. {remedy}"
+        )
+
+    def iterator(self, chunk_size=None):
+        if self._overlay_redirected and chunk_size is None:
+            self._refuse_after_redirect(
+                "iterator() without chunk_size",
+                "Pass a chunk_size, or drop the select_related() and let the prefetch happen "
+                "on the whole queryset.",
+            )
+        return super().iterator(chunk_size=chunk_size)
+
+    def _values(self, *fields, **expressions):
+        # select_related() is a no-op under values() in Django too, so dropping
+        # the prefetch here is what "leave it alone" means -- not a change.
+        clone = super()._values(*fields, **expressions)
+        if self._overlay_redirected:
+            clone._prefetch_related_lookups = tuple(
+                lookup
+                for lookup in clone._prefetch_related_lookups
+                if lookup not in self._overlay_redirected
+            )
+            clone._overlay_redirected = ()
+        return clone
+
+    def union(self, *other_qs, all=False):
+        if self._overlay_redirected:
+            self._refuse_after_redirect("union()", "Fetch the related rows in a second query.")
+        return super().union(*other_qs, all=all)
+
+    def intersection(self, *other_qs):
+        if self._overlay_redirected:
+            self._refuse_after_redirect("intersection()", "Fetch the related rows in a second query.")
+        return super().intersection(*other_qs)
+
+    def difference(self, *other_qs):
+        if self._overlay_redirected:
+            self._refuse_after_redirect("difference()", "Fetch the related rows in a second query.")
+        return super().difference(*other_qs)
 
     def count(self):
         """Count the two branches separately instead of counting the view.

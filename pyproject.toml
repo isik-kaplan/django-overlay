@@ -78,7 +78,14 @@ markers = [
 # being tolerated in the report.
 [tool.mutmut]
 source_paths = ["django_overlay/"]
-also_copy = ["tests/", "pyproject.toml", "sqlfluff_libs/"]
+# sql_templates/ is listed even though it already lives under source_paths.
+# mutmut copies non-Python files out of source_paths exactly once and never
+# refreshes them, so the .sql.j2 files went stale and every run after that was
+# mutating current Python against SQL templates from an earlier commit — for
+# about eleven hours, silently, until a test finally depended on one and broke
+# the baseline. Paths in also_copy *are* re-copied each run, which is the fix.
+# If mutation results ever look impossible again, `rm -rf mutants` first.
+also_copy = ["tests/", "pyproject.toml", "sqlfluff_libs/", "django_overlay/sql_templates/"]
 # Run the whole suite for every mutant instead of mutmut's per-mutant test
 # selection. That selection comes from tracing which test calls which
 # function, and it under-selects badly here: mutating SyncOverlayView.forward

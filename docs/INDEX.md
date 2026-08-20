@@ -12,6 +12,7 @@
 
 **Reference**
 - [reference/COMPATIBILITY.md](reference/COMPATIBILITY.md) — measured tables of what matches a plain Django model and what doesn't
+- [reference/QUERY_REWRITING.md](reference/QUERY_REWRITING.md) — the three query shapes rewritten for you, why, and how to turn each off
 
 **Operations**
 - [operations/MIGRATIONS.md](operations/MIGRATIONS.md) — what `makemigrations` handles for you, and what it can't
