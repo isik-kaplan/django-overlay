@@ -643,3 +643,386 @@ class NullableUniqueTest(OverlayModel):
         @staticmethod
         def get_source():
             return SourceTable(schema="public", table="testapp_shared_nullableuniquetestsource")
+
+
+# ---------------------------------------------------------------------------
+# Wide benchmark schema (tests/probe_wide_scale.py).
+#
+# Four overlay models and two plain ones, wired the way a real application
+# wires them: an overlay model pointing at a plain table, a plain table
+# pointing back at an overlay model, and overlay-to-overlay foreign keys two
+# hops deep. Around ten columns each, five of them indexed on WideCustomer so
+# indexed and unindexed access can be compared on the same table.
+# ---------------------------------------------------------------------------
+
+
+class WideRegion(models.Model):
+    """A plain table an overlay model points at."""
+
+    name = models.CharField(max_length=100)
+    country = models.CharField(max_length=2)
+
+    class Meta:
+        app_label = "testapp"
+
+
+class WideCustomer(OverlayModel):
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    email = models.CharField(max_length=200)
+    age = models.IntegerField(null=True)
+    city = models.CharField(max_length=100)
+    postcode = models.CharField(max_length=20)
+    status = models.CharField(max_length=20)
+    score = models.IntegerField(null=True)
+    registered_on = models.DateField(null=True)
+    notes = models.TextField(blank=True, default="")
+    region = models.ForeignKey(WideRegion, on_delete=models.SET_NULL, null=True, related_name="customers")
+
+    class Meta:
+        # Indexed: last_name, city, status, score, age.
+        # Unindexed on purpose: first_name, email, postcode, registered_on, notes.
+        indexes = [
+            models.Index(fields=["last_name"], name="widecustomer_last_name_idx"),
+            models.Index(fields=["city"], name="widecustomer_city_idx"),
+            models.Index(fields=["status"], name="widecustomer_status_idx"),
+            models.Index(fields=["score"], name="widecustomer_score_idx"),
+            models.Index(fields=["age"], name="widecustomer_age_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "widecustomer"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_widecustomersource")
+
+
+class WideProduct(OverlayModel):
+    sku = models.CharField(max_length=40)
+    name = models.CharField(max_length=200)
+    category = models.CharField(max_length=60)
+    price_cents = models.IntegerField()
+    weight_grams = models.IntegerField(null=True)
+    supplier = models.CharField(max_length=100)
+    discontinued = models.BooleanField(default=False)
+    description = models.TextField(blank=True, default="")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["category"], name="wideproduct_category_idx"),
+            models.Index(fields=["sku"], name="wideproduct_sku_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "wideproduct"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_wideproductsource")
+
+
+class WideOrder(OverlayModel):
+    """Overlay model with an overlay foreign key -- both ends are views."""
+
+    reference = models.CharField(max_length=40)
+    status = models.CharField(max_length=20)
+    total_cents = models.IntegerField()
+    placed_on = models.DateField(null=True)
+    channel = models.CharField(max_length=30)
+    currency = models.CharField(max_length=3)
+    comment = models.TextField(blank=True, default="")
+    customer = OverlayForeignKey(WideCustomer, on_delete=models.CASCADE, related_name="orders")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status"], name="wideorder_status_idx"),
+            models.Index(fields=["channel"], name="wideorder_channel_idx"),
+            models.Index(fields=["customer"], name="wideorder_customer_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "wideorder"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_wideordersource")
+
+
+class WideOrderLine(OverlayModel):
+    """Two overlay foreign keys, so a join from here to a customer crosses
+    three views."""
+
+    quantity = models.IntegerField()
+    unit_price_cents = models.IntegerField()
+    discount_cents = models.IntegerField(default=0)
+    note = models.CharField(max_length=200, blank=True, default="")
+    order = OverlayForeignKey(WideOrder, on_delete=models.CASCADE, related_name="lines")
+    product = OverlayForeignKey(WideProduct, on_delete=models.CASCADE, related_name="lines")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["order"], name="wideorderline_order_idx"),
+            models.Index(fields=["product"], name="wideorderline_product_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "wideorderline"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_wideorderlinesource")
+
+
+class WideCustomerNote(models.Model):
+    """A plain table pointing back at an overlay model."""
+
+    customer = OverlayForeignKey(WideCustomer, on_delete=models.CASCADE, related_name="customer_notes")
+    body = models.TextField()
+    author = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "testapp"
+        indexes = [models.Index(fields=["customer"], name="widecustomernote_customer_idx")]
+
+
+class HardDeleteCountTest(OverlayModel):
+    """soft_delete = False *with* a source — the one combination no other test
+    model has, and the branch where count()'s base-side subquery carries no
+    `WHERE NOT _overlay_deleted`."""
+
+    first_name = models.CharField(max_length=100)
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "harddeletecounttest"
+        soft_delete = False
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_harddeletecounttestsource")
+
+
+class Member(OverlayModel):
+    name = models.CharField(max_length=100)
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "member"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_membersource")
+
+
+class Roster(OverlayModel):
+    """Both ends of the M2M are overlay models and so is the through model, so
+    `roster.members.all()` is a three-view traversal."""
+
+    title = models.CharField(max_length=100)
+
+    members = OverlayManyToManyField(Member, through="RosterMembership", related_name="rosters")
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "roster"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_rostersource")
+
+
+class RosterMembership(OverlayModel):
+    """An OverlayModel used as an M2M `through` — a vendor-asserted link the
+    tenant can add to and remove from, but not edit in place.
+
+    overridable = False with soft_delete on, so the view's anti-join narrows to
+    tombstones rather than disappearing: removing a vendor-asserted membership
+    has to keep working."""
+
+    roster = OverlayForeignKey(Roster, on_delete=models.CASCADE)
+    member = OverlayForeignKey(Member, on_delete=models.CASCADE)
+    role = models.CharField(max_length=50, default="member")
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "rostermembership"
+        overridable = False
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_rostermembershipsource")
+
+
+class AuditEntry(OverlayModel):
+    """overridable = False with hard delete — the case where nothing in the
+    base table can ever collide with a source id, so the view carries no
+    anti-join at all."""
+
+    note = models.CharField(max_length=100)
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "auditentry"
+        overridable = False
+        soft_delete = False
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_auditentrysource")
+
+
+class MemberUuid7Polyfill(OverlayModel):
+    name = models.CharField(max_length=100)
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "member_uuid7polyfill"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_memberuuid7polyfillsource")
+
+
+class RosterUuid7Polyfill(OverlayModel):
+    title = models.CharField(max_length=100)
+
+    members = OverlayManyToManyField(
+        MemberUuid7Polyfill, through="RosterMembershipUuid7Polyfill", related_name="rosters"
+    )
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "roster_uuid7polyfill"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_rosteruuid7polyfillsource")
+
+
+class RosterMembershipUuid7Polyfill(OverlayModel):
+    """The shape the normalised design actually ships: an overlay through table
+    under a uuid strategy, non-overridable."""
+
+    roster = OverlayForeignKey(RosterUuid7Polyfill, on_delete=models.CASCADE)
+    member = OverlayForeignKey(MemberUuid7Polyfill, on_delete=models.CASCADE)
+    role = models.CharField(max_length=50, default="member")
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "rostermembership_uuid7polyfill"
+        overridable = False
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_rostermembershipuuid7polyfillsource")
+
+
+# --------------------------------------------------------------------------
+# UUID7 counterparts of the Wide* benchmark schema — see the note in
+# testapp_shared. UUID7_POLYFILL rather than UUID7 because the development box
+# is Postgres 17.6 and native uuidv7() needs 18.
+# --------------------------------------------------------------------------
+
+
+class WideCustomerU7(OverlayModel):
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    email = models.CharField(max_length=200)
+    age = models.IntegerField(null=True)
+    city = models.CharField(max_length=100)
+    postcode = models.CharField(max_length=20)
+    status = models.CharField(max_length=20)
+    score = models.IntegerField(null=True)
+    registered_on = models.DateField(null=True)
+    notes = models.TextField(blank=True, default="")
+    region = models.ForeignKey(WideRegion, on_delete=models.SET_NULL, null=True, related_name="u7_customers")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["last_name"], name="widecustomeru7_last_name_idx"),
+            models.Index(fields=["city"], name="widecustomeru7_city_idx"),
+            models.Index(fields=["status"], name="widecustomeru7_status_idx"),
+            models.Index(fields=["score"], name="widecustomeru7_score_idx"),
+            models.Index(fields=["age"], name="widecustomeru7_age_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "widecustomer_u7"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_widecustomeru7source")
+
+
+class WideProductU7(OverlayModel):
+    sku = models.CharField(max_length=40)
+    name = models.CharField(max_length=200)
+    category = models.CharField(max_length=60)
+    price_cents = models.IntegerField()
+    weight_grams = models.IntegerField(null=True)
+    supplier = models.CharField(max_length=100)
+    discontinued = models.BooleanField(default=False)
+    description = models.TextField(blank=True, default="")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["category"], name="wideproductu7_category_idx"),
+            models.Index(fields=["sku"], name="wideproductu7_sku_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "wideproduct_u7"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_wideproductu7source")
+
+
+class WideOrderU7(OverlayModel):
+    reference = models.CharField(max_length=40)
+    status = models.CharField(max_length=20)
+    total_cents = models.IntegerField()
+    placed_on = models.DateField(null=True)
+    channel = models.CharField(max_length=30)
+    currency = models.CharField(max_length=3)
+    comment = models.TextField(blank=True, default="")
+    customer = OverlayForeignKey(WideCustomerU7, on_delete=models.CASCADE, related_name="orders")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status"], name="wideorderu7_status_idx"),
+            models.Index(fields=["channel"], name="wideorderu7_channel_idx"),
+            models.Index(fields=["customer"], name="wideorderu7_customer_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "wideorder_u7"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_wideorderu7source")
+
+
+class WideOrderLineU7(OverlayModel):
+    quantity = models.IntegerField()
+    unit_price_cents = models.IntegerField()
+    discount_cents = models.IntegerField(default=0)
+    note = models.CharField(max_length=200, blank=True, default="")
+    order = OverlayForeignKey(WideOrderU7, on_delete=models.CASCADE, related_name="lines")
+    product = OverlayForeignKey(WideProductU7, on_delete=models.CASCADE, related_name="lines")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["order"], name="wideorderlineu7_order_idx"),
+            models.Index(fields=["product"], name="wideorderlineu7_product_idx"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID7_POLYFILL)):
+        table_name = "wideorderline_u7"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_wideorderlineu7source")
+
+
+class WideCustomerNoteU7(models.Model):
+    customer = OverlayForeignKey(WideCustomerU7, on_delete=models.CASCADE, related_name="customer_notes")
+    body = models.TextField()
+    author = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "testapp"
+        indexes = [models.Index(fields=["customer"], name="widecustomernoteu7_customer_idx")]

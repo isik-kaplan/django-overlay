@@ -8,7 +8,7 @@ from django.db import connections, models, transaction
 from . import uniqueness
 from .exceptions import OverlayConfigurationError
 from .fields import base_model_copy, hide_reverse_side
-from .strategies import Strategy, default_id_field
+from .strategies import Strategy, default_id_field, negates_source_ids
 
 
 __all__ = ["OverlayConfigurationError", "OverlayMeta", "OverlayModel", "OverlayModelBase", "OverlayQuerySet"]
@@ -40,6 +40,91 @@ def _reads_own_columns(value, model) -> bool:
 
 class OverlayQuerySet(models.QuerySet):
     """Default queryset for every overlay view model."""
+
+    def count(self):
+        """Count the two branches separately instead of counting the view.
+
+        Postgres does not push an aggregate down through `UNION ALL`. So
+        `count(*)` on the view builds the whole Append — every row of the base
+        table, plus every source row that survives the anti-join — and counts
+        what comes out one row at a time. Counting each branch on its own lets
+        the base side become an index-only scan and lets each branch aggregate
+        independently.
+
+        Measured on a 3,000,000-row view: 639ms through the ORM, 560ms for
+        `count(*)` on the view, 301ms decomposed, 261ms decomposed with a
+        partial index on `(id) WHERE NOT _overlay_deleted`. That takes count()
+        from ~13x a plain table to ~5x.
+
+        This is a query rewrite, not a different answer: the SQL below is the
+        view's own definition with `count(*)` in place of the select list, so
+        it counts exactly the rows the view would have returned.
+
+        Only a bare count qualifies. Anything with a predicate, a slice, an
+        annotation, a combinator or `distinct()` falls through to Django."""
+        if self._result_cache is None and self._can_decompose_count():
+            return self._decomposed_count()
+        return super().count()
+
+    def _can_decompose_count(self) -> bool:
+        """The decomposition counts whole tables, so anything that narrows,
+        widens or reshapes the row set disqualifies it.
+
+        `.values(...)` deliberately doesn't: `.values('age').count()` is still
+        a count of every row, and only becomes a real dedup with distinct(),
+        which is excluded here anyway."""
+        query = self.query
+        return (
+            self.model.get_source() is not None
+            and not query.is_sliced  # LIMIT/OFFSET caps the answer
+            and not query.where  # any predicate at all
+            and not query.annotations
+            and not query.distinct
+            and not query.combinator  # union()/intersection()/difference()
+            and not query.group_by
+            and not query.extra
+            and len(query.alias_map) <= 1  # a join can multiply rows
+        )
+
+    def _decomposed_count(self) -> int:
+        """`count(base WHERE NOT deleted) + count(source WHERE NOT EXISTS ...)`
+
+        Not the tempting fully index-only form,
+        `count(base) + count(source) - count(overridden)`. That one is wrong:
+        if the vendor drops a row a tenant had already overridden, the override
+        is orphaned — it still counts in `count(base)` but no longer matches
+        anything to subtract, so the total undercounts. The `NOT EXISTS` stays.
+
+        The base table is left unqualified so `search_path` resolves it to the
+        current tenant's schema, which is what every other query in this
+        library relies on; the source table carries its schema explicitly, as
+        it does in the view."""
+        model = self.model
+        source = model.get_source()
+        overlay_meta = model._overlay_meta
+        connection = connections[self.db]
+        quote = connection.ops.quote_name
+
+        base_table = quote(model._base_model._meta.db_table)
+        pk_column = quote(model._meta.pk.column)
+        source_table = f"{quote(source.schema)}.{quote(source.table)}"
+        source_id = f"{quote(source.table)}.{quote(source.id_column)}"
+        if negates_source_ids(overlay_meta.strategy):
+            source_id = f"-{source_id}"
+
+        base_where = f" WHERE NOT {quote('_overlay_deleted')}" if overlay_meta.soft_delete else ""
+        # Spliced raw, exactly as the view does it — see SourceTable.extra_where
+        # for whose job the quoting is.
+        extra_where = f"{source.extra_where} AND " if source.extra_where else ""
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT (SELECT count(*) FROM {base_table}{base_where})"  # noqa: S608 - identifiers from _meta
+                f" + (SELECT count(*) FROM {source_table} WHERE {extra_where}"
+                f"NOT EXISTS (SELECT 1 FROM {base_table} AS overlay_base"
+                f" WHERE overlay_base.{pk_column} = {source_id}))"
+            )
+            return cursor.fetchone()[0]
 
     def update(self, **kwargs):
         """Route a self-referencing update around the view.
@@ -273,6 +358,26 @@ class OverlayMeta:
     """Base class for a model's inner OverlayMeta. Subclass it (directly,
     or via with_strategy()) and add table_name / get_source().
 
+    `overridable = False` says a source row can never be edited in place —
+    the tenant may add their own rows and (with soft_delete) hide vendor ones,
+    but copy-on-write is refused. The clearest case is a many-to-many `through`
+    model: a link row is a pair of ids, so there is nothing in it to edit.
+
+    Declaring that buys a much cheaper view. The `NOT EXISTS` anti-join exists
+    to stop a materialised row appearing twice; with nothing ever materialised
+    it either disappears (hard delete) or narrows to tombstones only (soft
+    delete), and unfiltered ordering goes from an `Append` over a
+    `Hash Anti Join` to a `Merge Append` that `LIMIT` can stop early.
+
+    It is enforced rather than assumed: the INSTEAD OF UPDATE trigger raises
+    instead of copying the row down, so raw SQL cannot break the invariant the
+    view now depends on either.
+
+    Changing it does not generate a migration — like get_source(), it is
+    OverlayMeta rather than Django model state, so nothing in the field list
+    changes for makemigrations to notice. Run `manage.py resync_overlay_views`
+    afterwards.
+
     No get_source() stub here on purpose: the metaclass requires every concrete
     overlay model to define one in its own OverlayMeta, so a NotImplementedError
     fallback could never run — and it read as reachable while being invisible to
@@ -281,6 +386,7 @@ class OverlayMeta:
     Strategy = Strategy
     strategy = _default_strategy()
     soft_delete = _default_soft_delete()
+    overridable = True
     pk_default_sql = None
 
     @classmethod
@@ -349,6 +455,10 @@ class OverlayModelBase(models.base.ModelBase):
         if not isinstance(overlay_meta.soft_delete, bool):
             raise OverlayConfigurationError(
                 f"{name}.OverlayMeta.soft_delete must be a bool, got {overlay_meta.soft_delete!r}."
+            )
+        if not isinstance(overlay_meta.overridable, bool):
+            raise OverlayConfigurationError(
+                f"{name}.OverlayMeta.overridable must be a bool, got {overlay_meta.overridable!r}."
             )
 
         # M2M fields go on the view model only — copying one to both models

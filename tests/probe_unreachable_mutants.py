@@ -238,8 +238,8 @@ MUTANTS = [
         "sql",
         "the view stops masking source rows with a base row",
         "django_overlay/sql_templates/view/view.sql.j2",
-        "NOT IN (SELECT {{ pk_column | qi }} FROM {{ tenant_schema | qi }}.{{ base_table | qi }} WHERE {{ pk_column | qi }} IS NOT NULL)",
-        "IS NOT NULL AND TRUE",
+        'NOT EXISTS (SELECT 1 FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS overlay_base WHERE overlay_base.{{ pk_column | qi }} = {{ "-" if source.negate }}{{ source.table | qi }}.{{ source.id_column | qi }})',
+        "TRUE",
     ),
     (
         "sql",
