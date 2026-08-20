@@ -15,6 +15,7 @@
 
 **Operations**
 - [operations/MIGRATIONS.md](operations/MIGRATIONS.md) — what `makemigrations` handles for you, and what it can't
+- [operations/PERFORMANCE.md](operations/PERFORMANCE.md) — measured against a plain table, and the two source indexes `NEGATIVE_ID` needs
 - [operations/LIMITATIONS.md](operations/LIMITATIONS.md) — what's left to you, and unsupported `Meta` options
 
 **Development**

@@ -38,10 +38,16 @@ def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None
     strategy = model._overlay_meta.strategy
     pk_default_sql = model._overlay_meta.pk_default_sql
     soft_delete = model._overlay_meta.soft_delete if soft_delete is None else soft_delete
+    # Read live, not from historical state, because there is nothing historical
+    # to read: soft_delete leaves a `_overlay_deleted` column behind that says
+    # what it was at a point in history, and `overridable` leaves no trace in
+    # the field list at all. Which is also why changing it generates no
+    # migration — see OverlayMeta — and needs resync_overlay_views.
+    overridable = model._overlay_meta.overridable
 
     execute(
         overlay_sql.build_view_sql(
-            view_name, tenant_schema, base_table, source, columns, pk_column, strategy, soft_delete
+            view_name, tenant_schema, base_table, source, columns, pk_column, strategy, soft_delete, overridable
         )
     )
     execute(
@@ -55,10 +61,14 @@ def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None
             strategy,
             pk_default_sql,
             soft_delete,
+            source,
+            overridable,
         )
     )
     execute(
-        overlay_sql.build_instead_of_update_sql(view_name, tenant_schema, base_table, columns, pk_column, soft_delete)
+        overlay_sql.build_instead_of_update_sql(
+            view_name, tenant_schema, base_table, columns, pk_column, soft_delete, overridable
+        )
     )
     execute(
         overlay_sql.build_instead_of_delete_sql(view_name, tenant_schema, base_table, pk_column, columns, soft_delete)

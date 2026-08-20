@@ -12,6 +12,7 @@ BEGIN
   -- EXCLUDED is in scope below.
   UPDATE {{ tenant_schema | qi }}.{{ base_table | qi }} SET {{ merge("NEW") }} WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
   IF NOT FOUND THEN
+{%- if overridable %}
     INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
       {%- for c in columns -%}{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, _overlay_deleted{% endif %}
     )
@@ -19,6 +20,20 @@ BEGIN
       {%- for c in columns -%}NEW.{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, FALSE{% endif %}
     )
     ON CONFLICT ({{ pk_column | qi }}) DO UPDATE SET {{ merge("EXCLUDED") }};
+{%- else %}
+    -- No base row matched, so this row is source-backed and updating it would
+    -- mean materialising it. The model is declared overridable = False, and
+    -- the view above drops (or narrows) its anti-join on the strength of that,
+    -- so letting the copy happen would put the same id in both branches and
+    -- silently return it twice. Raise instead -- the invariant is enforced
+    -- here rather than assumed, so raw SQL cannot break it either.
+    --
+    -- 0A000 is feature_not_supported, which Django surfaces as
+    -- NotSupportedError rather than a bare DatabaseError.
+    RAISE EXCEPTION 'overlay: {{ view_name }} is declared overridable = False, so its source-backed rows cannot be modified'
+      USING ERRCODE = '0A000',
+            HINT = 'Insert your own row instead, or drop overridable = False from the model''s OverlayMeta.';
+{%- endif %}
   END IF;
   RETURN NEW;
 END;
