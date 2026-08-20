@@ -25,15 +25,90 @@ import argparse
 import importlib.util
 import json
 import sys
+import tomllib
 from pathlib import Path
 
 
 DEFAULT_STATS = Path("mutants/mutmut-cicd-stats.json")
+DEFAULT_TREE = Path("mutants")
+DEFAULT_PYPROJECT = Path("pyproject.toml")
 
 # status key -> whether it violates the policy
 ALIVE = ("survived", "suspicious", "timeout", "no_tests", "segfault")
 
 BUCKETS = ("total", "killed", "skipped", *ALIVE)
+
+
+def mutated_files(tree=DEFAULT_TREE):
+    """The source files mutmut actually produced results for.
+
+    Read from the `.meta` files it writes beside each mutated module, because
+    the exported stats are totals and cannot say which file they came from --
+    which is the whole problem this answers.
+    """
+    tree = Path(tree)
+    return {
+        str(path.relative_to(tree))[: -len(".meta")]
+        for path in tree.rglob("*.py.meta")
+    }
+
+
+def scoped_files(pyproject=DEFAULT_PYPROJECT):
+    """The files the selected shard claims, or None when nothing is scoped."""
+    config = tomllib.loads(Path(pyproject).read_text())["tool"]["mutmut"]
+    return config.get("only_mutate")
+
+
+def tree_problems(tree=DEFAULT_TREE, pyproject=DEFAULT_PYPROJECT):
+    """Whether the results on disk are results for the code being tested.
+
+    mutmut builds `mutants/` once and does not add scaffolding for a file that
+    a later `only_mutate` newly includes, so a tree built for one shard answers
+    a different shard's run with the first shard's numbers. That is not a
+    small discrepancy: three shards were run in sequence here and all three
+    reported the same 325 mutants, 321 killed, because only the first had ever
+    been mutated. Nothing in the totals could show it.
+
+    The same staleness reaches CI through the restored cache whenever a shard's
+    file list changes -- the key does not include that list unless it is passed
+    in, which is why mutation_cache_key.py now takes the shard name. This is
+    the second layer: if the key ever fails to invalidate, the run fails loudly
+    instead of reporting a stale green.
+    """
+    tree = Path(tree)
+    if not tree.exists():
+        return []
+
+    problems = []
+    mutated = mutated_files(tree)
+    gone = sorted(path for path in mutated if not Path(path).exists())
+    if gone:
+        problems.append(
+            "the mutants/ tree holds results for file(s) that no longer exist: "
+            + ", ".join(gone)
+            + " -- it was built against an older layout. `rm -rf mutants` and run again."
+        )
+
+    scope = scoped_files(pyproject)
+    if scope is None:
+        return problems
+
+    untested = sorted(set(scope) - mutated)
+    if untested:
+        problems.append(
+            "this shard claims file(s) mutmut produced no results for: "
+            + ", ".join(untested)
+            + " -- mutmut does not add mutants to an existing tree, so these were never"
+            " mutated. `rm -rf mutants` and run again."
+        )
+    foreign = sorted(mutated - set(scope))
+    if foreign:
+        problems.append(
+            "results are present for file(s) this shard does not own: "
+            + ", ".join(foreign)
+            + " -- so the numbers are another shard's. `rm -rf mutants` and run again."
+        )
+    return problems
 
 
 def find_stats(paths):
@@ -130,6 +205,8 @@ def main(argv=None):
     parser.add_argument("--phase-one", action="store_true",
                         help="do not fail on mutants left alive; confirm_survivors.py settles "
                              "those. The false-green guards still apply.")
+    parser.add_argument("--tree", default=DEFAULT_TREE,
+                        help="the mutants/ tree to check the results belong to the code")
     options = parser.parse_args(argv)
 
     found = find_stats(options.paths or [DEFAULT_STATS])
@@ -138,7 +215,9 @@ def main(argv=None):
               "did `mutmut run` and `mutmut export-cicd-stats` both run?")
         return 1
 
-    rows, problems = [], []
+    # Before reading a single number: are these results for this code, and for
+    # this shard's files? See tree_problems().
+    rows, problems = [], tree_problems(options.tree)
     for label, path in found:
         if not path.exists():
             problems.append(f"{path} not found — did `mutmut export-cicd-stats` run?")

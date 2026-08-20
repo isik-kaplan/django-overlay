@@ -23,7 +23,7 @@ from django.db.models import Count
 from django.test import override_settings
 
 from benchmark import harness
-from django_overlay import models as overlay_models
+from django_overlay.models import planning as overlay_planning
 
 
 NAME = "ban"
@@ -46,12 +46,12 @@ def threshold(value):
     Only for the last section, which measures what the ban costs on the shapes
     the threshold is there to protect.
     """
-    previous = overlay_models._HASH_JOIN_THRESHOLD
-    overlay_models._HASH_JOIN_THRESHOLD = value
+    previous = overlay_planning._HASH_JOIN_THRESHOLD
+    overlay_planning._HASH_JOIN_THRESHOLD = value
     try:
         yield
     finally:
-        overlay_models._HASH_JOIN_THRESHOLD = previous
+        overlay_planning._HASH_JOIN_THRESHOLD = previous
 
 
 def resolve(model, scope):

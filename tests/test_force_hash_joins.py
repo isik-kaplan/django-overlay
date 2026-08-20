@@ -10,6 +10,8 @@ way where it should not, leaves the session as it found it, and never changes a
 row. The performance itself is measured in tests/probe_plan_forcing.py.
 """
 
+from unittest import mock
+
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
@@ -24,6 +26,7 @@ from django_overlay.models import (
     _nested_queries,
     _overlay_views_joined,
     _overlay_views_read,
+    planning,
 )
 from tests.testapp.models import BenchPerson, Member, PlainPerson, Roster
 from tests.testapp_shared.models import MemberSource, RosterSource
@@ -354,6 +357,34 @@ def test_the_last_level_the_walk_reaches_is_the_limit_itself():
     # Not vacuous in either direction: the outer view is found at both depths,
     # so the difference above is the guard firing and not the walk failing.
     assert Roster._meta.db_table in _overlay_views_read(_chain(_MAX_SUBQUERY_DEPTH + 1))
+
+
+def test_lowering_the_threshold_from_outside_is_honoured():
+    """The knob benchmark/suites/ban.py turns, asserted here because nothing
+    else could catch it going dead.
+
+    `_wants_hash_joins` reads the threshold through the `planning` module rather
+    than through a name imported into its own. That distinction is invisible
+    until something overrides it from outside: splitting models.py into a
+    package moved the binding out from under that benchmark, whose override
+    silently stopped doing anything -- it kept passing, and reported the ban as
+    costing nothing, because both arms of the comparison were the unbanned one.
+    """
+    # A fresh queryset per call: `statements()` evaluates it, and an evaluated
+    # queryset answers the next call from its own cache without issuing SQL --
+    # which looks exactly like "the ban did not fire".
+    def one_view():
+        return BenchPerson.objects.filter(city="city0")
+
+    assert _overlay_views_joined(one_view().query) == 1
+    assert not any(BAN in statement for statement in statements(one_view())), "unbanned to begin with"
+
+    with mock.patch.object(planning, "_HASH_JOIN_THRESHOLD", 1):
+        assert any(BAN in statement for statement in statements(one_view())), (
+            "the override was not seen by the code that reads it"
+        )
+
+    assert not any(BAN in statement for statement in statements(one_view())), "and it is put back"
 
 
 def test_the_lowered_threshold_fires_on_the_threshold_itself():

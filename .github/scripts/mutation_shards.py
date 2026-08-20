@@ -10,9 +10,12 @@ verdicts bit-for-bit what a single job would have produced, and the union is
 the full result.
 
 Shards are subsystems rather than an even slicing, so a red shard names
-something a person recognises. They are not equal in size and cannot be:
-`only_mutate` matches files, not line ranges, and models.py is 42% of the
-mutants on its own. It is the critical path.
+something a person recognises. They are not equal in size, because
+`only_mutate` matches files rather than line ranges -- a shard can only be as
+fine as the file layout is. That is why django_overlay/models/ is a package and
+not a 1,227-line module: as one file it was 42% of the mutants in one job,
+which measured 5.5 hours against a 6-hour cap. Split by subject, its three
+shards are ~86, ~64 and ~49 minutes.
 
 `only_mutate` is deliberately excluded from mutmut's config fingerprint --
 "new mutants are born uncached and dropped ones simply stop being walked, so
@@ -21,11 +24,20 @@ cached results. That is what makes this split free.
 
 Usage, in CI and identically by hand:
 
+    rm -rf mutants                                     # see below, if switching
     python .github/scripts/mutation_shards.py models
     uv run mutmut run --max-children 1
 
     python .github/scripts/mutation_shards.py --list
     python .github/scripts/mutation_shards.py --clear   # mutate everything again
+
+`rm -rf mutants` before *switching* shards, and it is not optional. mutmut
+builds that tree once and does not add scaffolding for a file a later
+`only_mutate` newly includes, so a run scoped to a shard whose files were never
+mutated walks the previous shard's mutants and reports their verdicts. Three
+shards run back to back here all reported the same 325 mutants and 321 kills.
+check_mutants.tree_problems() now fails the run instead, naming the files -- but
+the tree still has to be removed to get an answer.
 """
 
 import sys
@@ -39,11 +51,25 @@ PYPROJECT = Path("pyproject.toml")
 # it is assigned somewhere. A hand-maintained split without that check quietly
 # stops testing whatever was added last.
 SHARDS = {
-    # The Django internals overrides: QuerySet._update, Query.get_aggregation,
-    # Query.get_compiler, Query.build_lookup. The biggest shard by a wide
-    # margin, and unsplittable.
+    # OverlayQuerySet: the ORM surface, and the biggest shard at ~320 mutants.
+    # QuerySet._update, count(), select_related() and bulk_create() are here.
+    "queryset": [
+        "django_overlay/models/queryset.py",
+    ],
+    # OverlayQuery: the rewrites underneath that surface -- the traversal
+    # semi-join, the m2m fence, Query.build_lookup and Query.get_compiler.
+    "query": [
+        "django_overlay/models/query.py",
+    ],
+    # The rest of the model machinery: the nested-loop ban and the counting it
+    # rests on, OverlayMeta, and the metaclass that splits one declaration in
+    # two. __init__.py is assigned rather than exempt -- it re-exports rather
+    # than being empty, and `__all__` is a real claim about the public surface.
     "models": [
-        "django_overlay/models.py",
+        "django_overlay/models/__init__.py",
+        "django_overlay/models/base.py",
+        "django_overlay/models/meta.py",
+        "django_overlay/models/planning.py",
     ],
     # The declaration-time diagnostics.
     "checks": [

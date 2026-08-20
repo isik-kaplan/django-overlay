@@ -162,42 +162,42 @@ MUTANTS = [
     (
         "metaclass",
         "soft_delete adds no shadow flag",
-        "django_overlay/models.py",
+        "django_overlay/models/base.py",
         'base_ns["_overlay_deleted"] = models.BooleanField(default=False, editable=False)',
         "pass",
     ),
     (
         "metaclass",
         "constraints go to the view model instead of the base model",
-        "django_overlay/models.py",
+        "django_overlay/models/meta.py",
         '_BASE_ONLY_META_OPTIONS = ("constraints", "indexes", "unique_together", "index_together", "db_table_comment")',
         '_BASE_ONLY_META_OPTIONS = ("indexes", "index_together", "db_table_comment")',
     ),
     (
         "metaclass",
         "the overlay manager clobbers a model's own manager",
-        "django_overlay/models.py",
+        "django_overlay/models/base.py",
         "        if not any(isinstance(v, models.Manager) for v in rest_items.values()):",
         "        if True:",
     ),
     (
         "metaclass",
         "m2m fields are copied to both models",
-        "django_overlay/models.py",
+        "django_overlay/models/base.py",
         "        m2m_items = {k: v for k, v in namespace.items() if isinstance(v, models.ManyToManyField)}",
         "        m2m_items = {}",
     ),
     (
         "metaclass",
         "self-referencing updates go back through the view",
-        "django_overlay/models.py",
+        "django_overlay/models/queryset.py",
         "        if not any(_reads_own_columns(value, self.model) for value in kwargs.values()):",
         "        if True:",
     ),
     (
         "metaclass",
         "the base-table update stops materialising matched rows first",
-        "django_overlay/models.py",
+        "django_overlay/models/queryset.py",
         """            self._copy_matched_rows_to_the_base_table()
             return base_manager.using(self.db).filter(pk__in=self.values("pk")).update(**kwargs)""",
         """            pass
@@ -206,14 +206,14 @@ MUTANTS = [
     (
         "metaclass",
         "save() stops routing a self-referencing expression around the view",
-        "django_overlay/models.py",
+        "django_overlay/models/queryset.py",
         "        if not any(_reads_own_columns(value, self.model) for _, _, value in values):",
         "        if True:",
     ),
     (
         "metaclass",
         "save()'s routed path stops materialising matched rows first",
-        "django_overlay/models.py",
+        "django_overlay/models/queryset.py",
         """            self._copy_matched_rows_to_the_base_table()
             matched = base_manager.using(self.db).filter(pk__in=self.values("pk"))""",
         """            pass
@@ -222,7 +222,7 @@ MUTANTS = [
     (
         "metaclass",
         "save() reports the row count instead of the values it was asked for",
-        "django_overlay/models.py",
+        "django_overlay/models/queryset.py",
         "            if not returning_fields:",
         "            if True:",
     ),
