@@ -182,3 +182,36 @@ def test_select_related_after_union_is_refused(membership):
 def test_the_refusals_name_the_alternative(membership):
     with pytest.raises(OverlayConfigurationError, match="second query"):
         RosterMembership.objects.select_related("roster").union(RosterMembership.objects.all())
+
+
+def test_intersection_after_select_related_is_refused(membership):
+    """Same reasoning as union(): a set operation over a queryset carrying a
+    pending prefetch silently drops the prefetch, so the related attribute
+    would be there on one side and missing on the other."""
+    with pytest.raises(OverlayConfigurationError, match="intersection\\(\\)"):
+        RosterMembership.objects.select_related("roster").intersection(RosterMembership.objects.all())
+
+
+def test_difference_after_select_related_is_refused(membership):
+    with pytest.raises(OverlayConfigurationError, match="difference\\(\\)"):
+        RosterMembership.objects.select_related("roster").difference(RosterMembership.objects.all())
+
+
+def test_the_set_operations_are_untouched_without_a_redirect(membership):
+    """The refusal is about the redirect, not about set operations. Without a
+    select_related() to reroute, both must behave exactly as Django's do."""
+    everything = RosterMembership.objects.all()
+    assert list(everything.intersection(RosterMembership.objects.all())) == [membership]
+    assert list(everything.difference(RosterMembership.objects.none())) == [membership]
+
+
+def test_a_path_django_does_not_know_is_left_for_django_to_reject(membership):
+    """_split_select_related() does not validate paths, it only routes them.
+
+    A name that is not a field cannot be an overlay relation, so it goes in the
+    join half untouched and Django raises its own FieldError -- which names the
+    available choices. Swallowing it here to raise something of our own would
+    be a worse message about a mistake this library did not catch.
+    """
+    with pytest.raises(Exception, match="nonexistent"):
+        list(RosterMembership.objects.select_related("nonexistent"))
