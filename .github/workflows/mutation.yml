@@ -127,7 +127,7 @@ jobs:
       # trade five known answers for one.
       fail-fast: false
       matrix:
-        shard: [models, checks, commands, fields, ddl, cli]
+        shard: [queryset, query, models, ddl, checks, commands, fields, cli]
 
     # Single Python version on purpose: mutation results don't vary across
     # interpreters, and each shard runs the whole suite once per mutant.
@@ -137,10 +137,12 @@ jobs:
     # for all of it. The repository is public, so hosted standard runners cost
     # nothing and the only budget being spent is wall-clock.
     #
-    # `models` is the one that needs it: models.py is 42% of the mutants and
-    # `only_mutate` matches files rather than line ranges, so it cannot be
-    # split further. A shard that does hit the cap is not wasted — the cache
-    # below is saved either way and the next run resumes from it.
+    # Nothing should need all of it now. The shard that did was `models` when
+    # models.py was one 1,227-line module: 42% of the mutants in one job, which
+    # measured 331 minutes. Splitting that module into a package by subject put
+    # the worst shard at roughly 86. The cap stays as a backstop, and a shard
+    # that does hit it is not wasted — the cache below is saved either way and
+    # the next run resumes from it.
     timeout-minutes: 360
 
     services:
@@ -197,7 +199,7 @@ jobs:
       # sort_keys makes it insensitive to reordering.
       - name: Fix the cache key before anything rewrites the config
         run: |
-          echo "MUTMUT_CACHE_KEY=mutmut-${{ matrix.shard }}-$(uv run python .github/scripts/mutation_cache_key.py)" >> "$GITHUB_ENV"
+          echo "MUTMUT_CACHE_KEY=mutmut-${{ matrix.shard }}-$(uv run python .github/scripts/mutation_cache_key.py ${{ matrix.shard }})" >> "$GITHUB_ENV"
 
       # Restore and save are separate on purpose. The combined `actions/cache`
       # writes nothing when the job fails, and every mutation run so far has

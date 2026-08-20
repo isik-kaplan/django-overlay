@@ -59,7 +59,7 @@ checks._overlay_models_with_a_source, and out of a pragma's reach for the same
 reason: it sits in the `if` of a generator expression.
 """
 
-["django_overlay.models.xǁOverlayQueryǁ_m2m_fence__mutmut_37"]
+["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_37"]
 reason = """
 getattr(through, "_is_overlay_view_model", False) -> the same with None as the
 default. The result is immediately negated with `not`, where False and None are
@@ -68,14 +68,14 @@ no default at all -- are covered by
 test_an_m2m_through_a_plain_model_is_not_fenced.
 """
 
-["django_overlay.models.xǁOverlayQueryǁ_m2m_fence__mutmut_47"]
+["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_47"]
 reason = """
 The same substitution on the target-side guard, negated the same way. Its
 killable siblings are covered by
 test_the_target_side_guard_answers_when_the_attribute_is_missing.
 """
 
-["django_overlay.models.xǁOverlayQueryǁ_m2m_fence__mutmut_60"]
+["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_60"]
 reason = """
 models.QuerySet(model=through, query=OverlayQuery(through)) -> model=None. The
 query already carries the model and is what compiles the SQL, so both forms
@@ -84,7 +84,7 @@ and comparing. Dropping `query` instead is observable and is killed by
 test_the_fences_own_subquery_is_fenced_too.
 """
 
-["django_overlay.models.xǁOverlayQueryǁ_m2m_fence__mutmut_62"]
+["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_62"]
 reason = """
 The same call with the model argument removed rather than set to None, with the
 same result for the same reason.
@@ -188,7 +188,7 @@ covers by feeding the same constraint in through two operations that spell the
 model differently.
 """
 
-["django_overlay.models.xǁOverlayQuerySetǁ_split_select_related__mutmut_18"]
+["django_overlay.models.queryset.xǁOverlayQuerySetǁ_split_select_related__mutmut_18"]
 reason = """
 getattr(field, "related_model", None) with the default removed. Every Django
 field object carries a related_model attribute -- None on a plain field, the
@@ -197,7 +197,7 @@ this would raise is unreachable. Checked on both a CharField and an
 IntegerField.
 """
 
-["django_overlay.models.xǁOverlayQuerySetǁ_split_select_related__mutmut_25"]
+["django_overlay.models.queryset.xǁOverlayQuerySetǁ_split_select_related__mutmut_25"]
 reason = """
 getattr(target, "_is_overlay_view_model", False) -> None, immediately used as
 the right side of an `and`, where False and None are indistinguishable. The
@@ -205,9 +205,119 @@ same shape as the exemptions in checks.py, show_source_indexes.py and
 makemigrations.py.
 """
 
-["django_overlay.models.xǁOverlayQueryǁ_m2m_ends__mutmut_10"]
+["django_overlay.models.query.xǁOverlayQueryǁ_m2m_ends__mutmut_10"]
 reason = """
 forward = False -> None in the reverse-relation branch. The value is only ever
 read as `if forward:` at the end of the method, so False and None take the same
 branch and return the same tuple order. Nothing else looks at it.
+"""
+
+["django_overlay.models.planning.x__nested_queries__mutmut_5"]
+reason = """
+node = nodes.pop() -> node = None. The pop is the loop's only consumer, so
+removing it makes `while nodes` unbounded and the walk never returns. A mutant
+that does not terminate cannot be killed by a test: the only evidence it can
+produce is a timeout, and this pipeline deliberately refuses to read a timeout
+as a kill, because a hang can equally mean an unrelated deadlock. Recorded here
+rather than counted, so it stays visible. Confirmed a genuine infinite loop and
+not slowness -- `nodes` is shortened on no path.
+"""
+
+["django_overlay.models.planning.x__nested_queries__mutmut_49"]
+reason = """
+getattr(query, "annotations", {}) -> the same with None as the default. Every
+object that reaches this line was admitted by a `hasattr(inner, "alias_map")`
+check, so it is a Query, and Query.__init__ sets annotations to {} -- the
+default is unreachable and `.values()` is called on the attribute either way. A
+pragma cannot reach it: the mutation belongs to an argument inside a `for`
+statement's iterable.
+"""
+
+["django_overlay.models.planning.x__nested_queries__mutmut_52"]
+reason = """
+getattr(query, "annotations", {}) -> getattr(query, "annotations"). Same
+reasoning as mutmut_49: the attribute always exists, so whether a default is
+supplied is unobservable. The two-argument form would raise only for an object
+that is not a Query, and none reaches this line.
+"""
+
+["django_overlay.models.planning.x__overlay_views_read__mutmut_11"]
+reason = """
+getattr(join, "table_name", None) -> getattr(join, "table_name"). Every value
+in alias_map is a Join or a BaseTable, and both assign self.table_name in their
+__init__ (django/db/models/sql/datastructures.py, lines 57 and 192), so the
+default is never used and its absence cannot raise. Out of a pragma's reach: it
+is one argument of a call inside a `for` body whose other mutations are killed.
+"""
+
+["django_overlay.models.query.xǁOverlayQueryǁ_traversal_rewrite__mutmut_37"]
+reason = """
+getattr(target, "_is_overlay_view_model", False) -> the same with None. The
+result is read only by `if not ...`, where False and None are both falsy. Same
+shape as the checks.py and show_source_indexes exemptions above.
+"""
+
+["django_overlay.models.query.xǁOverlayQueryǁ_traversal_rewrite__mutmut_45"]
+reason = """
+"pk" -> "XXpkXX" in `rest in {"pk", target._meta.pk.name, target._meta.pk.attname}`.
+The literal matters only when rest is exactly "pk", and that case is caught
+again two lines below: target._meta.get_field("pk") raises FieldDoesNotExist --
+Django's Options has no field under that alias, only the real one it stands for
+-- so the function returns None either way. Verified directly against
+WideCustomer._meta.
+"""
+
+["django_overlay.models.query.xǁOverlayQueryǁ_traversal_rewrite__mutmut_46"]
+reason = """
+"pk" -> "PK". Identical reasoning to mutmut_45: with the literal changed, a
+`customer__pk=...` path falls through to get_field("pk"), which raises, and the
+function returns None as it did before.
+"""
+
+["django_overlay.models.query.xǁOverlayQueryǁ_traversal_rewrite__mutmut_52"]
+reason = """
+models.QuerySet(model=target, query=OverlayQuery(target)) -> the same with
+model=None. QuerySet takes its model from the query when one is supplied, and
+the query here carries target, so both forms build the same queryset and
+compile to the same SQL. Verified: identical str(query) for a rewritten one-hop
+filter. Dropping the *query* argument is a different matter -- that loses the
+recursive rewrite, and mutmut_53 and mutmut_55 do it and are killed.
+"""
+
+["django_overlay.models.query.xǁOverlayQueryǁ_traversal_rewrite__mutmut_54"]
+reason = """
+The same call with the model argument removed altogether rather than passed as
+None. Same reasoning and the same verification as mutmut_52.
+"""
+
+["django_overlay.models.query.xǁOverlayQueryǁbuild_filter__mutmut_27"]
+reason = """
+WhereNode([clause, fenced], connector=AND) -> connector=None. WhereNode falls
+back to its own default connector, which is AND, when given a falsy one, so the
+node built is the same node. Verified: WhereNode([], connector=None).connector
+is "AND". A pragma cannot reach it -- the mutation belongs to a keyword argument
+of a call whose other mutations are killed.
+"""
+
+["django_overlay.models.query.xǁOverlayQueryǁbuild_filter__mutmut_29"]
+reason = """
+The same call with connector removed altogether. AND is WhereNode's default, so
+this is the original node reached by a different route. Same reasoning and the
+same verification as mutmut_27.
+"""
+
+["django_overlay.models.queryset.xǁOverlayQuerySetǁ_copy_matched_rows_to_the_base_table__mutmut_9"]
+reason = """
+models.Value(False, output_field=models.BooleanField()) -> output_field=None.
+Value resolves its own output field from the Python value when it is not told
+one, and for a bool that resolution is BooleanField -- the same field, so the
+same `false` literal in the INSERT ... SELECT. Verified: all three forms report
+output_field=BooleanField. The argument is there for readers, not for Django.
+Out of a pragma's reach inside the annotate() call.
+"""
+
+["django_overlay.models.queryset.xǁOverlayQuerySetǁ_copy_matched_rows_to_the_base_table__mutmut_11"]
+reason = """
+The same call with output_field removed altogether. Identical reasoning to
+mutmut_9: Value infers BooleanField from False.
 """

@@ -360,7 +360,7 @@ def _columns_needing_a_source_index(model) -> dict:
             kind = "one-to-one" if field.one_to_one else "foreign key"
             needed[field.column] = f"{field.name} is a {kind}, so joins and reverse lookups read the source"
     # Constraints live on the hidden base model — see the note above
-    # _BASE_ONLY_META_OPTIONS in models.py — and get_constraints() is an
+    # _BASE_ONLY_META_OPTIONS in models/meta.py — and get_constraints() is an
     # instance method, so read them the same way check_overlay_uniqueness does.
     for constraint in model._base_model._meta.constraints:
         if isinstance(constraint, OverlayUniqueConstraint):
