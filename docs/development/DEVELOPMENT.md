@@ -38,10 +38,45 @@ it did. Mutation testing closes that gap: `mutmut` makes small changes to
 `django_overlay/` and expects the suite to fail for each one.
 
 ```bash
-POSTGRES_USER=postgres uv run mutmut run --max-children 1
-uv run mutmut browse                          # inspect what lived
+POSTGRES_USER=postgres uv run mutmut run --max-children 1      # phase one
+POSTGRES_USER=postgres uv run python .github/scripts/confirm_survivors.py
 uv run mutmut show <mutant-name>              # the diff for one mutant
+uv run mutmut browse                          # inspect what lived
 ```
+
+It runs in two phases, and the split is what makes a full pass affordable.
+Phase one is `mutmut run`, which tests each mutant against only the tests its
+tracing associates with it — a couple of seconds each. Tracing under-selects
+here, so phase one reports survivors that aren't real, but it can only ever err
+that way: a test that never ran cannot have killed a mutant that lived, and a
+kill is a kill whichever tests produced it. Phase two takes each survivor and
+runs the **whole** suite against it, which is what the report gates on.
+
+Only survivors pay for a full pass. That is the difference between four of the
+six shards needing ten to twenty hours and all six fitting inside one:
+
+| | per mutant | 2,209 mutants |
+|---|---|---|
+| whole suite for every mutant | ~32s local, ~97s CI | 19.6h local, 59h CI |
+| traced tests, then confirm | ~2s, plus a full pass per survivor | ~1.2h local |
+
+Phase two caches its verdicts, in `mutants/mutmut-confirmed-cache.json`, which
+travels between CI runs inside the same cache as phase one's. Without it a shard
+pays for every survivor again on every push, however small the change.
+
+Every verdict needs the mutated function unchanged. What else it needs depends
+on what the verdict claimed:
+
+| verdict | claims | reusable while |
+|---|---|---|
+| killed | *this test objected* | the file holding that one test is unchanged |
+| survived | *nothing objected* | no test file anywhere has changed |
+
+A kill is pinned to the node id recorded at the time, so weakening or deleting
+that test retires the verdict; a kill nobody can attribute is never cached at
+all. A survivor is a claim about the whole suite, so the whole suite is what
+invalidates it — coarser on purpose, because there is no single test to point
+at when the finding is that none of them objected.
 
 `--max-children 1` is mandatory, not a preference. mutmut otherwise forks one
 child per CPU, and every child talks to the same Postgres test database: they
@@ -55,9 +90,12 @@ including a stray `pytest` in another terminal.
 
 **Policy: no mutant survives.** A mutant that lives is a change to the
 package that no test objects to — either a test is missing or the code is
-dead. CI enforces this (`.github/workflows/mutation.yml` via
-`.github/scripts/check_mutants.py`), counting `survived`, `suspicious`,
-`timeout`, `no_tests` and `segfault` all as alive.
+dead. CI enforces this (`.github/workflows/mutation.yml`): `check_mutants.py`
+reports phase one and checks that it ran at all, and `confirm_survivors.py`
+gates on what survives the full suite. Phase one counts `survived`,
+`suspicious`, `timeout`, `no_tests` and `segfault` all as alive, so all of them
+reach phase two; a mutant with no verdict at all fails the build outright,
+because "nothing survived" and "nothing ran" produce the same numbers.
 
 ### Shards
 
@@ -68,6 +106,7 @@ A full pass is one CI job per subsystem, each mutating a slice of
 uv run python .github/scripts/mutation_shards.py --list
 uv run python .github/scripts/mutation_shards.py models   # rewrites [tool.mutmut]
 POSTGRES_USER=postgres uv run mutmut run --max-children 1
+POSTGRES_USER=postgres uv run python .github/scripts/confirm_survivors.py --label models
 ```
 
 Sharding the *mutants* rather than the tests is the only split that keeps the

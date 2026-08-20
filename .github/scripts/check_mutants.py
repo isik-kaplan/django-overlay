@@ -8,6 +8,11 @@ shard, against that shard's file, so a red X points at the subsystem; and once
 at the end over every shard's uploaded stats, because the policy applies to the
 union. Given a directory it reads every mutmut-cicd-stats.json underneath it.
 
+This is phase one of two, so `--phase-one` reports the counts without failing
+on them: tracing under-selects, and confirm_survivors.py re-runs each survivor
+against the whole suite to find out which are real. Without the flag every
+alive mutant fails the build, which is what the union check at the end wants.
+
 A surviving mutant means some change to django_overlay/ that no test objects
 to. `suspicious` and `timeout` count as alive too: an unstable or hanging
 mutant is one nothing reliably kills. `no_tests` means mutmut found no test
@@ -122,6 +127,9 @@ def main(argv=None):
                         help="also append the table here (GITHUB_STEP_SUMMARY)")
     parser.add_argument("--expect-every-shard", action="store_true",
                         help="fail unless every shard in mutation_shards.py reported")
+    parser.add_argument("--phase-one", action="store_true",
+                        help="do not fail on mutants left alive; confirm_survivors.py settles "
+                             "those. The false-green guards still apply.")
     options = parser.parse_args(argv)
 
     found = find_stats(options.paths or [DEFAULT_STATS])
@@ -173,6 +181,12 @@ def main(argv=None):
     if problems:
         print("\n" + "\n".join(problems))
         return 1
+    # Phase one under-selects tests on purpose, so mutants left alive here are
+    # candidates, not verdicts -- see confirm_survivors.py. What still has to
+    # hold is that the run happened at all, which is checked above.
+    if options.phase_one:
+        print(f"\n{total_alive:,} mutant(s) left for phase two to settle")
+        return 0
     if total_alive:
         print(
             f"\n{total_alive:,} mutant(s) still alive. Run `uv run mutmut browse` to see them —\n"

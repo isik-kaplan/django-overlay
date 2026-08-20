@@ -42,7 +42,10 @@ jobs:
           POSTGRES_DB: django_overlay_test
         ports:
           - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
         options: >-
+          --shm-size=1g
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s

@@ -82,7 +82,10 @@ jobs:
           POSTGRES_DB: django_overlay_test
         ports:
           - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
         options: >-
+          --shm-size=1g
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
@@ -149,7 +152,10 @@ jobs:
           POSTGRES_DB: django_overlay_test
         ports:
           - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
         options: >-
+          --shm-size=1g
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
@@ -216,12 +222,24 @@ jobs:
       - name: Run mutation tests
         run: uv run mutmut run --max-children 1
 
-      - name: Enforce the no-surviving-mutant policy for this shard
+      # Phase one leaves survivors behind by design -- it only runs the tests
+      # mutmut's tracing picked -- so this reports the counts and checks that
+      # the run actually happened, without gating on them.
+      - name: Summarise phase one for this shard
         if: always()
         run: |
           uv run mutmut export-cicd-stats
-          uv run python .github/scripts/check_mutants.py \
+          uv run python .github/scripts/check_mutants.py --phase-one \
             --label ${{ matrix.shard }} mutants/mutmut-cicd-stats.json
+
+      # Phase two: every survivor re-run against the whole suite, which is what
+      # decides whether it is real. Only survivors cost a full pass, which is
+      # what keeps the job inside its six hours.
+      - name: Confirm this shard's survivors against the whole suite
+        if: always()
+        run: |
+          uv run python .github/scripts/confirm_survivors.py \
+            --label ${{ matrix.shard }} --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Save this shard's mutation cache
         if: always()
@@ -236,7 +254,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mutmut-stats-${{ matrix.shard }}
-          path: mutants/mutmut-cicd-stats.json
+          path: |
+            mutants/mutmut-cicd-stats.json
+            mutants/mutmut-confirmed.json
           if-no-files-found: warn
 
   # The policy applies to the union, not to a shard. This is the check worth
@@ -261,8 +281,18 @@ jobs:
           pattern: mutmut-stats-*
           path: shard-stats
 
-      - name: Enforce the no-surviving-mutant policy across every shard
+      # Two tables, because they answer different questions. The first is what
+      # phase one measured -- how much of the package was mutated, and how much
+      # of it died to the traced tests alone. The second is the policy: what
+      # survived the whole suite, by name.
+      - name: Report what phase one measured
         run: |
-          uv run python .github/scripts/check_mutants.py \
+          uv run python .github/scripts/check_mutants.py --phase-one \
             --expect-every-shard \
             --summary "$GITHUB_STEP_SUMMARY" shard-stats
+
+      - name: Enforce the no-surviving-mutant policy across every shard
+        run: |
+          uv run python .github/scripts/confirm_survivors.py \
+            --aggregate shard-stats --expect-every-shard \
+            --summary "$GITHUB_STEP_SUMMARY"
