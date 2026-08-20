@@ -136,6 +136,23 @@ def abandon_after(seconds):
         signal.signal(signal.SIGALRM, previous)
 
 
+def _connection_state():
+    """What libpq thinks the connection is doing, for the log.
+
+    0 is idle, 1 is a command still in progress, 3 is a failed transaction.
+    Reported rather than acted on: this exists because the wedge it is meant to
+    explain has never reproduced outside CI -- and a guess about
+    which state the connection was left in is worth less than the state.
+    """
+    raw = getattr(connection, "connection", None)
+    if raw is None:
+        return "none"
+    try:
+        return str(raw.pgconn.transaction_status)
+    except Exception:  # noqa: BLE001 -- diagnostics must not raise
+        return "unreadable"
+
+
 def _abandoned():
     """The cell for a measurement that was cut off, plus the cleanup it needs.
 
@@ -144,7 +161,10 @@ def _abandoned():
     reasoning about. Closing it is the one reset that is certain, and Django
     reopens on next use.
     """
+    before = _connection_state()
     connection.close()
+    print(f"ABANDONED a measurement; connection was {before}, "
+          f"now {_connection_state()}", file=sys.stderr)
     return Cell(0.0, note="gave up")
 
 
@@ -185,9 +205,10 @@ def _cap_or_lost(error, cap_ms):
     """
     if _sqlstate(error) in CAP_SQLSTATES:
         return Cell(float(cap_ms), capped=True)
+    before = _connection_state()
     connection.close()
     first_line = str(error).strip().splitlines()[0] if str(error).strip() else error.__class__.__name__
-    print(f"LOST CONNECTION {first_line}", file=sys.stderr)
+    print(f"LOST CONNECTION [was {before}] {first_line}", file=sys.stderr)
     return Cell(0.0, note="conn lost")
 
 

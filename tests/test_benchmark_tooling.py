@@ -389,6 +389,19 @@ def test_a_broken_connection_is_not_reported_as_capped(capsys):
     assert "LOST CONNECTION" in capsys.readouterr().err
 
 
+def test_an_abandoned_measurement_says_what_state_it_left_behind(capsys):
+    """The mid-run connection wedge has never reproduced locally; this is the evidence."""
+    harness.measure(lambda: time.sleep(5), 10_000, rounds=1, abandon_after_s=0.2)
+    reported = capsys.readouterr().err
+    assert "ABANDONED" in reported
+    assert "connection was" in reported and "now" in reported
+
+
+def test_a_lost_connection_says_what_state_it_was_in(capsys):
+    harness.measure(_raise(_operational(None, "gone")), 10_000, rounds=1)
+    assert "[was " in capsys.readouterr().err
+
+
 def test_the_reason_a_connection_was_lost_reaches_the_log(capsys):
     """The cell has room for two words; the cause has to go somewhere."""
     harness.measure(_raise(_operational(None, "server closed the connection")), 10_000, rounds=1)

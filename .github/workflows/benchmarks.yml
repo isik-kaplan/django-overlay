@@ -88,7 +88,16 @@ jobs:
           POSTGRES_DB: django_overlay_bench
         ports:
           - 5432:5432
+        # --shm-size, because a service container gets 64MB of /dev/shm by
+        # default and Postgres puts parallel workers' tuple queues there. At
+        # scale 0.3 the benchmark hit `could not resize shared memory segment
+        # ... No space left on device` four times, which the harness reports as
+        # a lost connection -- an honest report of a query that never ran, but
+        # a measurement lost either way.
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
         options: >-
+          --shm-size=1g
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
@@ -145,7 +154,10 @@ jobs:
           POSTGRES_DB: django_overlay_bench
         ports:
           - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
         options: >-
+          --shm-size=1g
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
@@ -208,7 +220,10 @@ jobs:
           POSTGRES_DB: django_overlay_bench
         ports:
           - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
         options: >-
+          --shm-size=1g
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
