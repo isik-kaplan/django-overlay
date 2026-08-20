@@ -54,7 +54,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13', '3.14']
+        # 3.11 is gone with the Django 6.0 floor — 6.0 requires 3.12, so a
+        # 3.11 job could only ever resolve a Django this package does not work
+        # against. See requires-python in pyproject.toml.
+        python-version: ['3.12', '3.13', '3.14']
         os-version: [ubuntu-22.04]
 
     runs-on: ${{ matrix.os-version }}
