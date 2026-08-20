@@ -14,6 +14,8 @@ Every case also asserts *whether* the rewrite fired, so nothing can pass
 vacuously by quietly not rewriting.
 """
 
+from unittest import mock
+
 import pytest
 from django.core.exceptions import FieldError, ImproperlyConfigured
 from django.db import connection, models
@@ -859,3 +861,48 @@ def test_the_queryset_defaults_are_unchanged():
 
     assert queryset._hints == {}
     assert queryset._db is None
+
+
+def test_the_select_related_setting_is_validated_the_same_way():
+    """Every DJANGO_OVERLAY_* boolean refuses a non-boolean rather than
+    treating a truthy string as "on" -- `"false"` is truthy, and a setting that
+    silently means the opposite of what it says is worse than a crash."""
+    from django_overlay.models import _redirect_select_related_enabled
+
+    with override_settings(DJANGO_OVERLAY_REDIRECT_SELECT_RELATED="please"):
+        with pytest.raises(ImproperlyConfigured, match="must be a bool"):
+            _redirect_select_related_enabled()
+    assert _redirect_select_related_enabled() is True
+
+
+def test_the_fence_declines_when_the_target_is_not_a_view(graph):
+    """view -> plain does not need the fence, and must not get it.
+
+    The fence exists because an appendrel parent carries no statistics for the
+    planner to size a join with. A plain table has them, so the estimate is
+    already sound -- and `_m2m_fence()` checks the *target*, not just the
+    through model, for exactly that reason.
+    """
+    fenced = sql_of(Roster.objects.filter(members__name="m"))
+    assert "= ANY (ARRAY(SELECT" in fenced, "the fence must apply normally for this to prove anything"
+
+    with mock.patch.object(Member, "_is_overlay_view_model", False):
+        assert "= ANY (ARRAY(SELECT" not in sql_of(Roster.objects.filter(members__name="m"))
+
+
+def test_the_fence_declines_a_through_model_it_cannot_read(graph):
+    """A non-standard through model whose m2m accessors raise.
+
+    Django's `m2m_field_name()` walks the through model's fields to find the
+    two ends. A hand-written through with an unusual shape can make that fail,
+    and the fence has to decline rather than propagate an exception out of
+    query construction, where it would surface as a broken filter() rather
+    than as a missing optimisation.
+    """
+    # Patched on the instance, not the class: Django attaches m2m_field_name
+    # per field in contribute_to_class rather than defining it on the type.
+    field = Roster._meta.get_field("members")
+    with mock.patch.object(
+        field, "m2m_field_name", side_effect=RuntimeError("unusual through model")
+    ):
+        assert "= ANY (ARRAY(SELECT" not in sql_of(Roster.objects.filter(members__name="m"))
