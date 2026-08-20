@@ -23,8 +23,10 @@ class Person(OverlayModel):
 
 
 class Conversation(models.Model):
-    # The only legal way to point a FK at an OverlayModel.
-    person = OverlayForeignKey(Person, on_delete=models.DO_NOTHING, related_name="conversations")
+    # The only legal way to point a FK at an OverlayModel. on_delete works as
+    # it always does; DO_NOTHING will raise IntegrityError if the target is
+    # still referenced, exactly as it would against a real foreign key.
+    person = OverlayForeignKey(Person, on_delete=models.CASCADE, related_name="conversations")
 ```
 
 `class OverlayMeta(OverlayMeta.with_strategy(...))` looks odd but is normal

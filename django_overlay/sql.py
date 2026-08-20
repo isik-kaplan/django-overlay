@@ -98,15 +98,46 @@ def build_instead_of_delete_sql(
 
 
 def build_constraint_trigger_sql(
-    trigger_name: str, tenant_schema: str, referencing_table: str, column: str, target_tables
+    trigger_name: str,
+    tenant_schema: str,
+    referencing_table: str,
+    column: str,
+    target_tables,
+    referencing_pk: str = "id",
 ) -> str:
-    """`target_tables`: see fields.target_tables_for()."""
+    """`target_tables`: see fields.target_tables_for(). `referencing_pk` lets
+    the deferred trigger re-find its own row at COMMIT — see the template."""
     return render(
         "triggers/constraint_trigger.sql.j2",
         tenant_schema=tenant_schema,
         referencing_table=referencing_table,
+        referencing_pk=referencing_pk,
         column=column,
         target_tables=target_tables,
+        function_name=f"check_{trigger_name}",
+        trigger_name=trigger_name,
+    )
+
+
+def build_referenced_row_trigger_sql(
+    trigger_name: str,
+    tenant_schema: str,
+    referencing_table: str,
+    column: str,
+    target_table: str,
+    target_view: str,
+    target_pk: str = "id",
+) -> str:
+    """The delete side of one OverlayForeignKey: refuse to remove a row that is
+    still referenced. Lives on the *target's* base table."""
+    return render(
+        "triggers/referenced_row_trigger.sql.j2",
+        tenant_schema=tenant_schema,
+        referencing_table=referencing_table,
+        column=column,
+        target_table=target_table,
+        target_view=target_view,
+        target_pk=target_pk,
         function_name=f"check_{trigger_name}",
         trigger_name=trigger_name,
     )
@@ -120,6 +151,7 @@ def build_unique_constraint_trigger_sql(
     source,
     pk_column: str,
     strategy: Strategy = Strategy.NEGATIVE_ID,
+    soft_delete: bool = False,
 ) -> str | None:
     """None if there's no source to guard against — Postgres's own UNIQUE
     constraint on the base table already covers base-vs-base."""
@@ -134,5 +166,6 @@ def build_unique_constraint_trigger_sql(
         columns=columns,
         pk_column=pk_column,
         negate=negates_source_ids(strategy),
+        soft_delete=soft_delete,
         source={"schema": source.schema, "table": source.table, "id_column": source.id_column},
     )

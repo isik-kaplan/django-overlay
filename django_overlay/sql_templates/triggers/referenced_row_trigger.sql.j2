@@ -1,0 +1,53 @@
+CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
+BEGIN
+  -- The delete side of one OverlayForeignKey. The insert side (see
+  -- constraint_trigger.sql.j2) refuses a reference to a row that isn't there;
+  -- this refuses removing a row that is still referenced. Together they make
+  -- referential integrity enforced rather than advisory, including for writes
+  -- that never go through Django's delete collector -- raw SQL, another
+  -- service on the same database, a data migration.
+  --
+  -- Asks whether the identity is still *visible through the view* rather than
+  -- whether a row was deleted. That one question covers all three ways a row
+  -- leaves: a hard delete, a soft delete (the flag flips and the view hides
+  -- it), and reset_to_source() -- where the base copy goes but the source row
+  -- shows through, so the identity survives and nothing should fire.
+  IF EXISTS (
+    SELECT 1 FROM {{ tenant_schema | qi }}.{{ target_view | qi }}
+    WHERE {{ target_pk | qi }} = OLD.{{ target_pk | qi }}
+  ) THEN
+    RETURN NULL;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM {{ tenant_schema | qi }}.{{ referencing_table | qi }}
+    WHERE {{ column | qi }} = OLD.{{ target_pk | qi }}
+  ) THEN
+    -- %% doubled so psycopg doesn't treat it as a bind placeholder.
+    RAISE EXCEPTION 'overlay FK violation: %%.%% still references %% = %%',
+      '{{ referencing_table }}', '{{ column }}', '{{ target_view }}', OLD.{{ target_pk | qi }}
+      USING ERRCODE = '23503';
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS {{ trigger_name | qi }} ON {{ tenant_schema | qi }}.{{ target_table | qi }};
+-- AFTER, and it has to be: Postgres only accepts AFTER for a CONSTRAINT
+-- TRIGGER, which is what makes it deferrable to COMMIT like the insert side
+-- and like a real foreign key. It is also what makes the check above work at
+-- all -- in a BEFORE trigger the row is still present, so the view would
+-- report it visible for a genuine delete as well as for reset_to_source().
+--
+-- DELETE OR UPDATE with no WHEN clause, deliberately. A soft delete removes a
+-- row from the view with an UPDATE rather than a DELETE, so the UPDATE case is
+-- needed -- but narrowing it with `WHEN (NEW._overlay_deleted ...)` would name
+-- a column that only exists when the *target* soft-deletes, which makes this
+-- trigger depend on a property of another model at the moment the migration
+-- ran. Turning soft_delete on later would then leave every trigger created
+-- before it silently guarding nothing. The function short-circuits on the
+-- first check instead, which costs one indexed lookup on an ordinary update.
+CREATE CONSTRAINT TRIGGER {{ trigger_name | qi }}
+AFTER DELETE OR UPDATE ON {{ tenant_schema | qi }}.{{ target_table | qi }}
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}();

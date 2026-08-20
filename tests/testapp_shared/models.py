@@ -135,3 +135,13 @@ class SoftDeleteTestSource(models.Model):
 
     class Meta:
         app_label = "testapp_shared"
+
+
+class SoftDeleteUniqueTestSource(models.Model):
+    ssn = models.CharField(max_length=20)
+    email = models.CharField(max_length=100)
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "testapp_shared"

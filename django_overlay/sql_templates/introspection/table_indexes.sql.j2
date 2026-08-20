@@ -1,0 +1,11 @@
+SELECT
+    ic.relname AS index_name,
+    i.indisunique AS is_unique,
+    substring(pg_get_indexdef(i.indexrelid) FROM ' USING (.*)$') AS shape
+FROM pg_index i
+JOIN pg_class c ON c.oid = i.indrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_class ic ON ic.oid = i.indexrelid
+WHERE n.nspname = %s
+  AND c.relname = %s
+ORDER BY ic.relname
