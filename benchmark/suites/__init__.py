@@ -36,6 +36,12 @@ SUITE_NAMES = (
 # small enough to sit on every push.
 SMOKE = ("shapes", "ban")
 
+# A single execution gets this many times the statement cap before it is
+# abandoned, with a floor for very small caps. The cap bounds Postgres; this
+# bounds everything around it.
+MEASUREMENT_CEILING_FACTOR = 6
+MINIMUM_MEASUREMENT_CEILING = 30.0
+
 
 def load_suite(name):
     return importlib.import_module(f"benchmark.suites.{name}")
@@ -73,11 +79,32 @@ class Context:
         how long Django spends marshalling a third of a million primary keys
         into one, and the staged suite does exactly that at scale 1.0.
 
+        Checking before each measurement is necessary but not sufficient: it
+        cannot interrupt the measurement it is already inside. So every
+        execution also carries a ceiling of its own -- see
+        harness.abandon_after -- and a measurement that runs past it says
+        "gave up" rather than running until the CI job is killed.
+
         A skipped cell says "skipped", never a duration -- see harness.Cell.
         """
         if self.out_of_time():
             return harness.Cell(0.0, note="skipped"), None
-        return harness.measure(build, self.cap_ms, rounds=rounds)
+        return harness.measure(
+            build, self.cap_ms, rounds=rounds, abandon_after_s=self.measurement_ceiling()
+        )
+
+    def measurement_ceiling(self):
+        """How long one execution may take before it is abandoned.
+
+        Generous against the statement cap, because a single execution may be
+        several statements and the client-side work between them is real, but
+        finite. Never longer than what is left of the whole run's budget --
+        there is no point letting one row eat time the remaining suites need.
+        """
+        ceiling = max(MINIMUM_MEASUREMENT_CEILING, self.cap_ms / 1000 * MEASUREMENT_CEILING_FACTOR)
+        if self.deadline is not None:
+            ceiling = min(ceiling, max(1.0, self.deadline - time.monotonic()))
+        return ceiling
 
     def compare(self, label, expected, actual, what="overlay and plain disagree"):
         """Record a disagreement rather than raising.

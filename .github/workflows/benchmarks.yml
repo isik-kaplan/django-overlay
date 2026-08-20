@@ -127,10 +127,14 @@ jobs:
     needs: gate
     if: needs.gate.outputs.maintainer == 'true' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-22.04
-    # Comfortably above the benchmark's own 30m ceiling, so the budget guard is
-    # what stops a slow run and reports what it skipped, rather than GitHub
-    # killing the job and leaving nothing behind.
-    timeout-minutes: 45
+    # Far above the benchmark's own 30m ceiling, so the budget guard is what
+    # stops a slow run and reports what it skipped, rather than GitHub killing
+    # the job and leaving nothing behind. 45 was not far enough: `staged`
+    # overran a twenty-one second estimate by thirty-seven minutes and GitHub
+    # killed the job with five suites unmeasured and no closing banner. The
+    # per-measurement ceiling in benchmark/harness.py is the actual fix; this is
+    # the margin that means a future overrun is reported rather than truncated.
+    timeout-minutes: 90
 
     services:
       postgres:
@@ -189,9 +193,11 @@ jobs:
     name: Full suite (manual scale)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
-    # The benchmark's own ceiling defaults to 1h and the guard enforces it, so
-    # this only has to be far enough above that to let the closing banner print.
-    timeout-minutes: 90
+    # The benchmark's own ceiling defaults to 1h and the guard enforces it, but
+    # this job takes --max-runtime as an input and somebody will type a big one,
+    # so it asks for GitHub's hard cap of 360 and lets the budget guard be the
+    # thing that decides when to stop.
+    timeout-minutes: 360
 
     services:
       postgres:

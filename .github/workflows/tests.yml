@@ -16,40 +16,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Is this run one we trust to be worth hours of compute? Mutation testing is
-  # up to two hours, and running it for anybody who opens a pull request is
-  # both an easy way to burn the account's minutes and a way to train everyone
-  # to ignore a red check that was never going to finish.
-  #
-  # `author_association` is GitHub's own answer to "does this person have
-  # standing in this repository". Anything that is not a pull request — a push
-  # to master, a manual dispatch — is by definition already gated on write
-  # access, so it passes.
-  #
-  # The same block exists in benchmarks.yml. Two copies of ten lines beat a
-  # reusable workflow for something this small, but they must move together.
-  gate:
-    runs-on: ubuntu-22.04
-    outputs:
-      maintainer: ${{ steps.check.outputs.maintainer }}
-    steps:
-      - id: check
-        env:
-          EVENT: ${{ github.event_name }}
-          ASSOCIATION: ${{ github.event.pull_request.author_association }}
-        run: |
-          if [ "$EVENT" != "pull_request" ]; then
-            echo "maintainer=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          case "$ASSOCIATION" in
-            OWNER|MEMBER|COLLABORATOR)
-              echo "maintainer=true" >> "$GITHUB_OUTPUT" ;;
-            *)
-              echo "maintainer=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::Mutation testing is skipped for outside contributions; it runs on master after merge." ;;
-          esac
-
+  # Everything here is cheap enough to run for anybody. The two expensive
+  # policies — mutation testing and the scale 0.3 benchmark — live in their own
+  # workflows, each with its own maintainer gate and its own concurrency rules,
+  # because a four-hour job and a five-minute matrix want opposite answers to
+  # "should a new push cancel this?".
   test:
     strategy:
       fail-fast: false
@@ -131,104 +102,3 @@ jobs:
         continue-on-error: true
         run: |
           uv run pytest tests/probe_lost_updates.py -o addopts="" -q -s
-
-  mutation:
-    # Policy: no mutant survives. A mutant that lives is a change to
-    # django_overlay/ that no test objects to — either the test is missing or
-    # the code is dead. A genuinely equivalent mutant gets a
-    # `# pragma: no mutate` on its line explaining why, not a tolerance here.
-    #
-    # Single Python version on purpose: mutation results don't vary across
-    # interpreters, and this job runs the whole suite once per mutant.
-    #
-    # Maintainer runs only — see the `gate` job. On an outside contributor's
-    # pull request this is skipped and the policy is enforced on master after
-    # merge instead. The trade is deliberate: a surviving mutant can reach
-    # master and be caught one commit later, which is better than every
-    # contributor waiting two hours for a check they cannot interpret.
-    needs: gate
-    if: needs.gate.outputs.maintainer == 'true'
-    runs-on: ubuntu-22.04
-    # A cold run is ~1100 mutants, each running the whole suite, which is
-    # hours — the cache below is what makes this viable, since mutmut's git
-    # change detection then re-checks only what actually moved. A cold cache
-    # will hit this timeout; see KNOWN_ISSUES/10 for the fix (a per-child test
-    # database so max_children can go above 1) and for why the gate does not
-    # reach zero yet.
-    timeout-minutes: 120
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: django_overlay_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      POSTGRES_HOST: localhost
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: django_overlay_test
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: |
-          uv sync
-
-      # mutants/ holds the per-file .meta result files. Restoring them lets
-      # mutmut's git change detection skip mutants whose code didn't move.
-      - name: Restore mutation cache
-        uses: actions/cache@v4
-        with:
-          path: mutants
-          key: mutmut-${{ hashFiles('uv.lock', 'pyproject.toml') }}-${{ github.sha }}
-          restore-keys: |
-            mutmut-${{ hashFiles('uv.lock', 'pyproject.toml') }}-
-
-      # The regions mutmut structurally can't reach — see KNOWN_ISSUES/09.
-      # mutmut forks a pre-warmed parent and only picks the mutant in the
-      # child, so anything that runs at import time (the metaclass, every
-      # migration operation, the SQL templates) has already run against the
-      # original code. This harness edits the source directly instead.
-      #
-      # Deliberately first: it is minutes rather than hours, it covers the DDL
-      # layer that mutmut excludes entirely, and unlike the step below it is
-      # currently at zero, so it is the half of the policy that actually gates.
-      - name: Mutation-test the code mutmut can't reach
-        run: |
-          uv run python tests/probe_unreachable_mutants.py
-
-      - name: Run mutation tests
-        run: |
-          uv run mutmut run
-
-      - name: Enforce the no-surviving-mutant policy
-        if: always()
-        run: |
-          uv run mutmut export-cicd-stats
-          uv run python .github/scripts/check_mutants.py
-
-      - name: Upload mutation results
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mutmut-results
-          path: |
-            mutants/mutmut-cicd-stats.json
-          if-no-files-found: ignore
