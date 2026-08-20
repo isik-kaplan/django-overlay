@@ -7,7 +7,10 @@ authors = [
 ]
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.11"
+# 3.12 rather than 3.11 because the floor below is Django 6.0, which requires
+# it. Raising both together is the point: the package overrides private
+# QuerySet internals, and those are not stable across a four-year Django range.
+requires-python = ">=3.12"
 keywords = ["django", "postgres", "views", "multi-tenant"]
 classifiers = [
   "Framework :: Django",
@@ -15,7 +18,12 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
 ]
-dependencies = ["django>=4.2", "jinja2>=3.1.0"]
+# django>=6.0, not >=4.2. The declared range was never real: OverlayQuerySet
+# overrides QuerySet._update(), whose signature gained `returning_fields` in
+# 6.0, so every install on 4.2-5.2 raised TypeError the first time an update
+# touched a column it reads. Nothing caught it because CI resolved 6.0 for
+# Python 3.12+ and only the 3.11 job saw 5.2.
+dependencies = ["django>=6.0", "jinja2>=3.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/isik-kaplan/django-overlay"

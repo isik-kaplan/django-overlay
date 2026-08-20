@@ -36,6 +36,14 @@ class Person(OverlayModel):
 Person.objects.create(first_name="Jane")  # goes straight into the writable table
 ```
 
+## Requirements
+
+Python 3.12+, Django 6.0+, PostgreSQL. The Postgres requirement is not a
+preference — the whole design is a view with `INSTEAD OF` triggers over a
+`UNION ALL`, and there is no SQLite fallback. The Django floor is equally
+hard: the package overrides private `QuerySet` internals whose signatures
+changed in 6.0.
+
 See [docs/reference/COMPATIBILITY.md](docs/reference/COMPATIBILITY.md) for measured
 tables of exactly where this matches a plain Django model and where it doesn't,
 and [docs/INDEX.md](docs/INDEX.md) for everything else — usage, how it
