@@ -1,5 +1,21 @@
 CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
 BEGIN
+{%- if not overridable and source %}
+  -- The view drops (or narrows) its anti-join for a non-overridable model, so
+  -- nothing downstream is left to notice a base row that collides with a
+  -- source id -- it would simply appear in both branches and be returned
+  -- twice. A generated pk can't collide (the sequence is positive and source
+  -- ids are negated; a fresh uuid won't match), so this only costs a lookup
+  -- when the caller supplied the pk themselves.
+  IF NEW.{{ pk_column | qi }} IS NOT NULL AND EXISTS (
+    SELECT 1 FROM {{ source.schema | qi }}.{{ source.table | qi }}
+    WHERE {{ source.id_column | qi }} = {{ "-" if source.negate }}NEW.{{ pk_column | qi }}
+  ) THEN
+    RAISE EXCEPTION 'overlay: {{ view_name }} is declared overridable = False, so a row cannot be inserted with the id of an existing source row'
+      USING ERRCODE = '0A000',
+            HINT = 'Let the id default instead of setting it, or drop overridable = False from the model''s OverlayMeta.';
+  END IF;
+{%- endif %}
   NEW.{{ pk_column | qi }} := COALESCE(NEW.{{ pk_column | qi }}, {{ pk_default_expr }});
   INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
     {%- for c in columns -%}{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, _overlay_deleted{% endif %}

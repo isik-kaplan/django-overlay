@@ -1,0 +1,20 @@
+-- Drop a trigger without knowing which table it is on. The delete-side
+-- integrity trigger lives on the *target's* base table, and by the time a
+-- RemoveField is replayed the field that named that target is gone, so the
+-- table can only be recovered from the catalog.
+DO $$
+DECLARE target regclass;
+BEGIN
+  SELECT tg.tgrelid INTO target
+  FROM pg_trigger tg
+  JOIN pg_class c ON c.oid = tg.tgrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE tg.tgname = {{ trigger_name | sql_literal }}
+    AND n.nspname = {{ tenant_schema | sql_literal }}
+    AND NOT tg.tgisinternal
+  LIMIT 1;
+  IF target IS NOT NULL THEN
+    -- %%I/%%s doubled so psycopg doesn't treat them as bind placeholders.
+    EXECUTE format('DROP TRIGGER %%I ON %%s', {{ trigger_name | sql_literal }}, target);
+  END IF;
+END $$;

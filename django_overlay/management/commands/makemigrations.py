@@ -52,6 +52,38 @@ def _overlay_foreign_key_fields(app_label):
     return fields
 
 
+def _fk_fields_targeting(app_label, base_model_name):
+    """[(model_name, field_name), ...] in this app whose OverlayForeignKey
+    points at the overlay model whose base model is `base_model_name`.
+
+    Both FK triggers encode whether the *target* soft-deletes — the insert side
+    to stop a tombstoned row being a valid target, the delete side to know a
+    soft delete removes a row from the view. Turning soft_delete on or off adds
+    or drops `_overlay_deleted`, so every trigger pointing at that model has to
+    be rebuilt or it keeps enforcing the old shape."""
+    app_config = django_apps.get_app_config(app_label)
+    targets = {
+        model._view_model
+        for model in app_config.get_models()
+        if isinstance(model, OverlayModelBase) and hasattr(model, "_view_model")
+        if model._meta.model_name == base_model_name.lower()
+    }
+    if not targets:
+        return []
+    referencing = []
+    for model in app_config.get_models(include_auto_created=True):
+        # Skip the view half of an overlay model: it carries a copy of every
+        # field, but the trigger belongs to the base table and that is the
+        # model name AddOverlayConstraint resolves against.
+        if getattr(model, "_is_overlay_view_model", False):
+            continue
+        for field in model._meta.get_fields():
+            if isinstance(field, OverlayForeignKey) and getattr(field, "concrete", False):
+                if field.remote_field.model in targets:
+                    referencing.append((model._meta.model_name, field.name))
+    return referencing
+
+
 def _new_overlay_unique_constraints(op):
     """[(model_name, constraint), ...] for OverlayUniqueConstraints this
     operation introduces — from a brand-new model's `options["constraints"]`
@@ -63,16 +95,21 @@ def _new_overlay_unique_constraints(op):
     return []
 
 
-def _insert_view_drops_before_deletes(app_label, operations):
-    """A DeleteModel drops the model's table, but its view (if any) depends
-    on it — Postgres refuses to DROP TABLE while a dependent view exists.
-    Insert a DropOverlayView immediately before every DeleteModel,
-    unconditionally, same reasoning as RemoveField/RemoveConstraint below:
-    DROP VIEW IF EXISTS makes it safe even for a plain model with no view."""
+def _insert_view_drops_before_destructive_ops(app_label, operations):
+    """Postgres refuses to drop a table or a column while a view depends on it,
+    and an overlay model's view selects every column of its base table. So both
+    `DeleteModel` and `RemoveField` need the view out of the way first; the
+    `SyncOverlayView` appended by extra_ops_for_migration puts it back,
+    rebuilt for the new shape.
+
+    Emitted unconditionally, same reasoning as RemoveField/RemoveConstraint
+    below: `DROP VIEW IF EXISTS` is a no-op for a plain model with no view."""
     new_operations = []
     for op in operations:
         if isinstance(op, migrations.DeleteModel):
             new_operations.append(DropOverlayView(app_label, op.name))
+        elif isinstance(op, migrations.RemoveField):
+            new_operations.append(DropOverlayView(app_label, op.model_name))
         new_operations.append(op)
     return new_operations
 
@@ -100,6 +137,17 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
 
         if isinstance(op, migrations.RemoveField):
             extra_ops.append(RemoveOverlayConstraint(app_label, op.model_name, op.name))
+
+        if isinstance(op, (migrations.AddField, migrations.RemoveField)) and op.name == "_overlay_deleted":
+            # soft_delete just changed on this model; rebuild the FK triggers
+            # of everything pointing at it. Only reaches this app — a reference
+            # from another app needs a migration there, which Django would
+            # generate anyway for its own state.
+            for model_name, field_name in _fk_fields_targeting(app_label, op.model_name):
+                key = (model_name, field_name)
+                if key not in added_constraints:
+                    added_constraints.add(key)
+                    extra_ops.append(AddOverlayConstraint(app_label, model_name, field_name))
 
         if isinstance(op, migrations.RemoveConstraint):
             view_name = base_to_view.get(op.model_name.lower())
@@ -149,7 +197,7 @@ class Command(BaseCommand):
             base_to_view = _overlay_base_to_view(app_label)
             fk_fields = _overlay_foreign_key_fields(app_label)
             for migration in app_migrations:
-                migration.operations = _insert_view_drops_before_deletes(app_label, migration.operations)
+                migration.operations = _insert_view_drops_before_destructive_ops(app_label, migration.operations)
                 migration.operations.extend(
                     extra_ops_for_migration(app_label, migration.operations, base_to_view, fk_fields)
                 )

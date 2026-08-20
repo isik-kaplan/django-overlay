@@ -1,19 +1,34 @@
 name: Tests
 
+# Tests run on everything: every pull request whatever it targets, and every
+# push to master. The `pull_request` trigger is deliberately unfiltered rather
+# than paired with a `push` trigger on all branches — a branch that is pushed
+# and then opened as a PR would otherwise run the whole matrix twice.
 on:
   push:
     branches:
       - master
   pull_request:
-    branches:
-      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # Everything here is cheap enough to run for anybody. The two expensive
+  # policies — mutation testing and the scale 0.3 benchmark — live in their own
+  # workflows, each with its own maintainer gate and its own concurrency rules,
+  # because a four-hour job and a five-minute matrix want opposite answers to
+  # "should a new push cancel this?".
   test:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13', '3.14']
+        # 3.11 is gone with the Django 6.0 floor — 6.0 requires 3.12, so a
+        # 3.11 job could only ever resolve a Django this package does not work
+        # against. See requires-python in pyproject.toml.
+        python-version: ['3.12', '3.13', '3.14']
         os-version: [ubuntu-22.04]
 
     runs-on: ${{ matrix.os-version }}
@@ -27,7 +42,10 @@ jobs:
           POSTGRES_DB: django_overlay_test
         ports:
           - 5432:5432
+        # 64MB of /dev/shm is not enough for Postgres parallel workers --
+        # see the note in benchmarks.yml.
         options: >-
+          --shm-size=1g
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
@@ -62,3 +80,28 @@ jobs:
           DJANGO_SETTINGS_MODULE: tests.django_tenants_settings
         run: |
           uv run pytest tests/test_tenants -o addopts="" --create-db
+
+      # Probes are named probe_*.py, so pytest's default python_files pattern
+      # never collects them in the run above. That is deliberate -- they are
+      # reports, and a couple are slow or measure timings -- but it also meant
+      # nothing ran them, and two of them rotted unnoticed against changes to
+      # the code they measure. Named explicitly here so they at least have to
+      # execute; the ones that can pin an expected outcome now assert it.
+      - name: Run probes
+        run: |
+          uv run pytest \
+            tests/probe_orm_conformance.py \
+            tests/probe_soft_delete_compat.py \
+            tests/probe_constraint_kinds.py \
+            tests/probe_declaration_shapes.py \
+            tests/probe_unique_after_soft_delete.py \
+            tests/probe_f_routes.py \
+            tests/probe_write_cost.py \
+            -o addopts="" -q -s
+
+      # Separate because it races threads against a lossy path on purpose --
+      # its numbers are statistical, so it reports rather than gates.
+      - name: Run the lost-update measurement (report only)
+        continue-on-error: true
+        run: |
+          uv run pytest tests/probe_lost_updates.py -o addopts="" -q -s
