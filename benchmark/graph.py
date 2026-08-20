@@ -15,62 +15,121 @@ question is what happens where they meet.
 Every comparison is against a plain, non-overlay table built from the view
 itself, carrying the same indexes -- so the ratio column is like-for-like.
 
-    OVERLAY_BENCH_SCALE=0.3 POSTGRES_USER=postgres uv run pytest \\
-        tests/probe_bench_graph.py -s -q -o addopts="" --no-cov
+This module is the single source of truth for benchmark data. Both the CLI
+(`django-overlay benchmark`) and the exploratory probes under `tests/` build
+their graph from here, so the two cannot drift apart and report numbers about
+different tables.
 
-    OVERLAY_BENCH_SCALE=0.05 ...      # quick iteration
-    OVERLAY_BENCH_SHARE=0.1 ...       # base holds 10% of the view instead of 40%
+The Django models themselves stay in `tests/testapp/models.py`, where the
+permanent test suite already depends on them. Nothing here defines a model;
+this is the loader and the table map.
 """
 
 import os
 import time
 from contextlib import contextmanager
 
-import pytest
 from django.db import OperationalError, connection
 
-from tests.probe_uuid7_scale import u
 
-
-pytestmark = pytest.mark.django_db(transaction=True)
-
+# Defaults, overridable by environment for the probes and by configure() for
+# the CLI. Read at import time so a probe that never calls configure() behaves
+# exactly as it did before this module moved out of tests/.
 SCALE = float(os.environ.get("OVERLAY_BENCH_SCALE", 0.3))
 SHARE = float(os.environ.get("OVERLAY_BENCH_SHARE", 0.4))
 TIMEOUT_MS = int(os.environ.get("OVERLAY_BENCH_TIMEOUT_MS", 30_000))
+
+# Organic rows live in a disjoint id space so they can never collide with a
+# source row. Under NEGATIVE_ID the sign does that job; here it is an offset.
+ORGANIC_OFFSET = 100_000_000
+
+# A deterministic uuid per series index, monotonic in g so it mimics uuid7's
+# time ordering rather than uuid4's scatter -- index locality is part of what
+# is being measured. 12 hex of counter + 1 version nibble + 3 + 1 variant + 15.
+UUID_EXPR = (
+    "(lpad(to_hex({g}), 12, '0') || '7' || substr(md5({g}::text), 1, 3)"
+    " || '8' || substr(md5({g}::text || 'x'), 1, 15))::uuid"
+)
+
+
+def u(g) -> str:
+    return UUID_EXPR.format(g=g)
 
 
 def scaled(n):
     return max(2, int(n * SCALE))
 
 
-PERSON_VIEW = scaled(1_000_000)
-ADDRESS_VIEW = scaled(800_000)
-PHONE_VIEW = scaled(700_000)
-EMAIL_VIEW = scaled(600_000)
-PA_VIEW = scaled(1_500_000)
-PP_VIEW = scaled(1_200_000)
-PE_VIEW = scaled(1_000_000)
+# Row counts, recomputed by configure(). Module-level rather than passed around
+# because the probes read them directly and predate the CLI.
+PERSON_VIEW = ADDRESS_VIEW = PHONE_VIEW = EMAIL_VIEW = 0
+PA_VIEW = PP_VIEW = PE_VIEW = PL_ROWS = 0
+
 # The tenant-only entity. Not scaled: a tenant has tens to low hundreds of
 # labels however many people it holds, and holding it fixed keeps each label's
 # selectivity comparable as SCALE moves.
 LABEL_COUNT = 200
-# Three labels per person rather than one. At one, almost nobody carries two
-# labels and every "has label A and label B" case measures an empty result --
-# which times how fast Postgres finds nothing, not how fast it intersects.
-PL_ROWS = scaled(3_000_000)
 
-ORGANIC_OFFSET = 100_000_000
+
+def _recompute():
+    """Refresh every derived row count from the current SCALE.
+
+    The counts are module-level because the probes read them directly and
+    predate the CLI; configure() reruns this so a --scale flag reaches them.
+    """
+    global PERSON_VIEW, ADDRESS_VIEW, PHONE_VIEW, EMAIL_VIEW
+    global PA_VIEW, PP_VIEW, PE_VIEW, PL_ROWS
+    PERSON_VIEW = scaled(1_000_000)
+    ADDRESS_VIEW = scaled(800_000)
+    PHONE_VIEW = scaled(700_000)
+    EMAIL_VIEW = scaled(600_000)
+    PA_VIEW = scaled(1_500_000)
+    PP_VIEW = scaled(1_200_000)
+    PE_VIEW = scaled(1_000_000)
+    # Three labels per person rather than one. At one, almost nobody carries
+    # two labels and every "has label A and label B" case measures an empty
+    # result -- which times how fast Postgres finds nothing, not how fast it
+    # intersects.
+    PL_ROWS = scaled(3_000_000)
+    for name, size in (
+        ("person", PERSON_VIEW), ("address", ADDRESS_VIEW),
+        ("phone", PHONE_VIEW), ("email", EMAIL_VIEW),
+    ):
+        base, source, _ = ENTITIES[name]
+        ENTITIES[name] = (base, source, size)
+    for name, size in (
+        ("person_address", PA_VIEW), ("person_phone", PP_VIEW), ("person_email", PE_VIEW),
+    ):
+        base, source, _ = LINKS[name]
+        LINKS[name] = (base, source, size)
+
+
+def configure(scale=None, share=None, timeout_ms=None):
+    """Point the loader at a different scale before calling load().
+
+    The CLI calls this from its --scale flag; the probes let the environment
+    defaults stand.
+    """
+    global SCALE, SHARE, TIMEOUT_MS
+    if scale is not None:
+        SCALE = float(scale)
+    if share is not None:
+        SHARE = float(share)
+    if timeout_ms is not None:
+        TIMEOUT_MS = int(timeout_ms)
+    _recompute()
+
 
 ENTITIES = {
-    "person": ("bench_person", "testapp_shared_benchpersonsource", PERSON_VIEW),
-    "address": ("bench_address", "testapp_shared_benchaddresssource", ADDRESS_VIEW),
-    "phone": ("bench_phone", "testapp_shared_benchphonesource", PHONE_VIEW),
-    "email": ("bench_email", "testapp_shared_benchemailsource", EMAIL_VIEW),
+    "person": ("bench_person", "testapp_shared_benchpersonsource", 0),
+    "address": ("bench_address", "testapp_shared_benchaddresssource", 0),
+    "phone": ("bench_phone", "testapp_shared_benchphonesource", 0),
+    "email": ("bench_email", "testapp_shared_benchemailsource", 0),
 }
 LINKS = {
-    "person_address": ("bench_person_address", "testapp_shared_benchpersonaddresssource", PA_VIEW),
-    "person_phone": ("bench_person_phone", "testapp_shared_benchpersonphonesource", PP_VIEW),
-    "person_email": ("bench_person_email", "testapp_shared_benchpersonemailsource", PE_VIEW),
+    "person_address": ("bench_person_address", "testapp_shared_benchpersonaddresssource", 0),
+    "person_phone": ("bench_person_phone", "testapp_shared_benchpersonphonesource", 0),
+    "person_email": ("bench_person_email", "testapp_shared_benchpersonemailsource", 0),
 }
 
 PLAIN = {name: f"plain_{name}" for name in list(ENTITIES) + list(LINKS)}
@@ -93,6 +152,8 @@ PLAIN_COLUMNS = {
     "person_phone": ("id", "person_id", "phone_id", "role"),
     "person_email": ("id", "person_id", "email_id", "role"),
 }
+
+_recompute()
 
 
 def split(view_rows, overridable):
@@ -118,6 +179,65 @@ CACHE_VERSION = 3
 def sql(statement, *params):
     with connection.cursor() as cursor:
         cursor.execute(statement, params or None)
+
+
+def rows(statement):
+    with connection.cursor() as cursor:
+        cursor.execute(statement)
+        return cursor.fetchall()
+
+
+def scalar(statement):
+    return rows(statement)[0][0]
+
+
+def plan(statement):
+    return [row[0] for row in rows("EXPLAIN (ANALYZE, BUFFERS) " + statement)]
+
+
+def best_of(statement, rounds=3, give_up_after_ms=3000):
+    """(milliseconds, timed_out) for a raw SQL statement.
+
+    The ORM-level equivalent lives in harness.py and behaves differently -- it
+    discards a warm-up round first. This one is for the raw-SQL probes, which
+    compare statements against each other rather than a feature against itself.
+
+    The session's own timeout is put back afterwards rather than cleared. An
+    earlier version reset it to 0, which meant that in a full CLI run every
+    suite after `shapes` executed with no statement timeout at all -- caught
+    when a query in the staged suite ran for three minutes against a ten-second
+    cap. Whatever the caller had configured is none of this function's business.
+    """
+    previous = rows("SHOW statement_timeout")[0][0]
+    best = None
+    try:
+        for _ in range(rounds):
+            sql(f"SET statement_timeout = {TIMEOUT_MS}")
+            started = time.perf_counter()
+            try:
+                rows(statement)
+            except OperationalError:
+                return float(TIMEOUT_MS), True
+            elapsed = (time.perf_counter() - started) * 1000
+            best = elapsed if best is None else min(best, elapsed)
+            if best > give_up_after_ms:
+                break
+    finally:
+        sql(f"SET statement_timeout = '{previous}'")
+    return best, False
+
+
+def shape_of(lines):
+    joined = "\n".join(lines)
+    if "Merge Append" in joined and "Sort Method" not in joined:
+        return "MergeAppend"
+    if "Nested Loop" in joined and "Materialize" in joined:
+        return "NestLoop+Mat"
+    if "Sort Method" in joined:
+        return "sort"
+    if "Merge Append" in joined:
+        return "MergeAppend+sort"
+    return "append"
 
 
 @contextmanager
@@ -161,6 +281,19 @@ def _cache_is_current() -> bool:
     return bool(match)
 
 
+def cache_is_warm() -> bool:
+    """Whether load() will restore rather than build.
+
+    The CLI asks before it runs anything, because a cold build at scale 1.0 is
+    the single largest term in the runtime estimate and the difference between
+    a two-minute run and a twenty-minute one.
+    """
+    try:
+        return _cache_is_current()
+    except Exception:  # noqa: BLE001 - no database yet is simply "not warm"
+        return False
+
+
 def _all_tables():
     return (
         [base for base, _, _ in list(ENTITIES.values()) + list(LINKS.values())]
@@ -175,7 +308,10 @@ def _fill_cache():
 
     `django_db(transaction=True)` flushes on teardown, and the flush only
     targets tables in the app registry -- so a separate schema survives
-    between runs, which `--reuse-db` then makes worth having."""
+    between runs, which `--reuse-db` then makes worth having. Under the CLI the
+    database is not a pytest test database at all and nothing flushes it, but
+    the cache still earns its keep: it survives `--rebuild` of the schema and
+    makes a scale switch reversible without paying the build twice."""
     sql(f"DROP SCHEMA IF EXISTS {CACHE_SCHEMA} CASCADE")
     sql(f"CREATE SCHEMA {CACHE_SCHEMA}")
     for table in _all_tables():
@@ -203,66 +339,31 @@ def _restore_from_cache() -> bool:
     return True
 
 
-def rows(statement):
-    with connection.cursor() as cursor:
-        cursor.execute(statement)
-        return cursor.fetchall()
-
-
-def scalar(statement):
-    return rows(statement)[0][0]
-
-
-def plan(statement):
-    return [row[0] for row in rows("EXPLAIN (ANALYZE, BUFFERS) " + statement)]
-
-
-def best_of(statement, rounds=3, give_up_after_ms=3000):
-    """(milliseconds, timed_out)."""
-    best = None
-    for _ in range(rounds):
-        sql(f"SET statement_timeout = {TIMEOUT_MS}")
-        started = time.perf_counter()
-        try:
-            rows(statement)
-        except OperationalError:
-            sql("SET statement_timeout = 0")
-            return float(TIMEOUT_MS), True
-        elapsed = (time.perf_counter() - started) * 1000
-        best = elapsed if best is None else min(best, elapsed)
-        if best > give_up_after_ms:
-            break
-    sql("SET statement_timeout = 0")
-    return best, False
-
-
-def shape_of(lines):
-    joined = "\n".join(lines)
-    if "Merge Append" in joined and "Sort Method" not in joined:
-        return "MergeAppend"
-    if "Nested Loop" in joined and "Materialize" in joined:
-        return "NestLoop+Mat"
-    if "Sort Method" in joined:
-        return "sort"
-    if "Merge Append" in joined:
-        return "MergeAppend+sort"
-    return "append"
-
-
 # --------------------------------------------------------------------- load
 
 
-def load():
+def load(rebuild=False, progress=None):
     """Build the graph, or restore it from the cache schema if one matches.
 
-    Set OVERLAY_BENCH_REBUILD=1 to force a rebuild. Combine with pytest-django's
-    --reuse-db to make the cache worth having across processes:
+    Returns (seconds, built) -- `built` is True when the graph was generated
+    from scratch and False when it came from the cache. The caller uses that to
+    calibrate its runtime estimates against the machine it is actually on.
+
+    Set OVERLAY_BENCH_REBUILD=1, or pass rebuild=True, to force a rebuild.
+    Combine with pytest-django's --reuse-db to make the cache worth having
+    across processes:
 
         OVERLAY_BENCH_SCALE=0.3 POSTGRES_USER=postgres uv run pytest \\
             --reuse-db tests/probe_orm_benchmark.py -s -q -o addopts="" --no-cov
     """
-    if os.environ.get("OVERLAY_BENCH_REBUILD") != "1" and _restore_from_cache():
-        return
+    say = progress or (lambda message: None)
+    started = time.perf_counter()
+
+    if not rebuild and os.environ.get("OVERLAY_BENCH_REBUILD") != "1":
+        if _restore_from_cache():
+            return time.perf_counter() - started, False
+
+    say(f"building the graph at scale {SCALE} ({PERSON_VIEW:,} people) -- this is the slow part")
 
     tables = [base for base, _, _ in list(ENTITIES.values()) + list(LINKS.values())]
     sources = [source for _, source, _ in list(ENTITIES.values()) + list(LINKS.values())]
@@ -279,6 +380,7 @@ def load():
     email_source, email_override, email_organic = split(EMAIL_VIEW, True)
 
     # ------------------------------------------------------------- entities
+    say("  entities")
     person_columns = "first_name, last_name, city, postcode, status, score, born_on, notes"
     person_values = (
         "'first' || g, 'last' || (g %% 5000), 'city' || (g %% 1000), 'pc' || (g %% 9999), "
@@ -353,6 +455,8 @@ def load():
     # ---------------------------------------------------------------- links
     # Half the links point at a vendor-backed row and half at an organic one,
     # so every traversal has to cross both branches of the target view.
+    say("  link tables")
+
     def reference(source_count, organic_count):
         return (
             f"CASE WHEN g %% 2 = 0 THEN {u(f'(1 + g %% {source_count})')} "
@@ -395,6 +499,7 @@ def load():
     # Both link tables are filled from the same expression, so the overlay and
     # plain sides of the comparison describe the same graph over the same
     # people.
+    say("  labels")
     sql(
         "INSERT INTO bench_label (id, name, kind) "
         "SELECT g, 'label' || g, (ARRAY['volunteer','donor','lapsed','vip'])[1 + g %% 4] "
@@ -424,6 +529,7 @@ def load():
     #
     # Indexes off for the insert: these tables carry six each, and maintaining
     # them per row is what took the load from 25s to 120s.
+    say("  plain mirrors")
     with indexes_dropped(list(PLAIN.values())):
         for name, columns in PLAIN_COLUMNS.items():
             base = (ENTITIES | LINKS)[name][0]
@@ -440,218 +546,9 @@ def load():
             "SELECT id, person_id, label_id FROM bench_person_label"
         )
 
+    say("  analyze")
     for table in tables + sources + list(PLAIN.values()) + list(TENANT_ONLY):
         sql(f"ANALYZE {table}")
 
     _fill_cache()
-
-
-# ------------------------------------------------------------------ shapes
-
-
-def report(label, view_sql, plain_sql, notes=""):
-    view_ms, view_timeout = best_of(view_sql)
-    plain_ms, _ = best_of(plain_sql)
-    shape = shape_of(plan(view_sql)) if not view_timeout else "TIMEOUT"
-    ratio = view_ms / plain_ms if plain_ms else float("nan")
-    marker = ">" if view_timeout else " "
-    print(f"  {label:<44} {marker}{view_ms:>9.1f}ms {plain_ms:>10.1f}ms  x{ratio:>9.2f}  "
-          f"{shape:>15}  {notes}")
-    return ratio
-
-
-def test_bench_graph():
-    started = time.perf_counter()
-    load()
-    print(f"\n\nloaded in {time.perf_counter() - started:.0f}s   "
-          f"(scale {SCALE}, base share {SHARE})")
-
-    print("\n  " + "-" * 96)
-    print(f"  {'relation':<26} {'view':>12} {'base':>12} {'source':>12}   shape")
-    print("  " + "-" * 96)
-    for name, (base, source, _) in (ENTITIES | LINKS).items():
-        kind = "full anti-join + qual" if name in ENTITIES else "bare UNION ALL"
-        print(f"  {name:<26} {scalar(f'SELECT count(*) FROM {base}_view'):>12,} "
-              f"{scalar(f'SELECT count(*) FROM {base}'):>12,} "
-              f"{scalar(f'SELECT count(*) FROM {source}'):>12,}   {kind}")
-
-    header = (f"  {'query':<44} {'overlay':>11} {'plain':>11}  {'ratio':>10}  {'plan':>15}")
-
-    print("\n" + "=" * 108)
-    print("A. ENTITY SHAPE (overridable + soft_delete) -- the expensive half")
-    print("=" * 108)
-    print(header)
-    print("  " + "-" * 104)
-    report("point lookup by pk",
-           "SELECT * FROM bench_person_view WHERE id = "
-           "(SELECT id FROM bench_person_view LIMIT 1)",
-           f"SELECT * FROM {PLAIN['person']} WHERE id = "
-           f"(SELECT id FROM {PLAIN['person']} LIMIT 1)")
-    report("equality on indexed column (city)",
-           "SELECT * FROM bench_person_view WHERE city = 'city42'",
-           f"SELECT * FROM {PLAIN['person']} WHERE city = 'city42'")
-    report("equality on UNindexed column (born_on)",
-           "SELECT * FROM bench_person_view WHERE born_on = DATE '1970-01-01'",
-           f"SELECT * FROM {PLAIN['person']} WHERE born_on = DATE '1970-01-01'")
-    report("scoped + ordered (city, score DESC)",
-           "SELECT * FROM bench_person_view WHERE city = 'city42' ORDER BY score DESC LIMIT 20",
-           f"SELECT * FROM {PLAIN['person']} WHERE city = 'city42' ORDER BY score DESC LIMIT 20")
-    report("UNSCOPED ordered page",
-           "SELECT * FROM bench_person_view ORDER BY score DESC LIMIT 20",
-           f"SELECT * FROM {PLAIN['person']} ORDER BY score DESC LIMIT 20")
-    report("UNSCOPED ordered, deep offset",
-           "SELECT * FROM bench_person_view ORDER BY score DESC LIMIT 20 OFFSET 100000",
-           f"SELECT * FROM {PLAIN['person']} ORDER BY score DESC LIMIT 20 OFFSET 100000")
-    report("count(*)",
-           "SELECT count(*) FROM bench_person_view",
-           f"SELECT count(*) FROM {PLAIN['person']}")
-
-    print("\n" + "=" * 108)
-    print("B. LINK SHAPE (overridable=False, soft_delete=False) -- the cheap half")
-    print("=" * 108)
-    print(header)
-    print("  " + "-" * 104)
-    report("person_id lookup",
-           "SELECT * FROM bench_person_address_view WHERE person_id = "
-           "(SELECT id FROM bench_person_view LIMIT 1)",
-           f"SELECT * FROM {PLAIN['person_address']} WHERE person_id = "
-           f"(SELECT id FROM {PLAIN['person']} LIMIT 1)")
-    report("UNSCOPED ordered page",
-           "SELECT * FROM bench_person_address_view ORDER BY person_id LIMIT 20",
-           f"SELECT * FROM {PLAIN['person_address']} ORDER BY person_id LIMIT 20")
-    report("UNSCOPED ordered, deep offset",
-           "SELECT * FROM bench_person_address_view ORDER BY person_id LIMIT 20 OFFSET 100000",
-           f"SELECT * FROM {PLAIN['person_address']} ORDER BY person_id LIMIT 20 OFFSET 100000")
-    report("count(*)",
-           "SELECT count(*) FROM bench_person_address_view",
-           f"SELECT count(*) FROM {PLAIN['person_address']}")
-
-    print("\n" + "=" * 108)
-    print("C. WHERE THE TWO MEET -- joins across the shape boundary")
-    print("=" * 108)
-    print(header)
-    print("  " + "-" * 104)
-    one_person = "(SELECT id FROM bench_person_view LIMIT 1)"
-    one_plain = f"(SELECT id FROM {PLAIN['person']} LIMIT 1)"
-    report("detail: one person -> addresses",
-           "SELECT a.* FROM bench_address_view a "
-           "JOIN bench_person_address_view l ON l.address_id = a.id "
-           f"WHERE l.person_id = {one_person}",
-           f"SELECT a.* FROM {PLAIN['address']} a "
-           f"JOIN {PLAIN['person_address']} l ON l.address_id = a.id "
-           f"WHERE l.person_id = {one_plain}")
-    report("detail: one person -> all three relations",
-           "SELECT a.id, p.id, e.id FROM bench_person_view person "
-           "LEFT JOIN bench_person_address_view la ON la.person_id = person.id "
-           "LEFT JOIN bench_address_view a ON a.id = la.address_id "
-           "LEFT JOIN bench_person_phone_view lp ON lp.person_id = person.id "
-           "LEFT JOIN bench_phone_view p ON p.id = lp.phone_id "
-           "LEFT JOIN bench_person_email_view le ON le.person_id = person.id "
-           "LEFT JOIN bench_email_view e ON e.id = le.email_id "
-           f"WHERE person.id = {one_person}",
-           f"SELECT a.id, p.id, e.id FROM {PLAIN['person']} person "
-           f"LEFT JOIN {PLAIN['person_address']} la ON la.person_id = person.id "
-           f"LEFT JOIN {PLAIN['address']} a ON a.id = la.address_id "
-           f"LEFT JOIN {PLAIN['person_phone']} lp ON lp.person_id = person.id "
-           f"LEFT JOIN {PLAIN['phone']} p ON p.id = lp.phone_id "
-           f"LEFT JOIN {PLAIN['person_email']} le ON le.person_id = person.id "
-           f"LEFT JOIN {PLAIN['email']} e ON e.id = le.email_id "
-           f"WHERE person.id = {one_plain}")
-    report("reverse: people at addresses in a city",
-           "SELECT DISTINCT person.id FROM bench_person_view person "
-           "JOIN bench_person_address_view l ON l.person_id = person.id "
-           "JOIN bench_address_view a ON a.id = l.address_id "
-           "WHERE a.city = 'city42' LIMIT 50",
-           f"SELECT DISTINCT person.id FROM {PLAIN['person']} person "
-           f"JOIN {PLAIN['person_address']} l ON l.person_id = person.id "
-           f"JOIN {PLAIN['address']} a ON a.id = l.address_id "
-           f"WHERE a.city = 'city42' LIMIT 50")
-    report("reverse, rewritten as = ANY (ARRAY ...)",
-           "SELECT person.id FROM bench_person_view person WHERE person.id = ANY (ARRAY("
-           "SELECT l.person_id FROM bench_person_address_view l WHERE l.address_id = ANY (ARRAY("
-           "SELECT a.id FROM bench_address_view a WHERE a.city = 'city42')))) LIMIT 50",
-           f"SELECT person.id FROM {PLAIN['person']} person WHERE person.id = ANY (ARRAY("
-           f"SELECT l.person_id FROM {PLAIN['person_address']} l WHERE l.address_id = ANY (ARRAY("
-           f"SELECT a.id FROM {PLAIN['address']} a WHERE a.city = 'city42')))) LIMIT 50")
-    report("reverse: people with a phone number",
-           "SELECT person.id FROM bench_person_view person "
-           "JOIN bench_person_phone_view l ON l.person_id = person.id "
-           "JOIN bench_phone_view p ON p.id = l.phone_id "
-           "WHERE p.number = '+447000000042' LIMIT 50",
-           f"SELECT person.id FROM {PLAIN['person']} person "
-           f"JOIN {PLAIN['person_phone']} l ON l.person_id = person.id "
-           f"JOIN {PLAIN['phone']} p ON p.id = l.phone_id "
-           f"WHERE p.number = '+447000000042' LIMIT 50")
-    report("list page: 20 people + their address count",
-           "SELECT person.id, count(l.id) FROM bench_person_view person "
-           "LEFT JOIN bench_person_address_view l ON l.person_id = person.id "
-           "WHERE person.city = 'city42' GROUP BY person.id ORDER BY person.id LIMIT 20",
-           f"SELECT person.id, count(l.id) FROM {PLAIN['person']} person "
-           f"LEFT JOIN {PLAIN['person_address']} l ON l.person_id = person.id "
-           f"WHERE person.city = 'city42' GROUP BY person.id ORDER BY person.id LIMIT 20")
-
-    print("\n" + "=" * 108)
-    print("D. THE DETAIL PAGE, THREE WAYS -- can the 100x be written away?")
-    print("=" * 108)
-    print("  `person.addresses.all()` is the single most common query this schema will")
-    print("  serve. OverlayQuery's rewrite covers forward FK traversals, not M2M ones,")
-    print("  so this is whatever the ORM emits.")
-    print(header)
-    print("  " + "-" * 104)
-    report("1. JOIN through the link view",
-           "SELECT a.* FROM bench_address_view a "
-           "JOIN bench_person_address_view l ON l.address_id = a.id "
-           f"WHERE l.person_id = {one_person}",
-           f"SELECT a.* FROM {PLAIN['address']} a "
-           f"JOIN {PLAIN['person_address']} l ON l.address_id = a.id "
-           f"WHERE l.person_id = {one_plain}")
-    report("2. = ANY (ARRAY (subquery))",
-           "SELECT a.* FROM bench_address_view a WHERE a.id = ANY (ARRAY("
-           "SELECT l.address_id FROM bench_person_address_view l "
-           f"WHERE l.person_id = {one_person}))",
-           f"SELECT a.* FROM {PLAIN['address']} a WHERE a.id = ANY (ARRAY("
-           f"SELECT l.address_id FROM {PLAIN['person_address']} l "
-           f"WHERE l.person_id = {one_plain}))")
-
-    # What prefetch_related actually does: fetch the link rows, then fetch the
-    # targets by a literal list of ids. No join, no correlated subquery.
-    link_ids = [
-        str(row[0]) for row in rows(
-            "SELECT address_id FROM bench_person_address_view "
-            f"WHERE person_id = {one_person}"
-        )
-    ] or ["00000000-0000-7000-8000-000000000000"]
-    literals = ", ".join(f"'{value}'::uuid" for value in link_ids)
-    report("3. two queries, literal id list (prefetch_related)",
-           f"SELECT * FROM bench_address_view WHERE id IN ({literals})",
-           f"SELECT * FROM {PLAIN['address']} WHERE id IN ({literals})",
-           notes=f"{len(link_ids)} ids")
-
-    print("\n  the worst cross-boundary case, rewritten:")
-    report("phone lookup, JOIN form",
-           "SELECT person.id FROM bench_person_view person "
-           "JOIN bench_person_phone_view l ON l.person_id = person.id "
-           "JOIN bench_phone_view p ON p.id = l.phone_id "
-           "WHERE p.number = '+447000000042' LIMIT 50",
-           f"SELECT person.id FROM {PLAIN['person']} person "
-           f"JOIN {PLAIN['person_phone']} l ON l.person_id = person.id "
-           f"JOIN {PLAIN['phone']} p ON p.id = l.phone_id "
-           f"WHERE p.number = '+447000000042' LIMIT 50")
-    report("phone lookup, = ANY (ARRAY ...)",
-           "SELECT person.id FROM bench_person_view person WHERE person.id = ANY (ARRAY("
-           "SELECT l.person_id FROM bench_person_phone_view l WHERE l.phone_id = ANY (ARRAY("
-           "SELECT p.id FROM bench_phone_view p WHERE p.number = '+447000000042')))) LIMIT 50",
-           f"SELECT person.id FROM {PLAIN['person']} person WHERE person.id = ANY (ARRAY("
-           f"SELECT l.person_id FROM {PLAIN['person_phone']} l WHERE l.phone_id = ANY (ARRAY("
-           f"SELECT p.id FROM {PLAIN['phone']} p WHERE p.number = '+447000000042')))) LIMIT 50")
-
-    print("\n" + "=" * 108)
-    print("full plan: reverse traversal, plain JOIN form")
-    print("=" * 108)
-    for line in plan(
-        "SELECT DISTINCT person.id FROM bench_person_view person "
-        "JOIN bench_person_address_view l ON l.person_id = person.id "
-        "JOIN bench_address_view a ON a.id = l.address_id "
-        "WHERE a.city = 'city42' LIMIT 50"
-    )[:22]:
-        print("   ", line[:150])
+    return time.perf_counter() - started, True

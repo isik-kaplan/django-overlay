@@ -37,7 +37,7 @@ import time
 import pytest
 from django.db import OperationalError, connection
 
-from tests.probe_bench_graph import load
+from benchmark.graph import load
 from tests.testapp.models import BenchPerson, PlainPerson
 
 

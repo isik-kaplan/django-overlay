@@ -5,16 +5,16 @@ or so bucket counts over person columns, and "how many distinct phones /
 emails / addresses does this list reach". No LIMIT, no ordering, hundreds of
 thousands of people in scope.
 
-This is a different shape from every other probe here. The rest measure point
+This is a different shape from every other suite here. The rest measure point
 lookups and ordered pages, where the overlay's cost is the planner
-mis-estimating a join under a collapsed tuple fraction (see
-probe_limit_trap). There is no LIMIT here to collapse it and no narrow filter
-to plan around: the query reads the whole scope and folds it. So the question
-is whether the overlay's per-row cost -- the UNION ALL and the anti-join above
-it -- is even visible once the work is dominated by aggregation.
+mis-estimating a join under a collapsed tuple fraction. There is no LIMIT here
+to collapse it and no narrow filter to plan around: the query reads the whole
+scope and folds it. So the question is whether the overlay's per-row cost --
+the UNION ALL and the anti-join above it -- is even visible once the work is
+dominated by aggregation.
 
 The normalisation matters more than the overlay does, and that is the point of
-measuring three ways of writing the same summary:
+measuring five ways of writing the same summary:
 
   A. one .aggregate() with everything in it.
      Each relation count adds a join, the joins multiply, and so every
@@ -26,41 +26,28 @@ measuring three ways of writing the same summary:
      relation count as its own query. Four statements, no distinct anywhere
      except the three relation counts, which genuinely need it.
 
-  C. B, but with the scope resolved once into an id set that the four
-     statements reuse, instead of each one re-running the scope filter. This
-     is the shape a "resolve the list, then summarise it" implementation has,
-     and the one that matters when the scope is itself join-heavy.
-
-    OVERLAY_BENCH_SCALE=0.3 POSTGRES_USER=postgres uv run pytest \\
-        --reuse-db tests/probe_aggregation.py -s -q -o addopts="" --no-cov
-
-    OVERLAY_BENCH_SCALE=1.0 ...       # 1,000,000 people, the real size
+  C-E. B, but with the scope resolved once into an id set the four statements
+     reuse, instead of each one re-running the scope filter. This is the shape
+     a "resolve the list, then summarise it" implementation has, and the one
+     that matters when the scope is itself join-heavy. The three differ in how
+     the subquery is attached.
 """
 
-import os
-import time
 from datetime import date
 
-import pytest
 from django.core.exceptions import FieldError
-from django.db import OperationalError, connection
 from django.db.models import Count, Q
 from django.db.models.constants import LOOKUP_SEP
 
-from tests.probe_bench_graph import load
-from tests.testapp.models import BenchPerson, PlainPerson
+from benchmark import harness
 
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
-# 30s rather than 60s: five shapes over four scopes on two models is a lot of
-# ceiling to pay for twice each, and nothing that needs more than 30s for one
-# summary panel is a candidate for anything.
-TIMEOUT_MS = int(os.environ.get("OVERLAY_AGG_TIMEOUT_MS", 30_000))
+NAME = "aggregation"
+TITLE = "A summary panel over a whole list, written five ways"
 
 # Scopes, smallest first. A saved search over a person column is the cheap
 # case; the last one is join-heavy, which is where resolving the scope once
-# (shape C) can pay for itself.
+# can pay for itself.
 SCOPES = (
     ("2.5% of people (25 cities)", {"city__in": [f"city{n}" for n in range(25)]}),
     ("50% of people (score < 500)", {"score__lt": 500}),
@@ -91,20 +78,7 @@ BUCKETS = {**SCORE_BUCKETS, **STATUS_BUCKETS, **DECADE_BUCKETS}
 # the only aggregates that genuinely need DISTINCT -- the join multiplies.
 RELATIONS = {"phone_count": "phones", "email_count": "emails", "address_count": "addresses"}
 
-
-def cap_the_session():
-    """Bound every statement, not just the measured ones.
-
-    An earlier probe capped only the queries inside its timer, and an
-    unmeasured sizing query ran away instead -- for over an hour, holding
-    ACCESS SHARE on the bench views so the next run's TRUNCATE queued behind
-    it forever. Killing pytest does not cancel a running backend. The
-    lock_timeout is the other half: a run that cannot get its locks should
-    fail in a second rather than wait.
-    """
-    with connection.cursor() as cursor:
-        cursor.execute(f"SET statement_timeout = {TIMEOUT_MS}")
-        cursor.execute("SET lock_timeout = 5000")
+COLUMNS = ("overlay", "plain", "ratio", "people", "notes")
 
 
 def buckets_for(distinct):
@@ -113,21 +87,13 @@ def buckets_for(distinct):
     `distinct` is not a style choice. With a relation join in the same query
     every person appears once per (address, phone, email) combination, so a
     plain Count over-counts by the multiplication factor. Shape A has to pay
-    for it; shapes B and C avoid the join instead, which is the cheaper way to
-    get the same number.
+    for it; the others avoid the join instead, which is the cheaper way to get
+    the same number.
     """
     aggregates = {"total": Count("id", distinct=distinct)}
     for name, condition in BUCKETS.items():
         aggregates[name] = Count("id", distinct=distinct, filter=condition)
     return aggregates
-
-
-def shape_a(model, scope):
-    """Everything in one .aggregate(): twenty aggregates over a multiplied join."""
-    return model.objects.filter(**scope).aggregate(
-        **buckets_for(distinct=True),
-        **{alias: Count(path, distinct=True) for alias, path in RELATIONS.items()},
-    )
 
 
 def scope_joins(scope):
@@ -139,6 +105,14 @@ def scope_joins(scope):
     here. A general implementation would have to walk `_meta`.
     """
     return any(LOOKUP_SEP in key for key in scope)
+
+
+def shape_a(model, scope):
+    """Everything in one .aggregate(): twenty aggregates over a multiplied join."""
+    return model.objects.filter(**scope).aggregate(
+        **buckets_for(distinct=True),
+        **{alias: Count(path, distinct=True) for alias, path in RELATIONS.items()},
+    )
 
 
 def shape_b(model, scope):
@@ -161,8 +135,8 @@ def shape_b(model, scope):
 
 
 def _resolved(model, scope, lookup, distinct):
-    """The four statements of shape B, scoped by a subquery instead of by repeating
-    the filter.
+    """The four statements of shape B, scoped by a subquery instead of by
+    repeating the filter.
 
     A subquery rather than a materialised list of ids: half a million keys
     round-tripped into Python and back out as query parameters is its own
@@ -175,8 +149,7 @@ def _resolved(model, scope, lookup, distinct):
                              here: OverlaySubqueryIn is registered on
                              OverlayForeignKey, and this is a primary key.
       "overlay_fenced_in" -- the same `= ANY (ARRAY(...))` rewrite the m2m fence
-                             uses, reachable only because OverlayFencedIn is
-                             registered on models.Field under a private name.
+                             uses, resolved by OverlayQuery.build_lookup().
 
     `distinct` is the other axis. Without it the subquery returns one row per
     joined combination, so a join-heavy scope hands the outer query several
@@ -214,103 +187,102 @@ def shape_e(model, scope):
     return _resolved(model, scope, lookup="overlay_fenced_in", distinct=True)
 
 
-SHAPES = (("A  one aggregate()", shape_a), ("B  split per relation", shape_b),
-          ("C  scope: pk__in", shape_c), ("D  scope: pk__in distinct", shape_d),
-          ("E  scope: fenced array", shape_e))
+SHAPES = (
+    ("A  one aggregate()", shape_a),
+    ("B  split per relation", shape_b),
+    ("C  scope: pk__in", shape_c),
+    ("D  scope: pk__in distinct", shape_d),
+    ("E  scope: fenced array", shape_e),
+)
 OVERLAY_ONLY = {"E  scope: fenced array"}
 
 
-def timed(build, rounds=2, ceiling=15_000):
-    """(best milliseconds, result). (timeout, None) if it is worse than the cap.
+def _which_form_compiles_to_an_array(models):
+    """Printed rather than assumed.
 
-    Two rounds rather than three: several of these read the whole table, so a
-    third round buys very little and costs a lot of wall clock.
+    `pk__in` reads like it should pick up DJANGO_OVERLAY_ARRAY_SUBQUERY_IN and
+    does not, because that lookup is registered on OverlayForeignKey and a
+    primary key is not one. The plain model is included to show that
+    `overlay_fenced_in` is unreachable there.
     """
-    best, result = None, None
-    for _ in range(rounds):
-        started = time.perf_counter()
-        try:
-            result = build()
-        except OperationalError:
-            return float(TIMEOUT_MS), None
-        elapsed = (time.perf_counter() - started) * 1000
-        best = elapsed if best is None else min(best, elapsed)
-        if best > ceiling:
-            break
-    return best, result
-
-
-def test_aggregation():
-    started = time.perf_counter()
-    load()
-    print(f"\n\nloaded in {time.perf_counter() - started:.0f}s")
-    cap_the_session()
-    print(f"  {BenchPerson.objects.count():,} people in the view")
-
-    # Which scoping form actually compiles to the array rewrite. Printed rather
-    # than assumed: `pk__in` reads like it should pick up
-    # DJANGO_OVERLAY_ARRAY_SUBQUERY_IN and does not, because that lookup is
-    # registered on OverlayForeignKey and a primary key is not one. The plain
-    # model is included to show that `overlay_fenced_in` is unreachable there --
-    # OverlayQuery.build_lookup() resolves it, and PlainPerson has no such query.
-    print("\n" + "=" * 104)
-    print("WHICH SCOPING FORM COMPILES TO `= ANY (ARRAY(...))`?")
-    print("=" * 104)
-    for model in (BenchPerson, PlainPerson):
+    section = harness.Section(
+        "Which scoping form compiles to `= ANY (ARRAY(...))`?", ("form", "compiles to"),
+    )
+    for model in models:
         for lookup in ("in", "overlay_fenced_in"):
             inner = model.objects.filter(city="city42").values("pk")
             try:
-                statement, _ = model.objects.filter(**{f"pk__{lookup}": inner}).query.sql_with_params()
+                statement, _ = model.objects.filter(
+                    **{f"pk__{lookup}": inner}
+                ).query.sql_with_params()
             except FieldError as error:
                 verdict = f"unreachable ({type(error).__name__})"
             else:
-                verdict = "ARRAY initplan" if "= ANY (ARRAY" in statement else "plain IN semi-join"
-            print(f"  {model.__name__:<14} pk__{lookup:<20} {verdict}")
+                verdict = ("ARRAY initplan" if "= ANY (ARRAY" in statement
+                           else "plain IN semi-join")
+            section.add(model.__name__, form=f"pk__{lookup}", **{"compiles to": verdict})
+    return section
+
+
+def run(ctx):
+    from tests.testapp.models import BenchPerson, PlainPerson
+
+    yield _which_form_compiles_to_an_array((BenchPerson, PlainPerson))
 
     for scope_label, scope in SCOPES:
-        print("\n" + "=" * 104)
-        print(f"SCOPE: {scope_label}")
-        print("=" * 104)
-        print(f"  {'shape':<26} {'overlay':>11} {'plain':>10} {'ratio':>9}   totals")
-        print("  " + "-" * 96)
+        section = harness.Section(f"Scope: {scope_label}", COLUMNS)
 
         # Every shape must agree with every other, on both models, or the
-        # numbers below are timings of three different questions.
+        # numbers are timings of five different questions. Each model is
+        # checked against its own earlier shapes, independently: pairing them
+        # would throw away a good result whenever the other side capped --
+        # which is exactly when a shape is most likely to be answering a
+        # different question, since the thing that makes it slow (a join that
+        # multiplies) is also the thing that corrupts its counts.
         agreed = {}
         for shape_label, shape in SHAPES:
-            overlay_ms, overlay_result = timed(lambda f=shape, s=scope: f(BenchPerson, s))
-            if shape_label in OVERLAY_ONLY:
-                plain_ms, plain_result, ratio = float("nan"), None, float("nan")
+            overlay_only = shape_label in OVERLAY_ONLY
+            overlay, overlay_result = ctx.measure(
+                lambda f=shape, s=scope: f(BenchPerson, s), rounds=2)
+            if overlay_only:
+                plain, plain_result = None, None
             else:
-                plain_ms, plain_result = timed(lambda f=shape, s=scope: f(PlainPerson, s))
-                ratio = overlay_ms / plain_ms if plain_ms else float("nan")
+                plain, plain_result = ctx.measure(
+                    lambda f=shape, s=scope: f(PlainPerson, s), rounds=2)
 
-            # Each model is checked against its own earlier shapes, independently.
-            # Pairing them would throw away a good result whenever the other side
-            # timed out -- which is exactly when a shape is most likely to be
-            # answering a different question, since the thing that makes it slow
-            # (a join that multiplies) is also the thing that corrupts its counts.
             notes = []
             sides = [("overlay", overlay_result)]
-            if shape_label in OVERLAY_ONLY:
-                notes.append("overlay-only, no plain equivalent")
+            if overlay_only:
+                notes.append("overlay-only")
             else:
                 sides.append(("plain", plain_result))
-            for name, result in sides:
+            for side, result in sides:
                 if result is None:
-                    notes.append(f"{name} hit the {TIMEOUT_MS / 1000:.0f}s cap")
+                    notes.append(f"{side} capped")
                     continue
-                previous = agreed.setdefault(name, result)
+                previous = agreed.setdefault(side, result)
                 if previous != result:
-                    differing = [k for k in result if previous[k] != result[k]]
-                    notes.append(
-                        f"{name} DISAGREES: total {result['total']:,} "
-                        f"vs {previous['total']:,} ({len(differing)} fields)"
+                    differing = [key for key in result if previous[key] != result[key]]
+                    ctx.disagreements.append(
+                        f"{scope_label} / {shape_label}: {side} total {result['total']:,} "
+                        f"vs {previous['total']:,} from an earlier shape "
+                        f"({len(differing)} fields differ)"
                     )
+                    notes.append(f"{side} DISAGREES")
+
             reference = overlay_result or plain_result
-            if reference is not None:
-                notes.append(f"{reference['total']:,} people, {reference['phone_count']:,} phones")
-            plain_cell = "        -" if shape_label in OVERLAY_ONLY else f"{plain_ms:>8.1f}ms"
-            ratio_cell = "       -" if shape_label in OVERLAY_ONLY else f"x{ratio:>7.2f}"
-            print(f"  {shape_label:<26} {overlay_ms:>9.1f}ms {plain_cell} "
-                  f"{ratio_cell}   {'   '.join(notes)}")
+            cells = {"overlay": overlay}
+            ratio = ""
+            if not overlay_only:
+                cells["plain"] = plain
+                if not overlay.capped and not plain.capped and plain.ms:
+                    ratio = f"x{overlay.ms / plain.ms:.1f}"
+
+            section.add(
+                shape_label, cells,
+                plain="-" if overlay_only else None,
+                ratio="-" if overlay_only else ratio,
+                people="" if reference is None else f"{reference['total']:,}",
+                notes=", ".join(notes),
+            )
+        yield section

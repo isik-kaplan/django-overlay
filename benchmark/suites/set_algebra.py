@@ -1,17 +1,16 @@
 """Can the leaf-by-leaf strategy stay in the database?
 
-probe_staged_resolution found that resolving each m2m leaf separately and
+The staged suite finds that resolving each m2m leaf separately and
 intersecting the id sets in Python is the only strategy that survives three
-leaves -- 2,213ms where everything else runs past 20s. The cost is client
-memory: ~19MB per broad leaf, ~57MB for three.
+leaves. The cost is client memory: ~19MB per broad leaf, ~57MB for three.
 
-The obvious reading of that result was "Django had to pull the ids into
+The obvious reading of that result is "Django had to pull the ids into
 Python". That reading is wrong. `filter(pk__in=<queryset>)` compiles to a SQL
-subquery and moves nothing, and probe_staged_resolution's `subquery-first`
-variant did exactly that -- and still ran past the cap. What the Python round
-trip actually bought was not data movement but *planner information*: a
-literal list of 200 ids has an exact, visible cardinality, and a subquery over
-a UNION ALL view has none.
+subquery and moves nothing, and the staged suite's `subquery-first` variant
+does exactly that -- and still runs past the cap. What the Python round trip
+actually buys is not data movement but *planner information*: a literal list of
+200 ids has an exact, visible cardinality, and a subquery over a UNION ALL view
+has none.
 
 So the question is whether anything gives the planner that same visible
 cardinality without leaving the database. Two candidates:
@@ -26,24 +25,15 @@ cardinality without leaving the database. Two candidates:
                  and the result stays a lazy queryset.
 
 Both are measured against the Python intersection that already works.
-
-    OVERLAY_BENCH_SCALE=1.0 POSTGRES_USER=postgres uv run pytest \\
-        --reuse-db tests/probe_set_algebra_in_sql.py -s -q -o addopts="" --no-cov
 """
 
-import time
-
-import pytest
-from django.db import OperationalError, connection
 from django.db.models import Q
 
-from tests.probe_bench_graph import load
-from tests.testapp.models import BenchPerson, PlainPerson
+from benchmark import harness
 
 
-pytestmark = pytest.mark.django_db(transaction=True)
-
-CAP_MS = 20_000
+NAME = "set_algebra"
+TITLE = "Keeping the leaf-by-leaf strategy inside the database"
 
 LEAVES = (
     {"addresses__city": "city0"},
@@ -51,11 +41,7 @@ LEAVES = (
     {"emails__domain": "example.com"},
 )
 
-
-def cap(milliseconds):
-    with connection.cursor() as cursor:
-        cursor.execute(f"SET statement_timeout = {milliseconds}")
-        cursor.execute("SET lock_timeout = 5000")
+COLUMNS = ("overlay", "plain", "ratio", "people")
 
 
 def python_intersection(model, leaves):
@@ -97,58 +83,53 @@ def sql_intersect(model, leaves):
 
 
 STRATEGIES = (
-    ("python intersection", python_intersection, "both"),
-    ("fenced arrays (SQL)", fenced_arrays, "overlay"),
-    ("plain pk__in (SQL)", plain_subqueries, "both"),
-    ("INTERSECT (SQL)", sql_intersect, "both"),
+    ("python intersection", python_intersection, True),
+    ("fenced arrays (SQL)", fenced_arrays, False),
+    ("plain pk__in (SQL)", plain_subqueries, True),
+    ("INTERSECT (SQL)", sql_intersect, True),
 )
 
 CASES = (("2 leaves", LEAVES[:2]), ("3 leaves", LEAVES))
 
 
-def timed(build):
-    started = time.perf_counter()
-    try:
-        value = build()
-    except OperationalError:
-        return float(CAP_MS), None
-    return (time.perf_counter() - started) * 1000, value
-
-
-def test_set_algebra_in_sql():
-    load()
-    cap(CAP_MS)
+def run(ctx):
+    from tests.testapp.models import BenchPerson, PlainPerson
 
     for case_label, leaves in CASES:
-        print("\n\n" + "=" * 104)
-        print(f"{case_label}: " + " AND ".join(next(iter(leaf)) for leaf in leaves))
-        print("=" * 104)
-        print(f"  {'strategy':<26} {'overlay':>11} {'plain':>10} {'ratio':>9}   people")
-        print("  " + "-" * 90)
-
+        section = harness.Section(
+            f"{case_label}: " + " AND ".join(next(iter(leaf)) for leaf in leaves), COLUMNS,
+        )
         truth = None
-        for label, strategy, sides in STRATEGIES:
-            overlay_ms, overlay_people = timed(lambda s=strategy, ls=leaves: s(BenchPerson, ls))
-            if sides == "both":
-                plain_ms, plain_people = timed(lambda s=strategy, ls=leaves: s(PlainPerson, ls))
+        for label, strategy, has_plain in STRATEGIES:
+            overlay, overlay_people = ctx.measure(
+                lambda s=strategy, ls=leaves: s(BenchPerson, ls), rounds=2)
+            if has_plain:
+                plain, plain_people = ctx.measure(
+                    lambda s=strategy, ls=leaves: s(PlainPerson, ls), rounds=2)
             else:
                 # `overlay_fenced_in` resolves only through OverlayQuery, by
                 # design -- a plain model has no way to express this row.
-                plain_ms, plain_people = float("nan"), None
+                plain, plain_people = None, None
             if truth is None and plain_people is not None:
                 truth = plain_people
 
-            if overlay_people is None:
-                cells = f"{'>' + str(CAP_MS // 1000) + 's':>11} "
-            else:
-                cells = f"{overlay_ms:>9.0f}ms "
-            cells += "         -" if sides != "both" else f"{plain_ms:>8.0f}ms"
-            if sides == "both" and overlay_people is not None and plain_ms:
-                cells += f" x{overlay_ms / plain_ms:>8.1f}"
-            else:
-                cells += f" {'-':>9}"
-
-            note = "did not finish" if overlay_people is None else f"{overlay_people:,}"
             if overlay_people is not None and truth is not None and overlay_people != truth:
-                note += f"   WRONG (expected {truth:,})"
-            print(f"  {label:<26} {cells}   {note}")
+                ctx.disagreements.append(
+                    f"{case_label} / {label}: overlay found {overlay_people:,} people, "
+                    f"expected {truth:,}"
+                )
+
+            cells = {"overlay": overlay}
+            ratio = "-"
+            if has_plain:
+                cells["plain"] = plain
+                ratio = ""
+                if not overlay.capped and not plain.capped and plain.ms:
+                    ratio = f"x{overlay.ms / plain.ms:.1f}"
+            section.add(
+                label, cells,
+                plain=None if has_plain else "-",
+                ratio=ratio,
+                people="did not finish" if overlay_people is None else f"{overlay_people:,}",
+            )
+        yield section

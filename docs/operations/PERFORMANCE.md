@@ -301,7 +301,7 @@ selective. A near-universal boolean like soft-delete is not, and defeats it.
 
 ### What this means for a real schema
 
-The production-shaped benchmark (`tests/probe_bench_graph.py`) puts both shapes
+The production-shaped benchmark (`benchmark/`, the `shapes` suite) puts both shapes
 on either side of every join — four overridable, soft-deletable entities linked
 by three append-only M2M through models:
 

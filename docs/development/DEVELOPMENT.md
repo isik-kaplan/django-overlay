@@ -92,3 +92,17 @@ Two configuration notes, both in `[tool.mutmut]` and both load-bearing:
   where mutmut cannot swap the mutant in — every mutant there would survive
   no matter how many tests were added. Adding tests that apply migrations
   from inside a test body would let this exclusion come out.
+
+## Benchmarks
+
+`uv run django-overlay benchmark` — eight suites comparing the overlay against
+plain tables holding identical rows, run against a Postgres the command starts
+in docker compose. Not shipped in the wheel; see
+[BENCHMARKS.md](BENCHMARKS.md) for the suites, the runtime budget and how saved
+runs are compared.
+
+```bash
+uv run django-overlay benchmark --list-suites
+uv run django-overlay benchmark --scale 0.1          # a couple of minutes
+uv run django-overlay benchmark --interactive
+```

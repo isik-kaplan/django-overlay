@@ -2,14 +2,14 @@
 
 `filter(phones__kind='mobile')` must return a person once per matching phone.
 A semi-join returns them once, full stop, so the fast form measured in
-probe_bench_graph is NOT equivalent to what Django emits. This measures the
+the `shapes` benchmark suite is NOT equivalent to what Django emits. This measures the
 forms that preserve row multiplicity.
 """
 import time
 
 import pytest
 
-from tests.probe_bench_graph import PLAIN, best_of, load, plan, rows, shape_of
+from benchmark.graph import PLAIN, best_of, load, plan, rows, shape_of
 
 
 pytestmark = pytest.mark.django_db(transaction=True)

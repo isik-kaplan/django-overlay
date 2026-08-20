@@ -12,6 +12,11 @@ mutants
 .mutmut-cache
 mutmut-stats.json
 
+# Saved benchmark runs. Machine-specific by construction — a run is only
+# comparable against another taken on the same hardware, Postgres version and
+# work_mem — so committing one would invite comparisons that mean nothing.
+benchmark/results/
+
 # IDEs & Editors
 .idea
 
