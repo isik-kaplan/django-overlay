@@ -62,3 +62,96 @@ jobs:
           DJANGO_SETTINGS_MODULE: tests.django_tenants_settings
         run: |
           uv run pytest tests/test_tenants -o addopts="" --create-db
+
+  mutation:
+    # Policy: no mutant survives. A mutant that lives is a change to
+    # django_overlay/ that no test objects to — either the test is missing or
+    # the code is dead. A genuinely equivalent mutant gets a
+    # `# pragma: no mutate` on its line explaining why, not a tolerance here.
+    #
+    # Single Python version on purpose: mutation results don't vary across
+    # interpreters, and this job runs the whole suite once per mutant.
+    runs-on: ubuntu-22.04
+    # A cold run is ~1100 mutants, each running the whole suite, which is
+    # hours — the cache below is what makes this viable, since mutmut's git
+    # change detection then re-checks only what actually moved. A cold cache
+    # will hit this timeout; see KNOWN_ISSUES/10 for the fix (a per-child test
+    # database so max_children can go above 1) and for why the gate does not
+    # reach zero yet.
+    timeout-minutes: 120
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_overlay_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: django_overlay_test
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          uv sync
+
+      # mutants/ holds the per-file .meta result files. Restoring them lets
+      # mutmut's git change detection skip mutants whose code didn't move.
+      - name: Restore mutation cache
+        uses: actions/cache@v4
+        with:
+          path: mutants
+          key: mutmut-${{ hashFiles('uv.lock', 'pyproject.toml') }}-${{ github.sha }}
+          restore-keys: |
+            mutmut-${{ hashFiles('uv.lock', 'pyproject.toml') }}-
+
+      # The regions mutmut structurally can't reach — see KNOWN_ISSUES/09.
+      # mutmut forks a pre-warmed parent and only picks the mutant in the
+      # child, so anything that runs at import time (the metaclass, every
+      # migration operation, the SQL templates) has already run against the
+      # original code. This harness edits the source directly instead.
+      #
+      # Deliberately first: it is minutes rather than hours, it covers the DDL
+      # layer that mutmut excludes entirely, and unlike the step below it is
+      # currently at zero, so it is the half of the policy that actually gates.
+      - name: Mutation-test the code mutmut can't reach
+        run: |
+          uv run python tests/probe_unreachable_mutants.py
+
+      - name: Run mutation tests
+        run: |
+          uv run mutmut run
+
+      - name: Enforce the no-surviving-mutant policy
+        if: always()
+        run: |
+          uv run mutmut export-cicd-stats
+          uv run python .github/scripts/check_mutants.py
+
+      - name: Upload mutation results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutmut-results
+          path: |
+            mutants/mutmut-cicd-stats.json
+          if-no-files-found: ignore

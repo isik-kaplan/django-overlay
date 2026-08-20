@@ -12,6 +12,7 @@ from django_overlay.models import (
     OverlayModelBase,
     _default_soft_delete,
     _default_strategy,
+    _split_meta_options,
 )
 from django_overlay.strategies import Strategy
 from tests.testapp.models import Address, AddressNote, Person, SoftDeleteTest
@@ -37,7 +38,11 @@ def test_base_model_points_back_to_the_view_model():
 def test_both_models_share_the_declared_non_m2m_fields():
     view_fields = {f.name for f in Person._meta.fields}
     base_fields = {f.name for f in Person.base_table()._meta.fields}
-    assert view_fields == base_fields == {"id", "first_name", "age"}
+
+    assert view_fields == {"id", "first_name", "age"}
+    # The base model carries one extra: soft delete's shadow flag, which is
+    # never exposed on the view and so never queryable through the model.
+    assert base_fields == view_fields | {"_overlay_deleted"}
 
 
 def test_m2m_fields_only_exist_on_the_view_model_not_the_base_model():
@@ -278,13 +283,13 @@ def test_meta_app_label_reaches_both_the_base_and_view_model():
     assert HasExplicitAppLabel.base_table()._meta.app_label == "testapp"
 
 
-def test_default_soft_delete_defaults_to_false_when_unconfigured():
-    assert _default_soft_delete() is False
+def test_default_soft_delete_defaults_to_true_when_unconfigured():
+    assert _default_soft_delete() is True
 
 
 def test_default_soft_delete_reads_from_settings_when_configured():
-    with override_settings(DJANGO_OVERLAY_DEFAULT_SOFT_DELETE=True):
-        assert _default_soft_delete() is True
+    with override_settings(DJANGO_OVERLAY_DEFAULT_SOFT_DELETE=False):
+        assert _default_soft_delete() is False
 
 
 def test_default_soft_delete_rejects_a_non_bool_value():
@@ -324,3 +329,14 @@ def test_abstract_overlaymodel_subclass_is_not_split():
     assert AbstractOverlay._meta.abstract is True
     assert not hasattr(AbstractOverlay, "_base_model")
     assert not hasattr(AbstractOverlay, "_overlay_meta")
+
+
+def test_private_meta_attributes_are_not_forwarded_as_options():
+    """`vars(Meta)` carries __module__, __qualname__ and friends; forwarding
+    those as model options would either be ignored silently or blow up
+    somewhere far from the cause."""
+    base_options, view_options = _split_meta_options("Probe", type("Meta", (), {"ordering": ["x"]}))
+
+    assert view_options == {"ordering": ["x"]}
+    assert base_options == {}
+    assert not any(key.startswith("_") for key in {**base_options, **view_options})

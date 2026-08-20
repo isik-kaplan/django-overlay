@@ -8,7 +8,8 @@ from django_overlay.constraints import OverlayUniqueConstraint
 from django_overlay.fields import OverlayForeignKey
 from django_overlay.management.commands.makemigrations import (
     Command,
-    _insert_view_drops_before_deletes,
+    _fk_fields_targeting,
+    _insert_view_drops_before_destructive_ops,
     _overlay_base_to_view,
     _overlay_foreign_key_fields,
     extra_ops_for_migration,
@@ -259,7 +260,7 @@ def test_command_write_migration_files_appends_extra_ops_before_delegating():
 def test_deleting_a_model_gets_a_view_drop_inserted_immediately_before_it():
     op = migrations.DeleteModel(name="SomeModel")
 
-    operations = _insert_view_drops_before_deletes("testapp", [op])
+    operations = _insert_view_drops_before_destructive_ops("testapp", [op])
 
     assert len(operations) == 2
     assert isinstance(operations[0], DropOverlayView)
@@ -271,7 +272,7 @@ def test_deleting_two_models_gets_a_view_drop_inserted_before_each():
     op1 = migrations.DeleteModel(name="First")
     op2 = migrations.DeleteModel(name="Second")
 
-    operations = _insert_view_drops_before_deletes("testapp", [op1, op2])
+    operations = _insert_view_drops_before_destructive_ops("testapp", [op1, op2])
 
     assert [type(o).__name__ for o in operations] == [
         "DropOverlayView",
@@ -286,7 +287,7 @@ def test_deleting_two_models_gets_a_view_drop_inserted_before_each():
 def test_operations_without_a_delete_model_are_left_untouched():
     op = migrations.AddField(model_name="Foo", name="bar", field=models.CharField(max_length=1))
 
-    operations = _insert_view_drops_before_deletes("testapp", [op])
+    operations = _insert_view_drops_before_destructive_ops("testapp", [op])
 
     assert operations == [op]
 
@@ -318,7 +319,7 @@ def test_every_delete_model_gets_a_view_drop_immediately_before_it_for_any_op_se
         for kind, name in op_specs
     ]
 
-    result = _insert_view_drops_before_deletes("testapp", operations)
+    result = _insert_view_drops_before_destructive_ops("testapp", operations)
 
     for i, op in enumerate(result):
         if isinstance(op, migrations.DeleteModel):
@@ -352,3 +353,99 @@ def test_the_same_new_unique_constraint_appearing_any_number_of_times_only_adds_
     extra_ops = extra_ops_for_migration("testapp", ops, base_to_view, set())
 
     assert len([o for o in extra_ops if isinstance(o, AddOverlayUniqueConstraint)]) == 1
+
+
+def test_a_remove_field_also_gets_a_view_drop_first():
+    """Postgres refuses to drop a column a view selects, and the overlay view
+    selects every column of its base table."""
+    op = migrations.RemoveField(model_name="PersonBase", name="age")
+
+    operations = _insert_view_drops_before_destructive_ops("testapp", [op])
+
+    assert isinstance(operations[0], DropOverlayView)
+    assert operations[0].model_name == "PersonBase"
+    assert operations[1] is op
+
+
+def test_operations_that_do_not_destroy_anything_get_no_view_drop():
+    ops = [
+        migrations.AddField(model_name="PersonBase", name="x", field=models.CharField(max_length=1)),
+        migrations.AlterField(model_name="PersonBase", name="x", field=models.CharField(max_length=2)),
+    ]
+
+    assert _insert_view_drops_before_destructive_ops("testapp", ops) == ops
+
+
+# Turning soft_delete on or off adds or drops _overlay_deleted, and both FK
+# triggers encode whether the target soft-deletes — the insert side so a
+# tombstoned row stops being a valid target, the delete side because a soft
+# delete removes a row from the view with an UPDATE rather than a DELETE. So
+# every trigger pointing at that model has to be rebuilt, or it goes on
+# enforcing the shape the model had when the FK was created.
+
+
+def test_fk_fields_targeting_finds_what_points_at_a_model():
+    referencing = _fk_fields_targeting("testapp", "PersonBase")
+
+    assert ("personnotebase", "person") in referencing, "an overlay model pointing at it"
+    assert ("personprofile", "person") in referencing, "a plain model pointing at it"
+    assert ("renamefktest", "renamed_fk") in referencing
+
+
+def test_fk_fields_targeting_names_the_base_model_not_the_view():
+    """AddOverlayConstraint resolves the model it is given, and the trigger
+    belongs to the base table."""
+    referencing = dict(_fk_fields_targeting("testapp", "PersonBase"))
+
+    assert "personnotebase" in referencing
+    assert "personnote" not in referencing
+
+
+def test_fk_fields_targeting_ignores_models_pointing_elsewhere():
+    referencing = _fk_fields_targeting("testapp", "PersonBase")
+
+    assert not any(model_name.startswith("addressnote") for model_name, _ in referencing)
+
+
+def test_fk_fields_targeting_is_empty_for_a_model_nothing_points_at():
+    assert _fk_fields_targeting("testapp", "MetaTestBase") != []  # MetaTestNote points at it
+    assert _fk_fields_targeting("testapp", "NoSuchModelBase") == []
+
+
+def test_adding_the_soft_delete_flag_rebuilds_the_triggers_pointing_at_it():
+    op = migrations.AddField(model_name="PersonBase", name="_overlay_deleted", field=models.BooleanField(default=False))
+
+    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+
+    rebuilt = {(o.model_name, o.field_name) for o in extra_ops if isinstance(o, AddOverlayConstraint)}
+    assert ("personnotebase", "person") in rebuilt
+    assert ("personprofile", "person") in rebuilt
+
+
+def test_removing_the_soft_delete_flag_rebuilds_them_too():
+    op = migrations.RemoveField(model_name="PersonBase", name="_overlay_deleted")
+
+    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+
+    rebuilt = {(o.model_name, o.field_name) for o in extra_ops if isinstance(o, AddOverlayConstraint)}
+    assert ("personnotebase", "person") in rebuilt
+
+
+def test_an_ordinary_field_change_rebuilds_nothing():
+    op = migrations.AddField(model_name="PersonBase", name="nickname", field=models.CharField(max_length=1))
+
+    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+
+    assert not [o for o in extra_ops if isinstance(o, AddOverlayConstraint)]
+
+
+def test_the_rebuild_is_not_emitted_twice():
+    ops = [
+        migrations.AddField(model_name="PersonBase", name="_overlay_deleted", field=models.BooleanField(default=False)),
+        migrations.AddField(model_name="PersonBase", name="_overlay_deleted", field=models.BooleanField(default=False)),
+    ]
+
+    extra_ops = extra_ops_for_migration("testapp", ops, {}, set())
+
+    rebuilt = [o for o in extra_ops if isinstance(o, AddOverlayConstraint)]
+    assert len(rebuilt) == len({(o.model_name, o.field_name) for o in rebuilt})

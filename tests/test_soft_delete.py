@@ -54,11 +54,20 @@ def test_delete_and_reset_to_source_both_permanently_remove_an_organic_row_with_
 
 def test_a_soft_deleted_row_is_not_a_valid_target_for_a_new_reference(db_cursor):
     target = SoftDeleteTest.objects.create(first_name="Target")
+    # Model.delete() nulls out instance.pk, and target_id=None would raise a
+    # not-null IntegrityError that looks exactly like the one we're after.
+    target_pk = target.pk
     target.delete()
+    # Flush the delete-side guard now, while there are still no references, so
+    # that what the assertion below catches can only be the insert-side check.
+    # Left pending it fires first and reports "still references", which is also
+    # true but is a different guard.
+    db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+    db_cursor.execute("SET CONSTRAINTS ALL DEFERRED")
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError, match="not found in any target table"):
         with transaction.atomic():
-            SoftDeleteTestNote.objects.create(target_id=target.pk, text="new note")
+            SoftDeleteTestNote.objects.create(target_id=target_pk, text="new note")
             db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
 
 

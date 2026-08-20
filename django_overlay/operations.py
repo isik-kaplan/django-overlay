@@ -21,6 +21,15 @@ def _drop_trigger(schema_editor, tenant_schema: str, trigger_name: str, table_na
     )
 
 
+def _drop_trigger_anywhere(schema_editor, tenant_schema: str, trigger_name: str) -> None:
+    """For a trigger whose table can no longer be derived — the delete-side
+    integrity guard lives on the *target's* base table, and by the time a
+    RemoveField is replayed the field naming that target is gone."""
+    schema_editor.execute(
+        render("ddl/drop_trigger_anywhere.sql.j2", tenant_schema=tenant_schema, trigger_name=trigger_name)
+    )
+
+
 class SyncOverlayView(migrations.RunPython):
     """(Re)creates the view + its three INSTEAD OF triggers. `model_name`
     must be the view model (e.g. "Person"), not the hidden base model.
@@ -41,9 +50,18 @@ class SyncOverlayView(migrations.RunPython):
             # that existed at that point, not today's field list.
             historical_base = apps.get_model(app_label, model._base_model._meta.model_name)
             # _overlay_deleted is base-only (soft_delete's shadow flag) — never
-            # part of the overlay's own declared columns.
-            columns = [f.column for f in historical_base._meta.fields if f.column != "_overlay_deleted"]
-            overlay_sync.sync_view(model, tenant_schema, schema_editor.execute, columns=columns)
+            # part of the overlay's own declared columns. Its presence in
+            # historical state is also what says whether soft delete was on at
+            # this point in history; the live model can't answer that.
+            historical_columns = [f.column for f in historical_base._meta.fields]
+            columns = [column for column in historical_columns if column != "_overlay_deleted"]
+            overlay_sync.sync_view(
+                model,
+                tenant_schema,
+                schema_editor.execute,
+                columns=columns,
+                soft_delete="_overlay_deleted" in historical_columns,
+            )
 
         def backward(apps, schema_editor):
             model = django_apps.get_model(app_label, model_name)
@@ -116,10 +134,36 @@ class AddOverlayConstraint(migrations.RunPython):
             # class with no get_source()/_overlay_meta. The live model has both.
             target_meta = field.remote_field.model._meta
             live_target = django_apps.get_model(target_meta.app_label, target_meta.model_name)
-            targets = target_tables_for(live_target, tenant_schema)
+            # Whether the target soft-deletes *at this point in history*. Both
+            # triggers below reference _overlay_deleted when it does, and the
+            # live model can't say whether the migration that adds that column
+            # has run yet.
+            historical_target = apps.get_model(target_meta.app_label, live_target._base_model._meta.model_name)
+            target_soft_delete = any(f.column == "_overlay_deleted" for f in historical_target._meta.fields)
+            targets = target_tables_for(live_target, tenant_schema, target_soft_delete)
             schema_editor.execute(
                 overlay_sql.build_constraint_trigger_sql(
-                    trigger_name, tenant_schema, model._meta.db_table, field.column, targets
+                    trigger_name,
+                    tenant_schema,
+                    model._meta.db_table,
+                    field.column,
+                    targets,
+                    model._meta.pk.column,
+                )
+            )
+            # The delete side, on the target's own base table. Without it the
+            # insert-side check is only advisory: anything that removes a
+            # referenced row without going through Django's delete collector
+            # leaves the reference dangling.
+            schema_editor.execute(
+                overlay_sql.build_referenced_row_trigger_sql(
+                    field.referenced_row_trigger_name(model),
+                    tenant_schema,
+                    model._meta.db_table,
+                    field.column,
+                    live_target._base_model._meta.db_table,
+                    live_target._meta.db_table,
+                    live_target._meta.pk.column,
                 )
             )
 
@@ -128,6 +172,7 @@ class AddOverlayConstraint(migrations.RunPython):
             field = historical_field(apps)
             tenant_schema = _resolve_schema(schema_editor)
             _drop_trigger(schema_editor, tenant_schema, field.trigger_name(model), model._meta.db_table)
+            _drop_trigger_anywhere(schema_editor, tenant_schema, field.referenced_row_trigger_name(model))
 
         super().__init__(forward, backward, elidable=False)
 
@@ -171,6 +216,7 @@ class AddOverlayUniqueConstraint(migrations.RunPython):
                 model.get_source(),
                 model._meta.pk.column,
                 model._overlay_meta.strategy,
+                model._overlay_meta.soft_delete,
             )
             if sql:
                 schema_editor.execute(sql)
@@ -213,6 +259,8 @@ class RemoveOverlayConstraint(migrations.RunPython):
             tenant_schema = _resolve_schema(schema_editor)
             trigger_name = f"overlayfk_{model._meta.db_table}_{self.column}"[:63]
             _drop_trigger(schema_editor, tenant_schema, trigger_name, model._meta.db_table)
+            delete_side = f"overlayfkdel_{model._meta.db_table}_{self.column}"[:63]
+            _drop_trigger_anywhere(schema_editor, tenant_schema, delete_side)
 
         def backward(apps, schema_editor):
             pass  # the removed field no longer exists to re-derive target_tables() from

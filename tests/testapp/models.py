@@ -285,9 +285,11 @@ class MetaTest(OverlayModel):
     class Meta:
         ordering = ["name"]
         verbose_name = "meta test"
-        constraints = [models.CheckConstraint(condition=models.Q(name__gt=""), name="metatest_name_not_empty")]
+        constraints = [
+            models.CheckConstraint(condition=models.Q(name__gt=""), name="metatest_name_not_empty"),
+            OverlayUniqueConstraint(fields=["name"], name="metatest_name_unique"),
+        ]
         indexes = [models.Index(fields=["name"], name="metatest_name_idx")]
-        unique_together = [("name",)]
         db_table_comment = "Meta forwarding test fixture"
 
     class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
@@ -316,7 +318,12 @@ class NullableFkTest(models.Model):
 
 
 class UniqueTestNoSource(OverlayModel):
-    """OverlayUniqueConstraint with no source — native UNIQUE only, no trigger."""
+    """OverlayUniqueConstraint with no source — native UNIQUE only, no trigger.
+
+    Also the model that opts *out* of soft delete, so the hard-delete path
+    stays covered now that soft delete is the default. A purely organic model
+    is the natural place for it: with no source row to keep masked, a tombstone
+    buys nothing and holds an index entry forever."""
 
     ssn = models.CharField(max_length=20)
 
@@ -325,6 +332,7 @@ class UniqueTestNoSource(OverlayModel):
 
     class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
         table_name = "uniquetestnosource"
+        soft_delete = False
 
         @staticmethod
         def get_source():
@@ -485,6 +493,129 @@ class DigitLeadingTableNameTest(OverlayModel):
 
     class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
         table_name = "123digitleadingtablenametest"
+
+        @staticmethod
+        def get_source():
+            return None
+
+
+class Vendor(models.Model):
+    """Plain table an OverlayModel points at with an explicit related_name."""
+
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "testapp"
+
+
+class VendorThing(OverlayModel):
+    """OverlayModel declaring a plain FK with an explicit related_name — the
+    shape that used to fail fields.E304 because the hidden base model
+    declared the same reverse accessor."""
+
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="things")
+    label = models.CharField(max_length=100, default="x")
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "vendorthing"
+
+        @staticmethod
+        def get_source():
+            return None
+
+
+class PersonNote(OverlayModel):
+    """OverlayModel pointing at another OverlayModel — the FK trigger lands
+    on this model's base table and checks Person's base table plus source."""
+
+    person = OverlayForeignKey(Person, on_delete=models.CASCADE, related_name="overlay_notes")
+    text = models.TextField()
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "personnote"
+        # Hard delete, so the KNOWN_ISSUES/01 regression tests still exercise
+        # the trigger's existence re-check: soft delete flags the referencing
+        # row instead of removing it, and the stale-tuple problem that guard
+        # exists for only arises when the row is genuinely gone.
+        soft_delete = False
+
+        @staticmethod
+        def get_source():
+            return None
+
+
+class LabelManager(models.Manager):
+    def labelled(self):
+        return self.filter(label="labelled")
+
+
+class CustomManagerTest(OverlayModel):
+    """Declares its own manager, so django_overlay leaves it alone rather than
+    replacing it with OverlayManager — which also means no bulk_create guard."""
+
+    label = models.CharField(max_length=100, default="x")
+
+    objects = LabelManager()
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "custommanagertest"
+
+        @staticmethod
+        def get_source():
+            return None
+
+
+class SoftDeleteUniqueTest(OverlayModel):
+    """soft_delete plus all three ways of declaring uniqueness. Each has to
+    end up as a partial index so a tombstone stops reserving its value."""
+
+    ssn = models.CharField(max_length=20)
+    email = models.CharField(max_length=100)
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+
+    class Meta:
+        # unique_together and unique=True are rejected on a soft_delete model —
+        # both come out as table constraints, which can't carry the
+        # tombstone predicate. Meta.constraints is the supported spelling.
+        constraints = [
+            OverlayUniqueConstraint(fields=["ssn"], name="softdeleteuniquetest_ssn_unique"),
+            OverlayUniqueConstraint(
+                fields=["first_name", "last_name"], name="softdeleteuniquetest_first_name_last_name_uniq"
+            ),
+            OverlayUniqueConstraint(fields=["email"], name="softdeleteuniquetest_email_uniq"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "softdeleteuniquetest"
+        soft_delete = True
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_softdeleteuniquetestsource")
+
+
+class SoftDeletePlainUniqueTest(OverlayModel):
+    """soft_delete with no source, plus a CheckConstraint that must be left
+    alone by the narrowing, and the ForeignKey-instead-of-OneToOneField shape
+    the error message recommends."""
+
+    code = models.CharField(max_length=20)
+    tag = models.CharField(max_length=20, blank=True, default="")
+    # A OneToOneField keeps working — the base model gets the plain ForeignKey
+    # underneath, and the uniqueness comes from the constraint below.
+    vendor = models.OneToOneField(Vendor, on_delete=models.CASCADE, null=True, related_name="plain_thing")
+
+    class Meta:
+        constraints = [
+            OverlayUniqueConstraint(fields=["vendor"], name="softdeleteplainuniquetest_vendor_uniq"),
+            OverlayUniqueConstraint(fields=["code"], name="softdeleteplainuniquetest_code"),
+            models.CheckConstraint(condition=models.Q(code__gt=""), name="softdeleteplainuniquetest_code_not_empty"),
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "softdeleteplainuniquetest"
+        soft_delete = True
 
         @staticmethod
         def get_source():

@@ -1,14 +1,197 @@
+import contextvars
 import copy
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models
+from django.db import connections, models, transaction
 
+from . import uniqueness
+from .exceptions import OverlayConfigurationError
+from .fields import base_model_copy, hide_reverse_side
 from .strategies import Strategy, default_id_field
 
 
-class OverlayConfigurationError(Exception):
-    pass
+__all__ = ["OverlayConfigurationError", "OverlayMeta", "OverlayModel", "OverlayModelBase", "OverlayQuerySet"]
+
+
+# Django's own update_or_create() locks the row it found with
+# select_for_update() before updating it. That lock does nothing on a view, but
+# neither does it hurt, and refusing it would break a core ORM method over a
+# lock that was never real in the first place. This lets Django's internal use
+# through while a direct call from application code still raises.
+_django_internal_lock = contextvars.ContextVar("django_overlay_internal_lock", default=False)
+
+
+def _reads_own_columns(value, model) -> bool:
+    """Does this update value compute from a column of the row it's updating?
+
+    That's the shape that can't survive going through the view: the scan reads
+    the old row, Postgres folds the expression into a literal, and the trigger
+    writes that literal — so a concurrent writer's change is overwritten rather
+    than built on. A plain value or an expression over some other table is
+    unaffected."""
+    if isinstance(value, models.F):
+        return value.name in {field.name for field in model._meta.concrete_fields}
+    source_expressions = getattr(value, "get_source_expressions", None)
+    if source_expressions is None:
+        return False
+    return any(_reads_own_columns(expression, model) for expression in source_expressions())
+
+
+class OverlayQuerySet(models.QuerySet):
+    """Default queryset for every overlay view model."""
+
+    def update(self, **kwargs):
+        """Route a self-referencing update around the view.
+
+        `update(age=F("age") + 1)` is atomic on a real table because Postgres
+        re-evaluates the expression after taking the row lock. Through the view
+        there is nothing left to re-evaluate — the expression has already been
+        folded into a literal by the time the INSTEAD OF trigger runs — so
+        concurrent increments are lost.
+
+        The fix is to get out of Postgres's way rather than reimplement it:
+        copy the matched rows into the base table, then run the update against
+        that table, where the ordinary row-locking semantics apply. Measured at
+        160/160 concurrent increments, against 148/160 through the view.
+
+        Everything else keeps the single-statement path through the view."""
+        if not any(_reads_own_columns(value, self.model) for value in kwargs.values()):
+            return super().update(**kwargs)
+
+        base_manager = self.model._base_model._default_manager
+        with transaction.atomic(using=self.db):
+            self._copy_matched_rows_to_the_base_table()
+            return base_manager.using(self.db).filter(pk__in=self.values("pk")).update(**kwargs)
+
+    def _update(self, values, returning_fields=None):
+        """The same routing for `instance.save()`.
+
+        Django's save() doesn't call update() — it calls the private _update()
+        with a list of (field, model, value) — so intercepting update() alone
+        left `obj.field = F("field") + 1; obj.save()` losing concurrent
+        updates. Measured at 109/160 before this, 160/160 after.
+
+        bulk_update() needs nothing extra: it builds a Case/When and hands it
+        to update(), so it comes through the public path already.
+
+        returning_fields is how save() gets the resolved number back to put on
+        the instance in place of the expression. Django only ever asks for it
+        when a value is an expression — which is exactly when we route — but
+        the count-returning form is part of the QuerySet contract, so it is
+        honoured rather than assumed away."""
+        if not any(_reads_own_columns(value, self.model) for _, _, value in values):
+            return super()._update(values, returning_fields)
+
+        base_manager = self.model._base_model._default_manager
+        with transaction.atomic(using=self.db):
+            self._copy_matched_rows_to_the_base_table()
+            matched = base_manager.using(self.db).filter(pk__in=self.values("pk"))
+            updated = matched.update(**{field.name: value for field, _, value in values})
+            if not returning_fields:
+                return updated
+            # Read the values back afterwards rather than with RETURNING, which
+            # the copy-then-update pair can't carry across. Matching nothing
+            # yields no rows, which is the falsy result save() expects.
+            return list(
+                base_manager.using(self.db)
+                .filter(pk__in=self.values("pk"))
+                .values_list(*[field.name for field in returning_fields])
+            )
+
+    def _copy_matched_rows_to_the_base_table(self) -> None:
+        """Materialise every row this queryset matches, so the update that
+        follows finds a base row for each of them. A row already materialised
+        is left exactly as it is."""
+        fields = list(self.model._meta.concrete_fields)
+        names = [field.name for field in fields]
+        columns = [field.column for field in fields]
+
+        selection = self.order_by()
+        if self.model._overlay_meta.soft_delete:
+            # Base-only column, so it isn't in the view to copy across. A
+            # matched row is by definition visible, hence not tombstoned.
+            selection = selection.annotate(_overlay_not_deleted=models.Value(False, output_field=models.BooleanField()))
+            names = [*names, "_overlay_not_deleted"]
+            columns = [*columns, "_overlay_deleted"]
+
+        connection = connections[self.db]
+        select_sql, params = selection.values(*names).query.get_compiler(self.db).as_sql()
+        quoted = ", ".join(connection.ops.quote_name(column) for column in columns)
+        base_table = connection.ops.quote_name(self.model._base_model._meta.db_table)
+        pk_column = connection.ops.quote_name(self.model._meta.pk.column)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"INSERT INTO {base_table} ({quoted}) {select_sql} "  # noqa: S608 - identifiers from _meta
+                f"ON CONFLICT ({pk_column}) DO NOTHING",
+                params,
+            )
+
+    def update_or_create(self, *args, **kwargs):
+        # aupdate_or_create() needs no equivalent: Django implements it as
+        # sync_to_async(self.update_or_create), so it comes back through here.
+        token = _django_internal_lock.set(True)
+        try:
+            return super().update_or_create(*args, **kwargs)
+        finally:
+            _django_internal_lock.reset(token)
+
+    def select_for_update(self, *args, **kwargs):
+        """Refuse, because Postgres silently declines to lock anything here.
+
+        `FOR UPDATE` against a view with INSTEAD OF triggers is accepted and
+        then does nothing: Postgres takes a table-level RowShareLock and marks
+        no rows, so a second transaction can UPDATE the same row straight
+        away. Measured — see tests/test_select_for_update.py. The read-modify-
+        write this exists to protect is completely unprotected, with no error
+        and no warning, which is the worst way to not have a lock."""
+        if _django_internal_lock.get():
+            return super().select_for_update(*args, **kwargs)
+        raise OverlayConfigurationError(
+            f"select_for_update() isn't supported on {self.model.__name__} — it's an overlay "
+            "model, so the query targets a view, and Postgres accepts FOR UPDATE against a "
+            "view with INSTEAD OF triggers without locking any rows. It would appear to work "
+            "and protect nothing.\n\n"
+            "For a read-modify-write, do it in one statement: "
+            "`.update(field=F('field') + 1)` is atomic here, because an expression that reads "
+            "its own row is routed around the view and applied to the base table directly. For "
+            "a longer critical section, take an advisory lock on the row's id:\n\n"
+            "    with transaction.atomic(), connection.cursor() as cursor:\n"
+            "        cursor.execute('SELECT pg_advisory_xact_lock(%s, %s)', [TABLE_KEY, row_id])\n"
+            "        ...  # read, modify, write\n\n"
+            "See docs/operations/LIMITATIONS.md."
+        )
+
+    def bulk_create(self, objs, batch_size=None, ignore_conflicts=False, update_conflicts=False, **kwargs):
+        """Reject the conflict-handling kwargs instead of quietly doing the
+        wrong thing.
+
+        Django puts `ON CONFLICT` on the relation it inserts into — here, the
+        view. A view has no unique index, so `update_conflicts` fails outright
+        ("no unique or exclusion constraint matching the ON CONFLICT
+        specification") while `ignore_conflicts` is accepted and then does
+        nothing: the real insert happens one level down inside the INSTEAD OF
+        trigger, with no conflict clause, so the duplicate raises anyway. The
+        silent one is the dangerous one — it only misbehaves in exactly the
+        case the caller thought they'd handled."""
+        if ignore_conflicts or update_conflicts:
+            kwarg = "ignore_conflicts" if ignore_conflicts else "update_conflicts"
+            raise OverlayConfigurationError(
+                f"bulk_create({kwarg}=True) isn't supported on {self.model.__name__} — it's an "
+                "overlay model, so the insert targets a view and Postgres has no unique index "
+                "there to detect a conflict against. Catch IntegrityError around a plain "
+                "bulk_create(), or filter the batch against the view first."
+            )
+        return super().bulk_create(
+            objs,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            **kwargs,
+        )
+
+
+OverlayManager = models.Manager.from_queryset(OverlayQuerySet)
 
 
 def _default_strategy() -> Strategy:
@@ -25,10 +208,16 @@ def _default_strategy() -> Strategy:
 
 
 def _default_soft_delete() -> bool:
-    """Lets a project opt every model into soft delete by default via
-    settings.DJANGO_OVERLAY_DEFAULT_SOFT_DELETE. A model can still override
-    this with its own OverlayMeta.soft_delete."""
-    configured = getattr(settings, "DJANGO_OVERLAY_DEFAULT_SOFT_DELETE", False)
+    """Soft delete is the default, because it is the one that makes `.delete()`
+    behave the way Django users expect: the row stays gone.
+
+    Without it, deleting a source-backed row only drops your local copy, so the
+    row reappears showing the vendor's pristine values — correct for the
+    architecture, surprising as a default. A model that genuinely wants that
+    (or a purely organic model, where a tombstone masks nothing and costs an
+    index entry forever) can set `soft_delete = False`, and a project can flip
+    the default back with settings.DJANGO_OVERLAY_DEFAULT_SOFT_DELETE."""
+    configured = getattr(settings, "DJANGO_OVERLAY_DEFAULT_SOFT_DELETE", True)
     if not isinstance(configured, bool):
         raise ImproperlyConfigured(f"settings.DJANGO_OVERLAY_DEFAULT_SOFT_DELETE must be a bool, got {configured!r}.")
     return configured
@@ -36,7 +225,9 @@ def _default_soft_delete() -> bool:
 
 # Options that emit DDL go on the base (managed=True) model; everything
 # else (ordering, verbose_name, ...) goes on the view model, since that's
-# what's actually queried.
+# what's actually queried. `constraints` can't simply go on both — duplicate
+# constraint names across two models is models.E032 — so the view model
+# reaches them through OverlayModel.get_constraints() instead.
 _BASE_ONLY_META_OPTIONS = ("constraints", "indexes", "unique_together", "index_together", "db_table_comment")
 
 # Neither model is a sound home for these: the view model is unmanaged, so
@@ -96,6 +287,24 @@ class OverlayMeta:
         raise NotImplementedError("OverlayMeta subclasses must implement get_source().")
 
 
+def _base_field_copy(field):
+    """The base model's copy of a declared field — see fields.base_model_copy
+    and fields.hide_reverse_side for what differs from the view model's.
+
+    Both models declare every concrete field, so a relation with an explicit
+    related_name would be declared twice against the same target — a
+    fields.E304/E305 clash that fails `manage.py check` at boot (and makes an
+    OverlayForeignKey between two overlay models impossible). Hiding the base
+    side also keeps Django's delete collector out of the hidden table: left
+    visible, a cascade from the far end would delete base rows directly and
+    walk straight past the view's INSTEAD OF triggers, so a soft_delete model
+    would be hard-deleted."""
+    copied = base_model_copy(field)
+    if copied.remote_field is not None:
+        hide_reverse_side(copied)
+    return copied
+
+
 class OverlayModelBase(models.base.ModelBase):
     """Splits one `class Person(OverlayModel)` into a hidden managed=True
     base table and the managed=False view model the app actually imports."""
@@ -146,11 +355,15 @@ class OverlayModelBase(models.base.ModelBase):
 
         base_meta_options, view_meta_options = _split_meta_options(name, namespace.get("Meta"))
 
-        base_ns = {**rest_items, **{k: copy.deepcopy(v) for k, v in field_items.items()}}
+        base_fields = {k: _base_field_copy(v) for k, v in field_items.items()}
+        base_ns = {**rest_items, **base_fields}
         if overlay_meta.soft_delete:
             # Base-only shadow flag — never copied to the view model, so it
             # never shows up as a queryable column there.
             base_ns["_overlay_deleted"] = models.BooleanField(default=False, editable=False)
+            # Every uniqueness rule has to ignore tombstoned rows, or a
+            # soft-deleted row keeps its value reserved forever.
+            base_meta_options = uniqueness.narrow_for_soft_delete(base_meta_options)
         base_ns["__qualname__"] = f"{name}Base"
         # No default_permissions for the base table — nobody should see
         # "Can add <name>base" in an admin permission list.
@@ -158,8 +371,28 @@ class OverlayModelBase(models.base.ModelBase):
         base_model = super().__new__(mcs, f"{name}Base", bases, base_ns, **kwargs)
 
         view_ns = {**rest_items, **{k: copy.deepcopy(v) for k, v in field_items.items()}, **m2m_items}
+        wants_overlay_base_manager = False
+        if not any(isinstance(v, models.Manager) for v in rest_items.values()):
+            # Only when the model declares no manager of its own — overriding
+            # someone's custom manager would be worse than missing the guard.
+            view_ns["objects"] = OverlayManager()
+            wants_overlay_base_manager = True
         view_ns["Meta"] = type("Meta", (), {**view_meta_options, "db_table": f"{table_name}_view", "managed": False})
         view_model = super().__new__(mcs, name, bases, view_ns, **kwargs)
+
+        if wants_overlay_base_manager and "base_manager_name" not in view_meta_options:
+            # instance.save() goes through _base_manager, which Django otherwise
+            # builds as a plain Manager — so without this the routing in
+            # OverlayQuerySet is reachable from update() but not from save().
+            # Safe as a base manager: the overrides refuse or reroute writes and
+            # filter nothing out.
+            #
+            # Set on _meta rather than in Meta above on purpose. Meta options go
+            # into original_attrs, which the autodetector compares, so declaring
+            # it there makes every project using this library owe an
+            # AlterModelOptions migration for a manager the library chose. This
+            # sets the same attribute without claiming the user declared it.
+            view_model._meta.base_manager_name = "objects"
 
         view_model._base_model = base_model
         view_model._overlay_meta = overlay_meta
@@ -185,6 +418,22 @@ class OverlayModel(models.Model, metaclass=OverlayModelBase):
     @classmethod
     def get_source(cls):
         return cls._overlay_meta.get_source()
+
+    def get_constraints(self):
+        """Meta.constraints live on the hidden base model, because that's the
+        model that emits their DDL — so Django's own implementation finds
+        nothing to validate here and full_clean() would silently pass a value
+        the database is going to reject.
+
+        Reported against *this* model on purpose: a constraint validates by
+        querying the model it's handed, and querying the view is exactly right
+        — it spans base ∪ source, so an OverlayUniqueConstraint catches a
+        collision with an untouched source row as well as with a local one.
+
+        A soft_delete model's constraints carry a predicate on
+        `_overlay_deleted`, a base-only column the view model can't resolve, so
+        they're handed over un-narrowed — see uniqueness.for_validation()."""
+        return [(type(self), uniqueness.for_validation(self._base_model._meta.constraints))]
 
     def reset_to_source(self):
         """Discard this row's local materialization/soft-deletion and fall

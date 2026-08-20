@@ -7,6 +7,11 @@ __pycache__
 htmlcov
 .hypothesis
 
+# mutmut — the mutated copy of the tree plus its cached per-mutant results
+mutants
+.mutmut-cache
+mutmut-stats.json
+
 # IDEs & Editors
 .idea
 

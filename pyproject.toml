@@ -32,6 +32,7 @@ dev-dependencies = [
     "ruff>=0.9.0",
     "sqlfluff>=3.0.0",
     "django-tenants>=3.6.0",
+    "mutmut>=3.7.0",
 ]
 
 [build-system]
@@ -42,6 +43,9 @@ build-backend = "hatchling.build"
 line-length = 120
 fix = true
 extend-exclude = ["*/migrations/*"]
+# Long SQL/template fragments have to match the source byte for byte.
+[tool.ruff.lint.per-file-ignores]
+"tests/probe_unreachable_mutants.py" = ["E501"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -60,6 +64,43 @@ testpaths = ["tests"]
 # invocation — see docs/development/DEVELOPMENT.md. Excluded here so the
 # default run doesn't try to collect it against the plain settings module.
 addopts = "--ignore=tests/test_tenants"
+markers = [
+    "concurrency: spawns threads and real connections to race them. Excluded from",
+    "mutation runs, where a mutation can leave a thread waiting on a lock that is",
+    "never released and turn a killed mutant into a timeout. The unreachable-mutant",
+    "harness runs the full suite, so these are still mutation-covered.",
+]
+
+# Mutation testing. Policy: zero surviving mutants — see
+# docs/development/DEVELOPMENT.md. A mutant that is genuinely equivalent
+# (the mutated code is indistinguishable from the original) gets a
+# `# pragma: no mutate` on its line with a comment saying why, rather than
+# being tolerated in the report.
+[tool.mutmut]
+source_paths = ["django_overlay/"]
+also_copy = ["tests/", "pyproject.toml", "sqlfluff_libs/"]
+# Run the whole suite for every mutant instead of mutmut's per-mutant test
+# selection. That selection comes from tracing which test calls which
+# function, and it under-selects badly here: mutating SyncOverlayView.forward
+# picks six tests that never apply a migration. Running everything costs
+# ~3s/mutant and removes the guesswork.
+pytest_add_cli_args = ["tests/", "-m", "not concurrency"]
+# operations.py is invisible to mutation testing as the suite is written
+# today: everything in it runs inside pytest-django's session-scoped database
+# setup rather than inside a test, and mutmut's trampoline doesn't swap in the
+# mutant there. Verified — `model = None` in SyncOverlayView.forward leaves
+# all 202 tests passing under mutmut, while the same edit applied directly to
+# the source breaks 97 of them. Mutants here would always "survive" and no
+# amount of test-writing would kill them, so they'd make the policy below
+# meaningless. Lifting this needs tests that apply migrations inside the test
+# body — see KNOWN_ISSUES/09.
+do_not_mutate = ["django_overlay/operations.py"]
+# Uncomment to scope a run to specific modules — a full pass is ~1000 mutants
+# at roughly the suite's runtime each, which is hours. See KNOWN_ISSUES/10.
+# only_mutate = ["django_overlay/uniqueness.py"]
+# One child at a time: every test process talks to the same Postgres test
+# database, so parallel children would race each other's schema.
+max_children = 1
 
 [tool.coverage.run]
 source = ["django_overlay"]
