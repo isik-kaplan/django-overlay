@@ -1,14 +1,55 @@
 name: Tests
 
+# Tests run on everything: every pull request whatever it targets, and every
+# push to master. The `pull_request` trigger is deliberately unfiltered rather
+# than paired with a `push` trigger on all branches — a branch that is pushed
+# and then opened as a PR would otherwise run the whole matrix twice.
 on:
   push:
     branches:
       - master
   pull_request:
-    branches:
-      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # Is this run one we trust to be worth hours of compute? Mutation testing is
+  # up to two hours, and running it for anybody who opens a pull request is
+  # both an easy way to burn the account's minutes and a way to train everyone
+  # to ignore a red check that was never going to finish.
+  #
+  # `author_association` is GitHub's own answer to "does this person have
+  # standing in this repository". Anything that is not a pull request — a push
+  # to master, a manual dispatch — is by definition already gated on write
+  # access, so it passes.
+  #
+  # The same block exists in benchmarks.yml. Two copies of ten lines beat a
+  # reusable workflow for something this small, but they must move together.
+  gate:
+    runs-on: ubuntu-22.04
+    outputs:
+      maintainer: ${{ steps.check.outputs.maintainer }}
+    steps:
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "maintainer=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR)
+              echo "maintainer=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "maintainer=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::Mutation testing is skipped for outside contributions; it runs on master after merge." ;;
+          esac
+
   test:
     strategy:
       fail-fast: false
@@ -96,6 +137,14 @@ jobs:
     #
     # Single Python version on purpose: mutation results don't vary across
     # interpreters, and this job runs the whole suite once per mutant.
+    #
+    # Maintainer runs only — see the `gate` job. On an outside contributor's
+    # pull request this is skipped and the policy is enforced on master after
+    # merge instead. The trade is deliberate: a surviving mutant can reach
+    # master and be caught one commit later, which is better than every
+    # contributor waiting two hours for a check they cannot interpret.
+    needs: gate
+    if: needs.gate.outputs.maintainer == 'true'
     runs-on: ubuntu-22.04
     # A cold run is ~1100 mutants, each running the whole suite, which is
     # hours — the cache below is what makes this viable, since mutmut's git

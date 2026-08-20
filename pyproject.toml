@@ -21,6 +21,13 @@ dependencies = ["django>=4.2", "jinja2>=3.1.0"]
 Homepage = "https://github.com/isik-kaplan/django-overlay"
 Repository = "https://github.com/isik-kaplan/django-overlay"
 
+# The only shipped entry point. Its `benchmark` subcommand resolves lazily
+# against the `benchmark/` directory, which is excluded from the wheel below —
+# so an installed copy gets a working `--help` and a clear message, and a
+# source checkout gets the real thing. See django_overlay/cli.py.
+[project.scripts]
+django-overlay = "django_overlay.cli:main"
+
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.0.0",
@@ -33,11 +40,34 @@ dev-dependencies = [
     "sqlfluff>=3.0.0",
     "django-tenants>=3.6.0",
     "mutmut>=3.7.0",
+    # The benchmark CLI. Not a runtime dependency of the library — the shipped
+    # shim in django_overlay/cli.py imports it only when the command is run.
+    "click>=8.1.0",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# What ships. `benchmark/` carries a docker compose file, its own settings
+# module and a data generator that writes millions of rows; `tests/` carries
+# the Django app those models live in. Neither is any use to somebody who
+# installed the library, and both are large.
+[tool.hatch.build.targets.wheel]
+packages = ["django_overlay"]
+
+# Local working notes are kept out of git via .git/info/exclude rather than
+# .gitignore, which hatchling reads — so without naming them here they would
+# be picked up as ordinary untracked files and shipped in the sdist.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "benchmark",
+    "mutants",
+    "KNOWN_ISSUES",
+    "TODO",
+    "PERFORMANCE-TODO.md",
+    "django_overlay_code_review.md",
+]
 
 [tool.ruff]
 line-length = 120
@@ -54,7 +84,7 @@ unfixable = []
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
-known-first-party = ["django_overlay"]
+known-first-party = ["benchmark", "django_overlay"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.django_settings"

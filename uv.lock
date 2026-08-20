@@ -245,6 +245,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "click" },
     { name = "django-tenants" },
     { name = "hypothesis" },
     { name = "mutmut" },
@@ -265,6 +266,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "click", specifier = ">=8.1.0" },
     { name = "django-tenants", specifier = ">=3.6.0" },
     { name = "hypothesis", specifier = ">=6.130.0" },
     { name = "mutmut", specifier = ">=3.7.0" },

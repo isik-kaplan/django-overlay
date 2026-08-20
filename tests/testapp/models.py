@@ -1047,7 +1047,8 @@ class NullableFkOverlay(OverlayModel):
 
 
 # ---------------------------------------------------------------------------
-# The production-shaped benchmark graph (tests/probe_bench_graph.py).
+# The production-shaped benchmark graph. Built by benchmark/graph.py; the
+# models stay here because the permanent test suite depends on them too.
 #
 # Four entities the tenant may override and soft-delete, linked by three M2M
 # through models it may only add to and remove from. The two halves sit at

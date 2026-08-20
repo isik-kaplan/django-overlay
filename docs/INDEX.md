@@ -21,3 +21,4 @@
 
 **Development**
 - [development/DEVELOPMENT.md](development/DEVELOPMENT.md) — running the tests
+- [development/BENCHMARKS.md](development/BENCHMARKS.md) — `django-overlay benchmark`, the suites, the runtime budget

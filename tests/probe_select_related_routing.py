@@ -6,7 +6,7 @@ from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
-from tests.probe_bench_graph import load
+from benchmark.graph import load
 from tests.testapp.models import BenchPersonPhone
 
 

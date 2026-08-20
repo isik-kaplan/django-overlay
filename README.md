@@ -40,3 +40,7 @@ See [docs/reference/COMPATIBILITY.md](docs/reference/COMPATIBILITY.md) for measu
 tables of exactly where this matches a plain Django model and where it doesn't,
 and [docs/INDEX.md](docs/INDEX.md) for everything else — usage, how it
 works, ids, uniqueness, deletion, migrations, and running the tests.
+
+From a source checkout, `uv run django-overlay benchmark` measures all of this
+against plain tables holding identical rows — see
+[docs/development/BENCHMARKS.md](docs/development/BENCHMARKS.md).

@@ -1,6 +1,6 @@
 """132 matching people, 84ms on a plain table, over four minutes on the view.
 
-probe_selectivity_sweep set out to show that the earlier pessimistic numbers
+The `selectivity` benchmark suite set out to show that the earlier pessimistic numbers
 were an artifact of filtering on a four-valued column, and found the opposite:
 the *narrowest* condition in the sweep was the one that stalled. A 2,850x gap
 on a result set of 132 rows is not a per-row cost, it is a plan going wrong,
@@ -31,7 +31,7 @@ import pytest
 from django.db import OperationalError, connection
 from django.test import override_settings
 
-from tests.probe_bench_graph import load
+from benchmark.graph import load
 from tests.testapp.models import BenchPerson, PlainPerson
 
 

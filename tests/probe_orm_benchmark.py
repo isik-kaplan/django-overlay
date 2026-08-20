@@ -28,8 +28,8 @@ from django.db.models import Avg, Count, Max
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
+from benchmark.graph import load
 from django_overlay.exceptions import OverlayConfigurationError
-from tests.probe_bench_graph import load
 from tests.testapp.models import (
     BenchAddress,
     BenchPerson,

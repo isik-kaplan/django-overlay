@@ -1,0 +1,47 @@
+# The database the benchmark runs against by default.
+#
+# Two things matter here beyond "a postgres".
+#
+# The volume is named per major version and is NOT anonymous, so the loaded
+# graph and its bench_cache schema survive `down`, a reboot, and the next run.
+# A cold build at scale 1.0 is minutes; paying it once instead of every
+# invocation is the difference between a tool you use and one you avoid. The
+# version is in the volume name because a data directory initialised by one
+# major version will not start under another, and silently failing to start is
+# a much worse experience than keeping two volumes.
+#
+# work_mem and shared_buffers are passed in rather than left at the defaults
+# because both have moved headline numbers in this project by more than the
+# effects being measured, and a benchmark that cannot state them is an
+# anecdote. The defaults below match a stock Postgres, which is what the
+# existing measurements were taken on.
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-17}
+    container_name: django-overlay-bench-pg${POSTGRES_VERSION:-17}
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: benchmark
+      POSTGRES_DB: django_overlay_bench
+    command:
+      - postgres
+      - -c
+      - work_mem=${WORK_MEM:-4MB}
+      - -c
+      - shared_buffers=${SHARED_BUFFERS:-128MB}
+      - -c
+      - max_connections=20
+    ports:
+      - "${HOST_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d django_overlay_bench"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
+    name: django-overlay-bench-pg${POSTGRES_VERSION:-17}-data
