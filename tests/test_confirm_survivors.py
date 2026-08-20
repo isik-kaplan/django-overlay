@@ -642,3 +642,83 @@ def test_every_shard_the_workflow_runs_can_be_confirmed():
     assert "confirm_survivors.py" in workflow
     for shard in confirm_survivors.expected_shards():
         assert shard in workflow, f"{shard} is in the shard map but not in mutation.yml"
+
+
+# ----------------------------------- the other harness: an interrupted probe
+#
+# tests/probe_unreachable_mutants.py mutation-tests the regions mutmut cannot
+# reach, by editing the source and putting it back. The restore is a `finally`,
+# which covers an exception and nothing else -- a SIGKILL or a step timeout
+# leaves the mutation applied. The next run then reads a mutated file as its
+# "original": every pattern in it reports STALE, and every other mutation in
+# the same file is measured against source that is already broken. That happened
+# here, and it cost a full run before the two STALE lines were recognised as an
+# artifact rather than a refactor nobody had updated the list for.
+
+
+def load_probe():
+    path = ROOT / "tests" / "probe_unreachable_mutants.py"
+    spec = importlib.util.spec_from_file_location("probe_unreachable_mutants", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault("probe_unreachable_mutants", module)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_killed_run_leaves_a_record_of_what_it_applied(tmp_path, monkeypatch):
+    probe = load_probe()
+    source = tmp_path / "module.py"
+    source.write_text("original\n")
+    monkeypatch.setattr(probe, "ROOT", tmp_path)
+    monkeypatch.setattr(probe, "IN_FLIGHT", tmp_path / "in-flight.json")
+
+    probe.record_in_flight("module.py", "original\n")
+    source.write_text("mutated\n")
+
+    assert probe.restore_in_flight() == "module.py"
+    assert source.read_text() == "original\n"
+
+
+def test_the_record_is_gone_once_it_has_been_used(tmp_path, monkeypatch):
+    """Otherwise the next run puts the file back a second time, over whatever
+    somebody has since written there."""
+    probe = load_probe()
+    source = tmp_path / "module.py"
+    source.write_text("original\n")
+    monkeypatch.setattr(probe, "ROOT", tmp_path)
+    monkeypatch.setattr(probe, "IN_FLIGHT", tmp_path / "in-flight.json")
+
+    probe.record_in_flight("module.py", "original\n")
+    probe.restore_in_flight()
+
+    source.write_text("deliberate local edit\n")
+    assert probe.restore_in_flight() is None
+    assert source.read_text() == "deliberate local edit\n"
+
+
+def test_a_clean_finish_leaves_nothing_to_recover(tmp_path, monkeypatch):
+    probe = load_probe()
+    monkeypatch.setattr(probe, "ROOT", tmp_path)
+    monkeypatch.setattr(probe, "IN_FLIGHT", tmp_path / "in-flight.json")
+
+    probe.record_in_flight("module.py", "original\n")
+    probe.clear_in_flight()
+    assert probe.restore_in_flight() is None
+
+
+def test_the_record_never_lands_in_the_working_tree():
+    """It goes inside .git/, so it cannot be committed and does not show up as
+    an untracked file that somebody has to explain."""
+    probe = load_probe()
+    assert probe.IN_FLIGHT.parent.name == ".git"
+
+
+def test_a_checkout_that_is_not_a_repository_still_runs(tmp_path, monkeypatch):
+    """The safety net is a convenience, not a precondition. No .git/, no record,
+    and the run proceeds exactly as it did before."""
+    probe = load_probe()
+    monkeypatch.setattr(probe, "ROOT", tmp_path)
+    monkeypatch.setattr(probe, "IN_FLIGHT", tmp_path / "nonexistent" / "in-flight.json")
+
+    probe.record_in_flight("module.py", "original\n")
+    assert probe.restore_in_flight() is None
