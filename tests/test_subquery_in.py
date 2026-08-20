@@ -163,6 +163,28 @@ def test_it_can_be_turned_off():
     assert " IN (SELECT" in clause
 
 
+@override_settings(DJANGO_OVERLAY_ARRAY_SUBQUERY_IN=False)
+def test_the_fence_can_be_turned_off_too():
+    """The opt-out covers both lookups that honour it, not just the one on a
+    foreign key.
+
+    They share the array-building code and deliberately do not share a parent:
+    OverlaySubqueryIn extends RelatedIn, OverlayFencedIn extends In. While the
+    second borrowed the first's `as_sql`, its zero-arg `super()` resolved
+    against a class outside its own MRO -- so this exact configuration raised
+    `TypeError: super(type, obj): obj must be an instance or subtype of type`
+    on any m2m-fenced query. The test above covers the foreign-key side, which
+    is why the crash sat in a documented setting undetected.
+    """
+    from tests.testapp.models import Roster
+
+    fenced = Roster.objects.filter(members__name="m")
+    clause = str(fenced.query)
+
+    assert "ANY (ARRAY" not in clause
+    assert list(fenced) == [], "and it still executes"
+
+
 @override_settings(DJANGO_OVERLAY_ARRAY_SUBQUERY_IN="yes please")
 def test_a_non_boolean_setting_is_refused():
     inner = WideCustomerU7.objects.filter(city="city42").values("id")

@@ -131,11 +131,27 @@ class OverlaySubqueryIn(RelatedIn):
     def as_sql(self, compiler, connection):
         if self.rhs_is_direct_value() or not _array_subquery_in_enabled():
             return super().as_sql(compiler, connection)
-        lhs_sql, lhs_params = self.process_lhs(compiler, connection)
-        rhs_sql, rhs_params = self.process_rhs(compiler, connection)
-        # process_rhs already parenthesises the subquery, so `ARRAY` + that is
-        # `ARRAY(SELECT ...)`.
-        return f"{lhs_sql} = ANY (ARRAY{rhs_sql})", list(lhs_params) + list(rhs_params)
+        return _array_in_sql(self, compiler, connection)
+
+
+def _array_in_sql(lookup, compiler, connection):
+    """`lhs = ANY (ARRAY(subquery))` — see OverlaySubqueryIn for why.
+
+    A function rather than a shared method, because the two lookups that need
+    it have deliberately different parents: OverlaySubqueryIn extends RelatedIn
+    for a foreign key's instance-to-pk conversion, and OverlayFencedIn extends
+    In because a primary key needs none of that. A zero-arg `super()` resolves
+    against the class that *defined* the method, so one class borrowing the
+    other's `as_sql` gets a super() pointing outside its own MRO — which raised
+    TypeError on the fallback branch, reachable whenever
+    DJANGO_OVERLAY_ARRAY_SUBQUERY_IN is off. Each class keeps its own three-line
+    as_sql now, and only the part that has no super() call is shared.
+    """
+    lhs_sql, lhs_params = lookup.process_lhs(compiler, connection)
+    rhs_sql, rhs_params = lookup.process_rhs(compiler, connection)
+    # process_rhs already parenthesises the subquery, so `ARRAY` + that is
+    # `ARRAY(SELECT ...)`.
+    return f"{lhs_sql} = ANY (ARRAY{rhs_sql})", list(lhs_params) + list(rhs_params)
 
 
 OverlayForeignKey.register_lookup(OverlaySubqueryIn)
@@ -173,7 +189,12 @@ class OverlayFencedIn(In):
 
     lookup_name = "overlay_fenced_in"
 
-    as_sql = OverlaySubqueryIn.as_sql
+    def as_sql(self, compiler, connection):
+        # Written out rather than borrowed from OverlaySubqueryIn: see
+        # _array_in_sql for what borrowing it did to `super()`.
+        if self.rhs_is_direct_value() or not _array_subquery_in_enabled():
+            return super().as_sql(compiler, connection)
+        return _array_in_sql(self, compiler, connection)
 
 
 class OverlayOneToOneField(OverlayForeignKey, models.OneToOneField):
