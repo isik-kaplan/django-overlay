@@ -38,16 +38,54 @@ it did. Mutation testing closes that gap: `mutmut` makes small changes to
 `django_overlay/` and expects the suite to fail for each one.
 
 ```bash
-POSTGRES_USER=postgres uv run mutmut run     # ~3s per mutant
+POSTGRES_USER=postgres uv run mutmut run --max-children 1
 uv run mutmut browse                          # inspect what lived
 uv run mutmut show <mutant-name>              # the diff for one mutant
 ```
 
+`--max-children 1` is mandatory, not a preference. mutmut otherwise forks one
+child per CPU, and every child talks to the same Postgres test database: they
+race each other's schema, tests fail for reasons unrelated to the mutation, and
+mutmut reads those failures as mutants killed. A run without it reports a
+perfect score it did not measure. It cannot go in `[tool.mutmut]` — mutmut
+accepts it only as a flag and ignores unknown config keys silently — so
+`tests/test_mutmut_config.py` guards the config against claiming otherwise. For
+the same reason, nothing else may touch the test database while a run is going,
+including a stray `pytest` in another terminal.
+
 **Policy: no mutant survives.** A mutant that lives is a change to the
 package that no test objects to — either a test is missing or the code is
-dead. CI enforces this (`mutation` job in `.github/workflows/tests.yml` via
+dead. CI enforces this (`.github/workflows/mutation.yml` via
 `.github/scripts/check_mutants.py`), counting `survived`, `suspicious`,
 `timeout`, `no_tests` and `segfault` all as alive.
+
+### Shards
+
+A full pass is one CI job per subsystem, each mutating a slice of
+`django_overlay/` and running the **whole** suite. Reproduce any one of them:
+
+```bash
+uv run python .github/scripts/mutation_shards.py --list
+uv run python .github/scripts/mutation_shards.py models   # rewrites [tool.mutmut]
+POSTGRES_USER=postgres uv run mutmut run --max-children 1
+```
+
+Sharding the *mutants* rather than the tests is the only split that keeps the
+answer: a mutant is killed if *any* test kills it, so a shard holding half the
+suite would report "survived" for mutants the other half kills, and mutmut has
+no way to intersect verdicts across runs. Because every shard runs everything,
+its verdicts are what a single job would have produced and the union is the
+full result. `only_mutate` is excluded from mutmut's config fingerprint, so
+switching shards invalidates no cached verdict.
+
+`tests/test_mutation_shards.py` asserts the map covers the package exactly
+once, in the ordinary test run — add a module without assigning it to a shard
+and `pytest` fails with its name, rather than the module silently never being
+mutated.
+
+The `models` shard is 42% of the mutants on its own and `only_mutate` matches
+files rather than line ranges, so it cannot be split further. It is the
+critical path.
 
 The one legitimate exit is a genuinely equivalent mutant — one whose mutated
 form is indistinguishable from the original. Mark it in place and say why:
@@ -82,11 +120,21 @@ A mutation that provably *cannot* be killed is marked `"equivalent"` in the
 list with a comment saying why, and the harness then asserts it survives — so
 if the reasoning ever stops holding, that shows up too.
 
-Two configuration notes, both in `[tool.mutmut]` and both load-bearing:
+Three configuration notes, all in `[tool.mutmut]` and all load-bearing:
 
 - The full suite runs for every mutant (`pytest_add_cli_args = ["tests/"]`).
   mutmut's own per-mutant test selection under-selects badly for this
   package.
+- The per-mutant wall limit is a flat ~15 minutes
+  (`timeout_multiplier = 1.0`, `timeout_constant = 900`), not the default
+  `(traced + 1) × 15`. The default is computed from the tests mutmut's tracing
+  associates with the mutant, but the line above makes the whole suite run
+  regardless — so the limit came out near 16s against a full pass of 69–97s on
+  a CI runner. A killed mutant exits at the first failing test and never
+  notices; a survivor has to reach the end, so it was cut off and filed as
+  `timeout`. `survived` was unreachable, and a run reporting 0 survivors and
+  230 timeouts was reporting 230 survivors it could not name. Changing either
+  value resets only timeout verdicts, never killed ones.
 - `django_overlay/operations.py` is excluded. Its code runs inside
   pytest-django's session-scoped database setup rather than inside a test,
   where mutmut cannot swap the mutant in — every mutant there would survive

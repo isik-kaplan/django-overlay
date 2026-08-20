@@ -23,7 +23,11 @@ reimplement:
     afternoon.
 """
 
+import signal
+import sys
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from django.db import OperationalError, connection
@@ -88,25 +92,134 @@ def set_statement_cap(milliseconds):
         cursor.execute("SET lock_timeout = 5000")
 
 
-def measure(build, cap_ms, rounds=3, give_up_after_ms=5_000):
+class Abandoned(Exception):
+    """Raised inside a measurement that has run past its wall-clock ceiling."""
+
+
+@contextmanager
+def abandon_after(seconds):
+    """Raise `Abandoned` inside the block if it runs longer than `seconds`.
+
+    The statement cap bounds what Postgres will spend on a query. Nothing
+    bounded what Django spends around it, and the two are not close: a staged
+    strategy resolves one leaf, pulls its primary keys into Python, and hands
+    six figures of them back as a `pk__in`, which is compiled, parameterised
+    and marshalled entirely client-side. Observed in CI -- `staged` at scale
+    0.3, estimated at twenty-one seconds, was thirty-seven minutes into a
+    single measurement when the job timeout killed the run. The budget could
+    not stop it because a budget checked between measurements cannot interrupt
+    the measurement it is inside.
+
+    A signal is the only thing that reaches into a call already in progress.
+    It requires the main thread of a POSIX process; anywhere else this is a
+    no-op, so the ceiling degrades to "not enforced" rather than to a crash.
+    """
+    usable = (
+        seconds is not None
+        and seconds > 0
+        and hasattr(signal, "setitimer")
+        and threading.current_thread() is threading.main_thread()
+    )
+    if not usable:
+        yield
+        return
+
+    def fire(signum, frame):
+        raise Abandoned
+
+    previous = signal.signal(signal.SIGALRM, fire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def _abandoned():
+    """The cell for a measurement that was cut off, plus the cleanup it needs.
+
+    The interrupt can land anywhere -- including between sending a statement
+    and reading its result -- so the connection is not in a state worth
+    reasoning about. Closing it is the one reset that is certain, and Django
+    reopens on next use.
+    """
+    connection.close()
+    return Cell(0.0, note="gave up")
+
+
+# The SQLSTATEs that mean "a cap did its job". Everything else arriving as an
+# OperationalError means the connection itself is in trouble, and the two must
+# not share a cell: see _cap_or_lost.
+CAP_SQLSTATES = frozenset({
+    "57014",  # query_canceled -- statement_timeout
+    "55P03",  # lock_not_available -- lock_timeout
+})
+
+
+def _sqlstate(error):
+    """The Postgres error code behind a Django OperationalError, if there is one.
+
+    Django re-raises the driver's exception as its own with the original
+    attached, so the code lives on __cause__ rather than on what we catch.
+    """
+    return getattr(error.__cause__, "sqlstate", None)
+
+
+def _cap_or_lost(error, cap_ms):
+    """Tell "this query is too slow" apart from "this connection is broken".
+
+    Both surface as OperationalError, and treating the second as the first is
+    how a benchmark reports numbers it never measured. Observed in CI: a
+    connection was left with an unconsumed result part-way through `staged`,
+    every statement after it failed instantly with "another command is already
+    in progress", and all five rows of the next section printed `>10s did not
+    finish` -- five queries that were never sent, filed as five queries too
+    slow to finish. The suite after that died on its first statement, which is
+    the only reason it was noticed at all.
+
+    A cap is a real answer about the query, so it stays a capped cell. A broken
+    connection is not an answer at all: it gets a note, closing the connection
+    so the next measurement starts from something usable, and one line on
+    stderr, because the reason a connection broke is not in the table.
+    """
+    if _sqlstate(error) in CAP_SQLSTATES:
+        return Cell(float(cap_ms), capped=True)
+    connection.close()
+    first_line = str(error).strip().splitlines()[0] if str(error).strip() else error.__class__.__name__
+    print(f"LOST CONNECTION {first_line}", file=sys.stderr)
+    return Cell(0.0, note="conn lost")
+
+
+def measure(build, cap_ms, rounds=3, give_up_after_ms=5_000, abandon_after_s=None):
     """(Cell, value) -- best of `rounds` after a discarded warm-up.
 
     A statement that trips the cap returns a capped Cell and a value of None,
     so callers can tell "slow" from "did not finish" and skip the equality
-    check they cannot make against a missing answer.
+    check they cannot make against a missing answer. A measurement that runs
+    past `abandon_after_s` returns a "gave up" cell, which is a different
+    thing again: the cap was not reached, the wall clock was. A connection that
+    breaks gets a third answer -- "conn lost" -- rather than borrowing the
+    cap's.
     """
     try:
-        build()
-    except OperationalError:
-        return Cell(float(cap_ms), capped=True), None
+        with abandon_after(abandon_after_s):
+            build()
+    except OperationalError as error:
+        return _cap_or_lost(error, cap_ms), None
+    except Abandoned:
+        return _abandoned(), None
 
     best, value = None, None
     for _ in range(rounds):
         started = time.perf_counter()
         try:
-            value = build()
-        except OperationalError:
-            return Cell(float(cap_ms), capped=True), None
+            with abandon_after(abandon_after_s):
+                value = build()
+        except OperationalError as error:
+            return _cap_or_lost(error, cap_ms), None
+        except Abandoned:
+            return _abandoned(), None
         elapsed = (time.perf_counter() - started) * 1000
         best = elapsed if best is None else min(best, elapsed)
         # Something this slow will not become interesting on a third try, and

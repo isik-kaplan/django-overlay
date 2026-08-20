@@ -123,7 +123,25 @@ source_paths = ["django_overlay/"]
 # about eleven hours, silently, until a test finally depended on one and broke
 # the baseline. Paths in also_copy *are* re-copied each run, which is the fix.
 # If mutation results ever look impossible again, `rm -rf mutants` first.
-also_copy = ["tests/", "pyproject.toml", "sqlfluff_libs/", "django_overlay/sql_templates/"]
+#
+# benchmark/ is here because tests/ imports it — test_benchmark_tooling.py
+# directly, and test_cli.py through the shim's lazy import, which resolves to
+# None when the directory is absent and fails the assertion that it does not.
+# Without it the whole suite fails to collect inside mutants/ and mutmut
+# reports every mutant as unrun.
+# .github/ is here because tests/test_mutation_shards.py reads the shard map out
+# of .github/scripts/ and the matrix out of .github/workflows/. Without it that
+# test raises at import time, the whole suite fails to collect inside mutants/,
+# and mutmut reports every mutant as unrun -- which is how it was found, by the
+# guard in check_mutants.py, on the first shard run after the test was written.
+also_copy = [
+    "tests/",
+    "benchmark/",
+    ".github/",
+    "pyproject.toml",
+    "sqlfluff_libs/",
+    "django_overlay/sql_templates/",
+]
 # Run the whole suite for every mutant instead of mutmut's per-mutant test
 # selection. That selection comes from tracing which test calls which
 # function, and it under-selects badly here: mutating SyncOverlayView.forward
@@ -140,12 +158,53 @@ pytest_add_cli_args = ["tests/", "-m", "not concurrency"]
 # meaningless. Lifting this needs tests that apply migrations inside the test
 # body.
 do_not_mutate = ["django_overlay/operations.py"]
-# Uncomment to scope a run to specific modules — a full pass is ~1000 mutants
-# at roughly the suite's runtime each, which is hours.
-# only_mutate = ["django_overlay/uniqueness.py"]
-# One child at a time: every test process talks to the same Postgres test
-# database, so parallel children would race each other's schema.
-max_children = 1
+# only_mutate is not set here by hand. CI writes it per shard and a local run
+# scopes itself the same way, so the two cannot disagree:
+#
+#   python .github/scripts/mutation_shards.py models   # scope to one shard
+#   python .github/scripts/mutation_shards.py --clear  # mutate everything again
+#
+# The map is asserted against the filesystem by tests/test_mutation_shards.py,
+# so no module can quietly belong to no shard.
+# One child at a time is deliberately NOT set here, because it cannot be:
+# `max_children` is a flag on `mutmut run`, not a config key, and mutmut
+# discards keys it does not recognise without a word. So every invocation has
+# to pass `--max-children 1` on the command line, and tests/test_mutmut_config.py
+# fails if this file pretends otherwise.
+#
+# It matters more than a tuning knob should. Every test process talks to the
+# same Postgres test database, so parallel children race each other's schema,
+# tests fail for reasons that have nothing to do with the mutation, and every
+# mutant is recorded as killed. That is not a hypothetical: a full local run
+# reported 2,209 killed and 0 survived, and re-running uniqueness.py alone
+# serially found eight survivors. The failure mode is a green report.
+#
+# Parallelism comes from sharding across CI jobs instead -- see
+# .github/scripts/mutation_shards.py -- which needs no per-child database.
+# The per-mutant wall limit, which mutmut computes as
+# (estimated_time_of_tests + timeout_constant) * timeout_multiplier.
+#
+# The defaults (1.0 and 15.0) do not work here, and the reason is subtle enough
+# to have cost a full CI run. `estimated_time_of_tests` is summed over the
+# tests mutmut's tracing associates with the mutant -- but pytest_add_cli_args
+# is appended to that selection and contains `tests/`, so pytest collects the
+# whole suite regardless. The limit is therefore calibrated against a fraction
+# of the work that actually runs. For a mutant whose traced subset is near zero
+# it came out at ~16s, while one full pass on a CI runner is 69-97s. A killed
+# mutant exits at the first failing test and never notices; a survivor has to
+# reach the end, so it was cut off and recorded as `timeout`. `survived` was
+# structurally unreachable, and a run reporting 0 survivors and 230 timeouts
+# was reporting 230 survivors it could not name.
+#
+# So: a flat ~15 minutes, roughly ten full passes, which is "no limit" for any
+# mutant that terminates. Not removed altogether, because a mutant that
+# deadlocks on a lock rather than spinning would otherwise consume its entire
+# 6-hour shard and the run would report nothing at all -- and a run that never
+# finishes never writes a cache, which is the loop this was stuck in.
+#
+# Changing either value resets *only* timeout verdicts, never killed ones.
+timeout_multiplier = 1.0
+timeout_constant = 900.0
 
 [tool.coverage.run]
 source = ["django_overlay"]

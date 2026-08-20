@@ -69,13 +69,34 @@ statement cap bounds how long Postgres will spend on a query, but not how long
 Django spends marshalling a third of a million primary keys into one — which
 the `staged` suite does at scale 1.0. Past the deadline, remaining cells read
 `skipped` rather than a duration, and the suite is reported as **cut short**.
-Three cell states, and they are not interchangeable:
+
+Checking before a measurement cannot stop one already running, and that
+distinction cost a CI run: `staged` at scale 0.3, estimated at twenty-one
+seconds, spent thirty-seven minutes inside a single execution and was killed by
+the job timeout with twenty-two minutes of budget unspent. So each execution
+also carries a ceiling of its own — six times the statement cap, floor thirty
+seconds, never more than what is left of the budget — enforced with a signal,
+which is the only thing that reaches into a call already in progress. Past it,
+the cell reads `gave up`.
+
+Five cell states, and they are not interchangeable:
 
 | cell | means |
 |---|---|
 | `412ms` | measured |
 | `>10s` | ran past the statement cap — a lower bound, not a number |
+| `gave up` | the wall clock ran out mid-execution, not the cap |
+| `conn lost` | the connection broke; nothing was measured |
 | `skipped` | never run: the budget was gone |
+
+`conn lost` exists because the first two used to collapse into one. A statement
+timeout and a connection with an unconsumed result both reach the harness as
+`OperationalError`, so a run where the connection broke mid-suite printed five
+rows of `>10s did not finish` for queries that were never sent — five failures
+dressed as five measurements. The harness now reads the SQLSTATE: `57014` and
+`55P03` are the caps doing their job, anything else means the connection is
+gone, so it is closed, the cell says so, and the reason is written to stderr as
+`LOST CONNECTION …` where the CI summary picks it up.
 
 The estimate is printed before anything slow happens — before docker, before the
 schema, before the graph — so a `--scale 3.0` typed at four in the afternoon

@@ -16,6 +16,8 @@ The three things worth saying:
   * rows where the overlay and the plain mirror disagreed. The full suite does
     not gate on these -- the smoke job already did -- but they must not pass
     unremarked.
+  * connections the harness had to throw away. A lost connection costs a
+    measurement, and the cell says so, but the reason is only ever on stderr.
 """
 
 import pathlib
@@ -54,6 +56,7 @@ def main(path):
     budget = budget_block(lines)
     skipped = [line.strip() for line in lines if line.lstrip().startswith("SKIPPED ")]
     disagreements = [line.strip() for line in lines if re.match(r"^\s+- .+: ", line)]
+    lost = [line.strip() for line in lines if line.lstrip().startswith("LOST CONNECTION ")]
 
     if skipped:
         annotate("warning", "benchmark suites were skipped for budget: "
@@ -61,6 +64,9 @@ def main(path):
     if disagreements:
         annotate("warning", f"{len(disagreements)} row(s) where the overlay and the plain "
                             f"mirror returned different answers")
+    if lost:
+        annotate("warning", f"the harness lost its connection {len(lost)} time(s) -- "
+                            f"those cells are not measurements: {lost[0]}")
     if budget:
         annotate("notice", "benchmark budget -- " + "; ".join(budget))
 
@@ -77,6 +83,11 @@ def main(path):
         print("  --")
         print(f"  {len(disagreements)} disagreement(s) between overlay and plain:")
         for item in disagreements[:20]:
+            print(f"  {item}")
+    if lost:
+        print("  --")
+        print(f"  {len(lost)} lost connection(s):")
+        for item in lost[:20]:
             print(f"  {item}")
     print("=" * 78)
     return 0

@@ -15,7 +15,10 @@ any of them produces a plausible number rather than an obvious failure.
 None of this needs a database.
 """
 
+import time
+
 import pytest
+from django.db import OperationalError
 
 from benchmark import environment, estimates, harness, results
 from benchmark.cli import parse_duration
@@ -256,6 +259,152 @@ def test_a_context_with_no_deadline_never_skips():
 
     ctx = Context(scale=1.0, passes=1, cap_ms=10_000)
     assert not ctx.out_of_time()
+
+
+# ----------------------------------------- abandoning a measurement in flight
+#
+# The deadline check above happens before a measurement starts, which cannot
+# stop one already running. In CI the `staged` suite -- estimated at twenty-one
+# seconds -- spent thirty-seven minutes inside a single execution before the
+# job timeout killed the whole run, with twenty-two minutes of budget still
+# unspent. These cover the ceiling that now bounds each execution.
+
+
+def test_a_measurement_that_overruns_its_ceiling_is_abandoned():
+    def never_returns():
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            pass
+
+    started = time.monotonic()
+    measured, value = harness.measure(
+        never_returns, 10_000, rounds=1, abandon_after_s=0.2
+    )
+    assert measured.note == "gave up"
+    assert value is None
+    assert time.monotonic() - started < 5, "the ceiling did not interrupt anything"
+
+
+def test_an_abandoned_cell_is_not_a_capped_one():
+    """'we stopped waiting' is not 'Postgres gave up', and not a duration."""
+    gave_up = harness.Cell(0.0, note="gave up")
+    assert gave_up.render(10_000) == "gave up"
+    assert not gave_up.measured
+    assert harness.gain(harness.Cell(1000), gave_up) == ""
+
+
+def test_the_ceiling_is_lifted_once_the_measurement_finishes():
+    """A timer left armed would fire in the middle of the next measurement."""
+    harness.measure(lambda: 1, 10_000, rounds=1, abandon_after_s=0.3)
+    slow_but_fine = harness.measure(
+        lambda: time.sleep(0.5), 10_000, rounds=1, abandon_after_s=5
+    )
+    assert slow_but_fine[0].measured
+
+
+def test_no_ceiling_means_no_interruption():
+    measured, value = harness.measure(lambda: 7, 10_000, rounds=1, abandon_after_s=None)
+    assert measured.measured
+    assert value == 7
+
+
+def test_the_ceiling_never_outlasts_the_run_budget():
+    """One row is not allowed to eat the time the remaining suites need."""
+    from benchmark.suites import Context
+
+    roomy = Context(scale=1.0, passes=1, cap_ms=10_000, deadline=time.monotonic() + 3600)
+    assert roomy.measurement_ceiling() == 60.0
+
+    nearly_done = Context(scale=1.0, passes=1, cap_ms=10_000,
+                          deadline=time.monotonic() + 5)
+    assert nearly_done.measurement_ceiling() <= 5
+
+    unbounded = Context(scale=1.0, passes=1, cap_ms=10_000)
+    assert unbounded.measurement_ceiling() == 60.0
+
+
+def test_a_small_cap_still_gets_a_usable_ceiling():
+    """Six times a one-second cap is not long enough to be worth enforcing."""
+    from benchmark.suites import Context
+
+    ctx = Context(scale=1.0, passes=1, cap_ms=1_000)
+    assert ctx.measurement_ceiling() == 30.0
+
+
+# --------------------------------------- a cap and a broken connection differ
+#
+# Both arrive as OperationalError, and for one CI run they shared a cell. A
+# connection was left with an unconsumed result inside `staged`; every statement
+# after it failed instantly with "another command is already in progress"; and
+# five rows printed `>10s did not finish` for queries that were never sent.
+
+
+class _DriverError(Exception):
+    """Stands in for psycopg's error: an exception carrying a SQLSTATE."""
+
+    def __init__(self, sqlstate):
+        super().__init__(sqlstate or "no sqlstate")
+        self.sqlstate = sqlstate
+
+
+def _operational(sqlstate, message="boom"):
+    error = OperationalError(message)
+    error.__cause__ = _DriverError(sqlstate)
+    return error
+
+
+def _raise(error):
+    def build():
+        raise error
+
+    return build
+
+
+def test_a_statement_timeout_is_reported_as_capped():
+    measured, value = harness.measure(
+        _raise(_operational("57014", "canceling statement due to statement timeout")),
+        10_000,
+        rounds=1,
+    )
+    assert measured.capped
+    assert measured.render(10_000) == ">10s"
+    assert value is None
+
+
+def test_a_lock_timeout_is_reported_as_capped():
+    measured, _ = harness.measure(_raise(_operational("55P03")), 10_000, rounds=1)
+    assert measured.capped
+
+
+def test_a_broken_connection_is_not_reported_as_capped(capsys):
+    measured, value = harness.measure(
+        _raise(_operational(None, "sending query failed: another command is already in progress")),
+        10_000,
+        rounds=1,
+    )
+    assert not measured.capped, "a query that was never sent is not a slow query"
+    assert measured.note == "conn lost"
+    assert not measured.measured
+    assert value is None
+    assert "LOST CONNECTION" in capsys.readouterr().err
+
+
+def test_the_reason_a_connection_was_lost_reaches_the_log(capsys):
+    """The cell has room for two words; the cause has to go somewhere."""
+    harness.measure(_raise(_operational(None, "server closed the connection")), 10_000, rounds=1)
+    assert "server closed the connection" in capsys.readouterr().err
+
+
+def test_an_error_with_no_driver_cause_is_treated_as_a_lost_connection():
+    """Unrecognised means unknown, and unknown must not be filed as a timing."""
+    measured, _ = harness.measure(_raise(OperationalError("no cause attached")), 10_000, rounds=1)
+    assert measured.note == "conn lost"
+
+
+def test_a_lost_connection_yields_no_gain_and_no_ratio():
+    lost = harness.Cell(0.0, note="conn lost")
+    assert lost.render(10_000) == "conn lost"
+    assert harness.gain(harness.Cell(1000), lost) == ""
 
 
 # ------------------------------------------------------ the suite registry
