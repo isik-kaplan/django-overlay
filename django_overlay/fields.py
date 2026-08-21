@@ -143,9 +143,10 @@ def _array_in_sql(lookup, compiler, connection):
     In because a primary key needs none of that. A zero-arg `super()` resolves
     against the class that *defined* the method, so one class borrowing the
     other's `as_sql` gets a super() pointing outside its own MRO — which raised
-    TypeError on the fallback branch, reachable whenever
-    DJANGO_OVERLAY_ARRAY_SUBQUERY_IN is off. Each class keeps its own three-line
-    as_sql now, and only the part that has no super() call is shared.
+    TypeError on the fallback branch, reachable whenever the fenced lookup was
+    handed a literal rhs, or (before the flags were split) whenever
+    DJANGO_OVERLAY_ARRAY_SUBQUERY_IN was off. Each class keeps its own
+    three-line as_sql now, and only the part with no super() call is shared.
     """
     lhs_sql, lhs_params = lookup.process_lhs(compiler, connection)
     rhs_sql, rhs_params = lookup.process_rhs(compiler, connection)
@@ -166,21 +167,40 @@ class OverlayFencedIn(In):
     an ordinary `UUIDField` or `AutoField`, which the package does not own.
 
     **Deliberately registered nowhere.** `OverlayQuery.build_lookup()`
-    constructs it directly when it sees the private name, so the only way to
-    reach it is through `OverlayQuery._m2m_fence()`, which is the only caller
-    that has established the fence is redundant with a join already in the
-    query. Registering it on `models.Field` — the previous arrangement — put a
-    lookup on every field of every model in any project that imported this
-    package, overlay or not, to serve one internal call site.
+    constructs it directly when it sees the private name, so it resolves inside
+    an overlay query and nowhere else. Registering it on `models.Field` — the
+    previous arrangement — put a lookup on every field of every model in any
+    project that imported this package, overlay or not, to serve one internal
+    call site.
 
-    It is not exposed as a public way to scope a query, and that is a
-    measured decision rather than caution. The array form wins only while the
-    subquery is small: on a twenty-aggregate summary at 1,000,000 view rows it
-    was 2.0x faster than a plain `IN` at a 25,000-row scope and 2.3x *slower*
-    at a 1,000,000-row one, crossing over somewhere between. The library cannot
-    see the scope size when it compiles the lookup, so making this reachable
-    from `pk__in` would silently double the cost of every broad-scope query
-    past a threshold nobody can predict. See tests/probe_aggregation.py.
+    Two things reach it, then. `OverlayQuery._m2m_fence()` adds one
+    automatically, being the only caller that has established the fence is
+    redundant with a join already in the query. And you can name it yourself,
+    for the case below that no automatic rule can decide.
+
+    Not reachable from `pk__in`, and that is a measured decision rather than
+    caution. The array form wins only while the subquery is small: on a
+    twenty-aggregate summary at 1,000,000 view rows it was 2.0x faster than a
+    plain `IN` at a 25,000-row scope and 2.3x *slower* at a 1,000,000-row one,
+    crossing over somewhere between. The library cannot see the scope size when
+    it compiles a lookup, and it will not go looking -- every optimisation here
+    is decided by query shape alone, because SQL that depends on database state
+    is SQL you cannot read off the code. Wiring this into `pk__in` would
+    therefore have to double the cost of every broad-scope query or none of
+    them, with no way to tell which it was doing.
+
+    So the decision goes to whoever can make it. The lookup name is usable by
+    hand on any overlay model:
+
+        Roster.objects.filter(pk__overlay_fenced_in=Member.objects.values("pk"))
+        # -> "roster_view"."id" = ANY (ARRAY(SELECT U0."id" FROM "member_view" U0))
+
+    That is the supported way to fence a scope, and the whole of the interface:
+    reach for it when you know your subquery is selective, leave `pk__in` alone
+    when you know it is not or cannot tell. `OverlayQuery.build_lookup()`
+    resolves the name without registering it, so it costs nothing on any field
+    of any model -- and a plain model raises FieldError, because the resolution
+    lives on the overlay query rather than on the field.
 
     Measured on the production-shaped graph at 300,000 people: the M2M
     traversal Django emits is 306.6ms selective / 7,896.5ms broad; with this
@@ -192,7 +212,13 @@ class OverlayFencedIn(In):
     def as_sql(self, compiler, connection):
         # Written out rather than borrowed from OverlaySubqueryIn: see
         # _array_in_sql for what borrowing it did to `super()`.
-        if self.rhs_is_direct_value() or not _array_subquery_in_enabled():
+        #
+        # No setting is read here, unlike its foreign-key counterpart. Whether
+        # this lookup exists at all is DJANGO_OVERLAY_M2M_FENCE's decision, made
+        # in OverlayQuery._m2m_fence(), and once one has been built the array
+        # form is the only form worth compiling it to. A literal rhs still
+        # declines, because that is a shape rather than a preference.
+        if self.rhs_is_direct_value():
             return super().as_sql(compiler, connection)
         return _array_in_sql(self, compiler, connection)
 

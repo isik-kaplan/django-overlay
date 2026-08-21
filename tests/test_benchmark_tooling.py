@@ -578,10 +578,9 @@ def test_applying_writes_the_names_settings_reads():
     assert environ["DJANGO_OVERLAY_REWRITE_TRAVERSALS"] == "1"
     # And reads back as what was asked for, which is the round trip settings.py
     # actually performs.
-    assert switches.state(environ) == {
-        "rewrite_traversals": True, "redirect_select_related": True,
-        "force_hash_joins": False, "array_subquery_in": True,
-    }
+    expected = dict.fromkeys((switches.option_name(s) for s in switches.SWITCHES), True)
+    expected["force_hash_joins"] = False
+    assert switches.state(environ) == expected
 
 
 def test_the_off_switches_are_named_the_way_they_were_typed():

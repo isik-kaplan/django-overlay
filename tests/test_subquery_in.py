@@ -164,25 +164,63 @@ def test_it_can_be_turned_off():
 
 
 @override_settings(DJANGO_OVERLAY_ARRAY_SUBQUERY_IN=False)
-def test_the_fence_can_be_turned_off_too():
-    """The opt-out covers both lookups that honour it, not just the one on a
-    foreign key.
+def test_this_flag_no_longer_reaches_the_m2m_fence():
+    """The two used to share one setting, and sharing it was the bug.
 
-    They share the array-building code and deliberately do not share a parent:
-    OverlaySubqueryIn extends RelatedIn, OverlayFencedIn extends In. While the
-    second borrowed the first's `as_sql`, its zero-arg `super()` resolved
-    against a class outside its own MRO -- so this exact configuration raised
-    `TypeError: super(type, obj): obj must be an instance or subtype of type`
-    on any m2m-fenced query. The test above covers the foreign-key side, which
-    is why the crash sat in a documented setting undetected.
+    Turning it off to spare one broad `fk__in` also unfenced every m2m
+    traversal -- 306.6ms -> 0.4ms selective, 7,896.5ms -> 105.9ms broad, given
+    away to fix something unrelated. The fence has DJANGO_OVERLAY_M2M_FENCE of
+    its own now, so this flag stops at the foreign-key lookup.
+    """
+    from tests.testapp.models import Roster
+
+    fenced = Roster.objects.filter(members__name="m")
+
+    assert "ANY (ARRAY" in str(fenced.query), "the fence keeps its array form"
+    assert list(fenced) == [], "and it still executes"
+
+
+@override_settings(DJANGO_OVERLAY_M2M_FENCE=False)
+def test_the_fence_has_a_flag_of_its_own_now():
+    """And it gates whether the fence is added, not how it compiles.
+
+    A fence compiled as a plain `IN` is the one combination with no argument
+    for it: an extra semi-join costed with the same blind appendrel estimate
+    the fence exists to route around. So the choice is the fence or nothing.
     """
     from tests.testapp.models import Roster
 
     fenced = Roster.objects.filter(members__name="m")
     clause = str(fenced.query)
 
+    assert "overlay_fenced_in" not in clause
     assert "ANY (ARRAY" not in clause
     assert list(fenced) == [], "and it still executes"
+
+
+@override_settings(DJANGO_OVERLAY_M2M_FENCE="please")
+def test_the_fence_flag_refuses_a_non_boolean_like_every_other():
+    from tests.testapp.models import Roster
+
+    with pytest.raises(ImproperlyConfigured, match="must be a bool"):
+        str(Roster.objects.filter(members__name="m").query)
+
+
+def test_the_fenced_lookup_declines_a_literal_scope():
+    """The one branch of OverlayFencedIn.as_sql that reads no setting.
+
+    `_m2m_fence()` always builds a queryset, so this is reachable only by
+    naming the lookup by hand -- which is the supported way to fence a scope
+    the library cannot size for you. It is also the branch whose zero-arg
+    `super()` resolved outside its own MRO while the two lookups shared an
+    `as_sql`, raising TypeError on every fenced query.
+    """
+    from tests.testapp.models import Roster
+
+    clause = str(Roster.objects.filter(pk__overlay_fenced_in=[1, 2]).query)
+
+    assert "ANY (ARRAY" not in clause, "a literal list has no subquery to fence"
+    assert " IN (" in clause
 
 
 @override_settings(DJANGO_OVERLAY_ARRAY_SUBQUERY_IN="yes please")

@@ -40,7 +40,12 @@ from .planning import (
     _overlay_views_joined,
     _overlay_views_read,
 )
-from .query import OverlayQuery, _fence_suppressed, _rewrite_traversals_enabled
+from .query import (
+    OverlayQuery,
+    _fence_suppressed,
+    _m2m_fence_enabled,
+    _rewrite_traversals_enabled,
+)
 from .queryset import (
     OverlayManager,
     OverlayQuerySet,
