@@ -22,6 +22,140 @@ it swings wildly (the same query measured 19× and 53× on consecutive runs) whi
 the overlay's own absolute time barely moved. Judge the absolute milliseconds;
 treat the ratios as an order of magnitude, not a measurement.
 
+## What to write, and what not to
+
+Every number here is from `django-overlay benchmark --scale 1.0` — 1,000,000
+people, `BenchPerson` against the `PlainPerson` mirror holding identical rows,
+every optimisation at its default. The `plain` column is that mirror. Reproduce
+with:
+
+```bash
+uv run django-overlay benchmark --suite ban --suite hops --suite fence --scale 1.0
+```
+
+Read the absolute milliseconds first. The ratios matter when they cross an order
+of magnitude, and the mirror is a floor the overlay cannot reach rather than a
+target it should hit.
+
+### Fast — at or better than the mirror
+
+```python
+# 18ms (plain 22ms) — one m2m hop, selective. The fence is worth ×12 here.
+BenchPerson.objects.filter(addresses__city="city0").values("pk").distinct().count()
+
+# 41ms (plain 51ms) — a 5,000-row scope
+BenchPerson.objects.filter(addresses__city__in=[f"city{n}" for n in range(10)])
+
+# 63ms — a selective ordered page: LIMIT plus a narrow scope is the best case
+list(BenchPerson.objects.filter(addresses__city="city0").order_by("id")[:200])
+
+# 223ms (plain 456ms) — m2m to a *plain* table, faster than the mirror itself.
+# The plain side carries statistics, so the estimate is never blind.
+BenchPerson.objects.filter(labels__kind="volunteer")
+```
+
+### OK — a few hundred ms, 2–4× the mirror
+
+```python
+# 220ms (plain 96ms) — a 50,000-row scope, no LIMIT. The fence still wins ×1.7.
+BenchPerson.objects.filter(addresses__city__in=[f"city{n}" for n in range(100)])
+
+# 952ms (plain 235ms) — one hop matching 186,666 rows. Broad, but linear.
+BenchPerson.objects.filter(phones__kind="mobile").values("pk").distinct().count()
+
+# 301ms on a 3,000,000-row view — a bare count, decomposed into two counts
+BenchPerson.objects.count()
+
+# 19ms (plain 5ms) — no join at all
+BenchPerson.objects.filter(city="city42").count()
+```
+
+### Slow — seconds. Works, but design around it
+
+```python
+# 752ms (plain 28ms, ×27) — two m2m hops. The nested-loop ban is what makes
+# this finish at all: unbanned it runs past 30s.
+BenchPerson.objects.filter(addresses__city="city0", phones__kind="mobile") \
+    .values("pk").distinct().count()
+
+# 3,851ms (plain 34ms, ×113) — three hops
+BenchPerson.objects.filter(addresses__city="city0", phones__kind="mobile",
+                           emails__domain="example.com")
+
+# 1,202ms (plain 24ms, ×50) — two hops with a LIMIT; 7,935ms at four hops
+list(BenchPerson.objects.filter(addresses__city="city0",
+                                phones__kind="mobile").order_by("id")[:200])
+
+# 539ms (plain 2ms, ×270) — an ordered page over a 50,000-row scope. The worst
+# ratio on this page: the page needs 200 rows and the fence materialises all
+# 50,000 of them.
+list(BenchPerson.objects.filter(addresses__city__in=[f"city{n}" for n in range(100)])
+     .order_by("id")[:200])
+
+# 1,680ms, against 862ms with the fence off — a 500,000-row scope is the one
+# case where the fence is a net loss. Narrow the scope; see below.
+BenchPerson.objects.filter(addresses__city__isnull=False)
+```
+
+### Never
+
+Most of these you cannot reach by accident — the library rewrites or refuses
+them. They are listed because the settings that re-enable them are documented,
+and because the last one is a crash rather than a slow query.
+
+```python
+# 1. Joining two overlay views directly: 76×–1304× the mirror. You get a
+#    prefetch instead, so this is only reachable by turning the redirect off.
+BenchPerson.objects.select_related("address")
+
+# 2. select_related() after a set operation — raises OverlayConfigurationError,
+#    because it cannot be routed and the join it would emit is the 76×–1304× one.
+BenchPerson.objects.union(other).select_related("address")
+
+# 3. .iterator() with no chunk_size — refused, because the prefetch that stands
+#    in for select_related() needs a batch to work over.
+BenchPerson.objects.filter(...).iterator()          # pass chunk_size=
+
+# 4. Two m2m hops with DJANGO_OVERLAY_FORCE_HASH_JOINS = False — past 30s at
+#    1,000,000 people, where banned it is 752ms.
+
+# 5. A scope-as-subquery with DJANGO_OVERLAY_M2M_FENCE = False. Not slow: it
+#    takes the server down. The plan builds a Parallel Hash over 7,950,000,000
+#    estimated rows for a 200-row answer, that node's tuplestore lives in
+#    dynamic shared memory, and the backend is killed with signal 9 — the whole
+#    instance goes into recovery.
+BenchPerson.objects.filter(pk__in=BenchPerson.objects
+                           .filter(addresses__city="city0").values("pk"))
+```
+
+### The one manual lever
+
+The fence's crossover depends on how many rows your subquery returns, which the
+library cannot see when it compiles a lookup and will not go looking for — every
+optimisation here is decided by query shape alone, because SQL that depends on
+database state is SQL you cannot read off the code. So the per-query decision is
+yours to make, and there is a lookup for it:
+
+```python
+BenchPerson.objects.filter(pk__overlay_fenced_in=inner)   # forces = ANY (ARRAY(…))
+BenchPerson.objects.filter(pk__in=inner)                  # leaves a plain IN
+```
+
+Swept at 1,000,000 people, the same subquery compiled both ways:
+
+| rows the subquery returns | plain `IN` | `ARRAY` | |
+|---|---|---|---|
+| 200 | 113ms | 8ms | **×15** |
+| 5,000 | 177ms | 71ms | ×2.5 |
+| 50,000 | 688ms | 600ms | ×1.1 |
+| 500,000 | 2,408ms | 2,455ms | ×1.0 |
+
+So it stops paying rather than turning into a penalty on this shape: reach for it
+when you know the scope is selective, leave `pk__in` alone when you know it is
+not or cannot tell. It resolves on any overlay model and raises `FieldError` on a
+plain one, because the resolution lives on the overlay query rather than on the
+field.
+
 ## The number that governs everything
 
 Not the row count. **The share of rows materialised in the tenant's own table**
