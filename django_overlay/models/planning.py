@@ -55,19 +55,29 @@ def _force_hash_joins_enabled() -> bool:
 # earlier single threshold of 4 blocked the 14x ordered-page win. Neither number
 # alone fits the data.
 #
-# Worth knowing what these numbers are and are not. They are a boundary rather
-# than an optimum: one m2m hop is 3 views and two are 5, so 4 and 5 behave
-# identically on every m2m shape, and 4 is simply the smallest integer above
-# one hop. The evidence either side of the line is about 3-view queries; a
-# 4-view shape -- a foreign-key chain plus a second join -- was never measured
-# on its own.
+# Both are now pinned from both sides at scale 1.0, two passes agreeing, which
+# is what makes 4 a measurement rather than a guess. Banning at 3 views with no
+# LIMIT costs 18ms -> 57ms, so the threshold has to be above 3; not banning at
+# 5 views is >30s against 752ms, so it has to be at or below 5. That leaves 4
+# or 5, and they behave identically on every m2m shape -- one hop is 3 views and
+# two are 5, so nothing distinguishes them except a 4-view query, a foreign-key
+# chain plus a second join, which still has not been measured on its own.
 #
-# And the unsliced number is the one currently in question. At scale 0.3 the ban
-# costs 5% at two hops and 13% at three, only paying for itself at four, where
-# it is the difference between 857ms and not finishing. It may be a hop too low,
-# or the cost may invert at scale 1.0 as the comment above predicts -- the hash
-# it forces is built over a larger relation as scale grows. Measure before
-# moving it.
+# The same run is why there are two numbers and not one, stated as sharply as it
+# gets: at 3 views, unsliced wants the nested loop kept (banning costs 3.2x) and
+# sliced wants it banned (8751ms -> 1137ms). Identical shape, opposite verdict,
+# decided entirely by the LIMIT.
+#
+# And a warning about measuring this at a convenient scale, because it nearly
+# went the other way. At scale 0.3 the ban *costs* 5% at two hops and 13% at
+# three and only pays at four, which reads as a threshold set a hop too low and
+# argues for raising it to 6. That reading is wrong, and the paragraph above
+# about the forced hash growing with the relation is why: at 1,000,000 rows the
+# same two-hop shape is >30s unbanned against 752ms banned, and at three hops
+# >30s against 3851ms. Raising the threshold on the scale-0.3 evidence would
+# have put a >30s query back into the exact case the mechanism exists for. The
+# low-scale cost is real; it is the price of the shape that does not finish
+# without it, and it is the right trade.
 _HASH_JOIN_THRESHOLD = 4
 _HASH_JOIN_THRESHOLD_LIMITED = 2
 
