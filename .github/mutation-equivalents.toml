@@ -138,12 +138,20 @@ positional and the same mutation is killed by
 test_a_foreign_key_takes_on_delete_positionally.
 """
 
-["django_overlay.fields.xǁOverlaySubqueryInǁas_sql__mutmut_14"]
+["django_overlay.fields.x__array_in_sql__mutmut_8"]
 reason = """
 process_rhs(compiler, connection) -> process_rhs(compiler, None). The compiler
 carries its own connection and is what actually compiles the subquery, so the
 argument is unused on this path: compiling the same node both ways returns
 byte-identical SQL and parameters. Verified against a real queryset.
+
+Named xǁOverlaySubqueryInǁas_sql__mutmut_14 until the line it is about moved
+out of that method and into the module-level _array_in_sql() the two fenced
+lookups now share. Same mutation on the same call, same reasoning; only the
+enclosing function changed, and with it the name mutmut gives it. The move
+itself was forced: a zero-arg super() resolves against the class that defined
+the method, so OverlayFencedIn could not borrow OverlaySubqueryIn.as_sql
+without its super() pointing outside its own MRO.
 """
 
 ["django_overlay.management.commands.makemigrations.x__overlay_foreign_key_fields__mutmut_8"]
