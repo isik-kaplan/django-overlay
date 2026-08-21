@@ -30,6 +30,7 @@ SUITE_NAMES = (
     "set_algebra",
     "ban",
     "hops",
+    "fence",
 )
 
 # What a smoke run does: the two suites that would catch a genuine breakage,

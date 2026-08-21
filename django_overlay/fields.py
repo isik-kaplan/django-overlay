@@ -197,7 +197,12 @@ class OverlayFencedIn(In):
 
     That is the supported way to fence a scope, and the whole of the interface:
     reach for it when you know your subquery is selective, leave `pk__in` alone
-    when you know it is not or cannot tell. `OverlayQuery.build_lookup()`
+    when you know it is not or cannot tell. Swept at 1,000,000 people by
+    benchmark/suites/fence.py, against the same subquery left as a plain `IN`:
+    x15-17 at a 200-row scope, x2.5 at 5,000, x1.1 at 50,000, and x1.0 at
+    500,000. So it stops paying rather than turning into a penalty on this
+    shape -- the 2.3x above is a twenty-aggregate summary, which is a different
+    query and has not been swept. `OverlayQuery.build_lookup()`
     resolves the name without registering it, so it costs nothing on any field
     of any model -- and a plain model raises FieldError, because the resolution
     lives on the overlay query rather than on the field.
