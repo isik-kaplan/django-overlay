@@ -96,6 +96,33 @@ def leaf_by_leaf(model, scope):
     return queryset.values("pk").distinct().count()
 
 
+# The one shape that can tell the unsliced threshold of 4 apart from a 5.
+#
+# Views are counted distinct, so an m2m hop steps 3 -> 5 -> 7 and never lands on
+# 4: one hop is the person view, the through view and the target view, and a
+# second hop adds two more. Every measurement behind the threshold is therefore
+# about 3-view and 5-view queries, and 4 was the smallest integer above one hop
+# rather than a number anything had been measured at.
+#
+# Starting from the *through* model and traversing out of it does land on 4:
+# person_address, person, person_phone, phone. It is also a query somebody
+# writes -- every link whose person has a mobile -- rather than a shape
+# contrived to hit a count.
+# Both breadths, because breadth is the axis the ban goes wrong on. Every
+# regression that shaped these thresholds was over-banning something selective:
+# a single threshold of 2 shipped 7ms -> 60ms on a selective one-hop filter, and
+# forcing the ban down to one view costs a narrow query 18ms -> 57ms. A broad
+# four-view query cannot show that, so measuring only the broad one would have
+# confirmed the threshold against the wrong risk.
+FOUR_VIEW_BROAD = {"person__phones__kind": "mobile"}      # 736,662 links
+FOUR_VIEW_NARROW = {"person__phones__number": "+447000000042"}   # 45 links
+
+
+def four_views(model, scope):
+    """Resolve from the through model outwards. Four distinct views, one hop."""
+    return model.objects.filter(**scope).values("pk").distinct().count()
+
+
 def assert_setting_is_clean(ctx):
     """Every cell starts from the same session state.
 
@@ -133,9 +160,15 @@ def row(ctx, section, label, operation, scope, hops, models):
 
 
 def run(ctx):
-    from tests.testapp.models import BenchPerson, PlainPerson
+    from tests.testapp.models import (
+        BenchPerson,
+        BenchPersonAddress,
+        PlainPerson,
+        PlainPersonAddress,
+    )
 
     models = (BenchPerson, PlainPerson)
+    through_models = (BenchPersonAddress, PlainPersonAddress)
 
     # Twice by default, because the first version of this probe contradicted
     # its own previous run and there was no way to tell signal from drift.
@@ -151,6 +184,14 @@ def run(ctx):
         row(ctx, section, "two hops, summary counts", summarise, NARROW | BROAD, 2, models)
         row(ctx, section, "two hops, scope as subquery", scoped_subquery, NARROW | BROAD, 2, models)
         row(ctx, section, "two leaves, chained subqueries", leaf_by_leaf, NARROW | BROAD, 2, models)
+        yield section
+
+        section = harness.Section(
+            f"Exactly four views -- the only shape 4 and 5 disagree on{suffix}", COLUMNS,
+            note="from the through model outwards; an m2m hop counts 3 or 5, never 4",
+        )
+        row(ctx, section, "four views, narrow", four_views, FOUR_VIEW_NARROW, 1, through_models)
+        row(ctx, section, "four views, broad", four_views, FOUR_VIEW_BROAD, 1, through_models)
         yield section
 
         section = harness.Section(

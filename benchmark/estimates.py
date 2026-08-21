@@ -45,12 +45,12 @@ MEASURED = {
     # the whole reason these are per-suite rather than one scaling rule.
     "ban": {0.05: 4, 0.3: 51, 1.0: 128, 2.0: 289, 3.0: 347},
     "hops": {0.05: 28, 0.3: 47, 1.0: 103, 3.0: 278},
-    # Provisional, and marked as such: twelve rows over four scopes, three
-    # columns each, where the broad scopes are the ones that run long. Sized
-    # from `ban`, whose shape it copies, until it has been run at more than one
-    # scale. Over-predicting here is the safe direction -- the budget guard
-    # skips a suite it cannot fit rather than overrunning the ceiling.
-    "fence": {0.05: 12, 0.3: 60, 1.0: 150, 3.0: 400},
+    # 0.3 measured directly at 25s; 1.0 from two 2-pass runs at 131s and 139s,
+    # which is about 70s a pass. The first sizing guessed 60 and 150 from `ban`,
+    # whose shape this copies -- both over by a factor of two, because none of
+    # this suite's cells run past the cap. 0.05 and 3.0 are extrapolated from
+    # those two points, which are close to linear in rows.
+    "fence": {0.05: 6, 0.3: 25, 1.0: 70, 3.0: 220},
 }
 
 # Cold graph build, in seconds. Independent of the cap -- it runs no queries
