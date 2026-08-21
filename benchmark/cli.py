@@ -193,8 +193,17 @@ def benchmark(**options):
         # of a switch A/B -- so the second run would overwrite the first and
         # the comparison would be against itself. The arm goes in the name.
         label = options["label"] or _default_label(outcome["environment"])
-        path = results.save(label, outcome["environment"], outcome["suites"])
+        path = results.save(
+            label, outcome["environment"], outcome["suites"], lost=outcome.get("lost", 0),
+        )
         click.echo(f"\nsaved as {path}")
+        if outcome.get("lost"):
+            click.echo(click.style(
+                f"{outcome['lost']} cell(s) were never measured, so this run will not be "
+                f"picked up as a baseline automatically. Compare against it deliberately "
+                f"with --compare-to {label}.",
+                fg="yellow",
+            ))
 
     if started_docker and not options["keep_up"]:
         from benchmark import docker

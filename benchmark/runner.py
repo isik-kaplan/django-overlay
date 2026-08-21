@@ -125,6 +125,13 @@ def run(
         say(f"\n  [{suite.NAME}] {'CUT SHORT' if cut_short else 'done'} "
             f"in {harness.humanise(elapsed)}")
 
+    # Cells that were never measured, as opposed to measured as slow. A run
+    # carrying any of these is not a result: at scale 1.0 the compose database
+    # ran out of /dev/shm and eleven cells came back this way, and the run still
+    # printed a table and saved itself as a baseline that later runs would have
+    # compared against automatically.
+    lost = harness.lost_cells(collected)
+
     spent = budget.spent()
     lines = [
         f"ceiling      {harness.humanise(max_runtime)}",
@@ -135,6 +142,8 @@ def run(
         lines.append(f"SKIPPED      {', '.join(skipped)} -- ran out of budget")
     if truncated:
         lines.append(f"SKIPPED      rows inside {', '.join(truncated)} -- ran out of budget")
+    if lost:
+        lines.append(f"NOT MEASURED {lost} cell(s) -- the connection broke, see stderr")
     if ctx.disagreements:
         lines.append(f"DISAGREED    {len(ctx.disagreements)} row(s) -- see below")
     banner(say, "  BUDGET", lines)
@@ -147,6 +156,7 @@ def run(
     return {
         "environment": env,
         "suites": collected,
+        "lost": lost,
         "disagreements": ctx.disagreements,
         "skipped": skipped,
         "truncated": truncated,

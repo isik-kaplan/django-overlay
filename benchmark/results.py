@@ -36,13 +36,20 @@ def _slug(label):
     return "".join(keep).strip("-") or "run"
 
 
-def save(label, env, suites):
+def save(label, env, suites, lost=0):
+    """Write a run. `lost` is how many cells were never measured at all.
+
+    Kept rather than refused: the numbers that *were* measured are still worth
+    reading, and throwing the file away would mean re-running to look at them.
+    What it must not do is become a baseline by default -- see `latest()`.
+    """
     DIRECTORY.mkdir(parents=True, exist_ok=True)
     path = DIRECTORY / f"{_slug(label)}.json"
     path.write_text(json.dumps({
         "label": label,
         "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "environment": env,
+        "lost": lost,
         "suites": suites,
     }, indent=2))
     return path
@@ -63,13 +70,29 @@ def saved_runs():
 
 
 def latest(label=None):
+    """The newest saved run, or the one named.
+
+    A run with cells that were never measured is skipped when picking
+    automatically, and returned when named. The distinction is consent: a delta
+    column nobody asked for must not be built on a run that half failed, and
+    somebody who types `--compare-to` has said which run they mean.
+
+    This is not hypothetical caution. A scale-1.0 run lost eleven cells to a
+    compose database out of /dev/shm, saved itself under the default label, and
+    the next run would have compared against it silently -- the numbers it did
+    produce sitting next to `(was capped)` and blanks from queries that never
+    ran at all.
+    """
     runs = saved_runs()
     if label is not None:
         for path, data in runs:
             if data.get("label") == label or path.stem == _slug(label):
                 return data
         return None
-    return runs[0][1] if runs else None
+    for _, data in runs:
+        if not data.get("lost"):
+            return data
+    return None
 
 
 def clear():

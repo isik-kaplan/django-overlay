@@ -186,6 +186,29 @@ def _sqlstate(error):
     return getattr(error.__cause__, "sqlstate", None)
 
 
+# The note a lost-connection cell carries. Named because runner.py counts them
+# and results.py refuses to offer such a run as a baseline, and a string literal
+# repeated in three files is one rename away from a guard that matches nothing.
+LOST_NOTE = "conn lost"
+
+
+def lost_cells(suites):
+    """How many cells in a saved-shape run were never measured at all.
+
+    Separate from the run so it can be tested without a database. A guard that
+    counts by the wrong key is a guard that never fires, which is worse than not
+    having one -- it reads as "nothing went wrong".
+    """
+    return sum(
+        1
+        for suite in suites
+        for section in suite.get("sections", ())
+        for row in section.get("rows", ())
+        for cell in row.get("cells", {}).values()
+        if cell.get("note") == LOST_NOTE
+    )
+
+
 def _cap_or_lost(error, cap_ms):
     """Tell "this query is too slow" apart from "this connection is broken".
 
@@ -209,7 +232,7 @@ def _cap_or_lost(error, cap_ms):
     connection.close()
     first_line = str(error).strip().splitlines()[0] if str(error).strip() else error.__class__.__name__
     print(f"LOST CONNECTION [was {before}] {first_line}", file=sys.stderr)
-    return Cell(0.0, note="conn lost")
+    return Cell(0.0, note=LOST_NOTE)
 
 
 def measure(build, cap_ms, rounds=3, give_up_after_ms=5_000, abandon_after_s=None):
