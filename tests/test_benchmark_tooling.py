@@ -15,6 +15,7 @@ any of them produces a plausible number rather than an obvious failure.
 None of this needs a database.
 """
 
+import json
 import pathlib
 import time
 
@@ -776,3 +777,115 @@ def test_the_benchmark_settings_module_wins_over_an_exported_one():
     the run measured the default arm and filed it under the other arm's name.
     """
     assert what_the_library_saw(want_settings_module=True) == "benchmark.settings"
+
+
+# ------------------------------------- a run that half failed is not a baseline
+#
+# A lost connection already gets its own cell state, because "this query is too
+# slow" and "this query never ran" are different claims. What it did not have
+# was any consequence beyond that cell: the run still printed a table, still
+# saved itself under the default label, and the next run would have picked it up
+# as a baseline automatically. Observed at scale 1.0, where the compose database
+# ran out of /dev/shm and eleven cells came back unmeasured.
+
+
+def a_run(label="before", lost=0, **environment_overrides):
+    return {
+        "label": label,
+        "saved_at": f"2026-01-0{1 + lost}",
+        "lost": lost,
+        "environment": an_environment(**environment_overrides),
+        "suites": [],
+    }
+
+
+def test_a_run_with_unmeasured_cells_is_not_picked_up_automatically(tmp_path, monkeypatch):
+    monkeypatch.setattr(results, "DIRECTORY", tmp_path)
+    results.save("clean", an_environment(), [], lost=0)
+    results.save("broken", an_environment(), [], lost=11)
+
+    picked = results.latest()
+    assert picked is not None
+    assert picked["label"] == "clean", "an incomplete run must not become the baseline"
+
+
+def test_it_is_still_returned_when_named(tmp_path, monkeypatch):
+    """Consent is the distinction. Typing --compare-to says which run you mean;
+    a delta column nobody asked for is the one that must not be built on it."""
+    monkeypatch.setattr(results, "DIRECTORY", tmp_path)
+    results.save("broken", an_environment(), [], lost=11)
+
+    assert results.latest("broken")["label"] == "broken"
+
+
+def test_no_usable_baseline_is_the_same_as_no_baseline(tmp_path, monkeypatch):
+    """With nothing but incomplete runs saved, later runs get no delta column
+    rather than a delta against one of them."""
+    monkeypatch.setattr(results, "DIRECTORY", tmp_path)
+    results.save("broken", an_environment(), [], lost=3)
+
+    assert results.latest() is None
+    assert results.comparison_note(None, an_environment()) is None
+
+
+def test_the_count_survives_the_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(results, "DIRECTORY", tmp_path)
+    path = results.save("broken", an_environment(), [], lost=11)
+    assert json.loads(path.read_text())["lost"] == 11
+
+
+def test_a_run_saved_before_the_count_existed_is_treated_as_clean(tmp_path, monkeypatch):
+    """`lost` is absent from every run saved so far, and absent has to mean
+    usable -- otherwise adding this guard would silently discard every existing
+    baseline on disk."""
+    monkeypatch.setattr(results, "DIRECTORY", tmp_path)
+    (tmp_path / "old.json").write_text(json.dumps({
+        "label": "old", "saved_at": "2026-01-01",
+        "environment": an_environment(), "suites": [],
+    }))
+
+    assert results.latest()["label"] == "old"
+
+
+def test_the_lost_note_is_one_string_in_one_place():
+    """runner.py counts cells by this note and harness.py writes it. A literal
+    repeated in both is one rename away from a guard that matches nothing."""
+    assert harness.Cell(0.0, note=harness.LOST_NOTE).note == harness.LOST_NOTE
+    assert harness.LOST_NOTE == "conn lost"
+
+
+def a_saved_shape(*notes):
+    """A run in the shape section_to_data produces, one cell per note."""
+    return [{
+        "name": "s", "sections": [{
+            "title": "t", "columns": ["overlay"], "note": "",
+            "rows": [
+                {"label": f"row{index}", "cells": {"overlay": {
+                    "ms": 0.0, "capped": False, "note": note}}, "extras": {}}
+                for index, note in enumerate(notes)
+            ],
+        }],
+    }]
+
+
+def test_unmeasured_cells_are_counted_and_measured_ones_are_not():
+    assert harness.lost_cells(a_saved_shape(harness.LOST_NOTE, "", None)) == 1
+    assert harness.lost_cells(a_saved_shape(harness.LOST_NOTE, harness.LOST_NOTE)) == 2
+    assert harness.lost_cells(a_saved_shape("", None, "skipped")) == 0
+
+
+def test_a_run_with_no_sections_counts_nothing():
+    """A suite skipped for budget yields no sections, which is not a loss."""
+    assert harness.lost_cells([{"name": "s", "sections": []}]) == 0
+    assert harness.lost_cells([]) == 0
+
+
+def test_the_count_matches_what_a_real_section_serialises_to():
+    """Counted off section_to_data's output, so the two cannot drift: the keys
+    here are the keys it writes, not the keys this test hopes it writes."""
+    section = harness.Section(
+        title="t", columns=["overlay"], note="",
+        rows=[harness.Row(label="r", cells={"overlay": harness.Cell(0.0, note=harness.LOST_NOTE)})],
+    )
+    run = [{"name": "s", "sections": [harness.section_to_data(section)]}]
+    assert harness.lost_cells(run) == 1
