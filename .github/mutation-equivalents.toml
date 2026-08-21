@@ -59,8 +59,15 @@ checks._overlay_models_with_a_source, and out of a pragma's reach for the same
 reason: it sits in the `if` of a generator expression.
 """
 
-["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_37"]
+["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_38"]
 reason = """
+Renumbered from _mutmut_37 when DJANGO_OVERLAY_M2M_FENCE's gate was added near
+the top of _m2m_fence: mutmut numbers within a function, so inserting a check
+shifts every mutant after it. The four exemptions in this method all moved by
+one, and each was re-derived by reading the mutant body rather than by adding
+one to the old number -- an exemption that still resolves but describes a
+different mutation is worse than one that has gone stale, because nothing fails.
+
 getattr(through, "_is_overlay_view_model", False) -> the same with None as the
 default. The result is immediately negated with `not`, where False and None are
 indistinguishable. The killable mutants on this line -- a default of True, and
@@ -68,14 +75,14 @@ no default at all -- are covered by
 test_an_m2m_through_a_plain_model_is_not_fenced.
 """
 
-["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_47"]
+["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_48"]
 reason = """
 The same substitution on the target-side guard, negated the same way. Its
 killable siblings are covered by
 test_the_target_side_guard_answers_when_the_attribute_is_missing.
 """
 
-["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_60"]
+["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_61"]
 reason = """
 models.QuerySet(model=through, query=OverlayQuery(through)) -> model=None. The
 query already carries the model and is what compiles the SQL, so both forms
@@ -84,7 +91,7 @@ and comparing. Dropping `query` instead is observable and is killed by
 test_the_fences_own_subquery_is_fenced_too.
 """
 
-["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_62"]
+["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_63"]
 reason = """
 The same call with the model argument removed rather than set to None, with the
 same result for the same reason.
