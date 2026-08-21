@@ -1,7 +1,7 @@
 # Query rewriting
 
-django-overlay rewrites three query shapes before they reach the database. All
-three are on by default, each has a setting to turn it off, and none of them
+django-overlay rewrites four query shapes before they reach the database. All
+four are on by default, each has a setting to turn it off, and none of them
 changes which rows you get back.
 
 They exist for one reason. A `UNION ALL` view is an **appendrel**, and an
@@ -19,9 +19,22 @@ not making that join, or of giving the planner something it can cost.
 | what you write | what runs | setting |
 |---|---|---|
 | `filter(fk__field=…)` | `filter(fk_id__in=<subquery>)` | `DJANGO_OVERLAY_REWRITE_TRAVERSALS` |
-| `filter(m2m__field=…)` | the same join, plus a redundant fence | `DJANGO_OVERLAY_REWRITE_TRAVERSALS` |
+| `filter(m2m__field=…)` | the same join, plus a redundant fence | `DJANGO_OVERLAY_M2M_FENCE` |
 | `select_related('fk')` | `prefetch_related('fk')` | `DJANGO_OVERLAY_REDIRECT_SELECT_RELATED` |
 | `fk__in=<queryset>` | `fk = ANY (ARRAY(<subquery>))` | `DJANGO_OVERLAY_ARRAY_SUBQUERY_IN` |
+
+`DJANGO_OVERLAY_REWRITE_TRAVERSALS` gates the first two together — it decides
+whether a traversal is examined at all — and `DJANGO_OVERLAY_M2M_FENCE` then
+decides whether the m2m half of that gets its fence. The fence used to share
+`ARRAY_SUBQUERY_IN` with the foreign-key rewrite, so turning that off to spare
+one broad `fk__in` also unfenced every m2m traversal in the project.
+
+**One of these is not really optional.** Turning the m2m fence off is not a
+performance trade at scale: measured at 1,000,000 people, an unfenced
+`filter(pk__in=<m2m traversal>)` plans a Parallel Hash over 7,950,000,000
+estimated rows for a 200-row answer, that node's tuplestore lives in dynamic
+shared memory, and the backend is killed with signal 9 — taking the instance
+into recovery, not just the query. See [operations/PERFORMANCE.md](../operations/PERFORMANCE.md#never).
 
 ---
 
