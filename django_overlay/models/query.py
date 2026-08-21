@@ -38,6 +38,19 @@ def _m2m_fence_enabled() -> bool:
     extra semi-join costed with the same blind appendrel estimate the fence
     exists to route around, carrying all of the cost and none of the benefit.
     On or absent -- there is nothing in between worth having.
+
+    **Turning this off is not a performance choice at scale.** Measured at
+    1,000,000 people: `filter(pk__in=<m2m traversal>)` unfenced plans a Parallel
+    Hash over 7,950,000,000 estimated rows for a 200-row answer, that node's
+    tuplestore lives in dynamic shared memory, and the backend is OOM-killed --
+    `server process was terminated by signal 9`, taking the whole instance into
+    recovery. It is off by default nowhere and should stay on unless you have
+    measured your own shapes; the fence is load-bearing, not an optimisation.
+
+    Where the fence genuinely costs more than it saves -- a scope matching most
+    of the table, where it is 1,680ms against 862ms unfenced -- the answer is to
+    narrow the scope or to fence by hand where you know it pays, not to disable
+    it globally. See OverlayFencedIn.
     """
     configured = getattr(settings, "DJANGO_OVERLAY_M2M_FENCE", True)
     if not isinstance(configured, bool):
