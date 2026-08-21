@@ -76,7 +76,7 @@ def _suite_names():
 @click.option("--no-compare", is_flag=True, help="Do not add a delta column.")
 @click.option("--clear-results", is_flag=True, help="Delete every saved run and exit.")
 @click.option("--interactive", is_flag=True, help="Ask for the settings instead of taking flags.")
-# The four library optimisations. Paired flags with no default of their own, so
+# The library's query optimisations. Paired flags with no default of their own, so
 # that "not given" is distinguishable from "given as on" -- which is what lets
 # --no-optimisations move the floor under all four while an explicit
 # --force-hash-joins lifts one back out of it. Each flag's name and help text
@@ -85,7 +85,7 @@ def _suite_names():
 # two spellings agree, because a flag the table does not know about moves
 # nothing.
 @click.option("--no-optimisations", "all_off", is_flag=True,
-              help="Turn all four query optimisations off. The other arm of the A/B.")
+              help="Turn every query optimisation off. The other arm of the A/B.")
 @click.option("--rewrite-traversals/--no-rewrite-traversals", default=None,
               help="Rewrite a filter that traverses between two overlay views into a subquery.")
 @click.option("--redirect-select-related/--no-redirect-select-related", default=None,
@@ -93,7 +93,9 @@ def _suite_names():
 @click.option("--force-hash-joins/--no-force-hash-joins", default=None,
               help="Ban nested loops for a query joining several overlay views.")
 @click.option("--array-subquery-in/--no-array-subquery-in", default=None,
-              help="Fence an __in subquery as `lhs = ANY (ARRAY(subquery))`.")
+              help="Fence a foreign key's __in subquery as `lhs = ANY (ARRAY(subquery))`.")
+@click.option("--m2m-fence/--no-m2m-fence", default=None,
+              help="Add the redundant fence to an m2m traversal between two overlay views.")
 @click.option("--yes", is_flag=True, help="Do not prompt before a long run.")
 def benchmark(**options):
     """Measure django-overlay against plain tables holding identical rows."""

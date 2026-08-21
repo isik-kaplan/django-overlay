@@ -60,10 +60,10 @@ USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 
-# The four query optimisations, switchable from the environment.
+# The five query optimisations, switchable from the environment.
 #
 # A benchmark that cannot turn an optimisation off cannot say what it is worth,
-# and this module used to leave all four at their library defaults -- so the
+# and this module used to leave them all at their library defaults -- so the
 # only measurable question was "overlay against a plain table", never "this
 # rewrite against no rewrite". Comparing against master is not an option: none
 # of these mechanisms exists there, and neither does this harness.
@@ -75,3 +75,4 @@ DJANGO_OVERLAY_REWRITE_TRAVERSALS = switches.read(switches.REWRITE_TRAVERSALS)
 DJANGO_OVERLAY_REDIRECT_SELECT_RELATED = switches.read(switches.REDIRECT_SELECT_RELATED)
 DJANGO_OVERLAY_FORCE_HASH_JOINS = switches.read(switches.FORCE_HASH_JOINS)
 DJANGO_OVERLAY_ARRAY_SUBQUERY_IN = switches.read(switches.ARRAY_SUBQUERY_IN)
+DJANGO_OVERLAY_M2M_FENCE = switches.read(switches.M2M_FENCE)

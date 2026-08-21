@@ -1,11 +1,11 @@
-"""The four query optimisations, in one table.
+"""The five query optimisations, in one table.
 
 Three places have to agree about them and none of them can see the others: the
 CLI turns each into a flag, `settings.py` turns each into a Django setting
 before `django.setup()` reads it, and `environment.py` records which were on so
 that a saved run says what arm it was measuring. The table lives here so that
 those three read one set of names instead of three, and so that a test can
-assert the CLI exposes exactly these -- a fifth optimisation is an entry here
+assert the CLI exposes exactly these -- a sixth optimisation is an entry here
 and a click option there, and the test fails until it is both.
 
 The library reads every one of them through `getattr(settings, name, True)`, so
@@ -48,7 +48,12 @@ FORCE_HASH_JOINS = Switch(
 ARRAY_SUBQUERY_IN = Switch(
     "array-subquery-in",
     "DJANGO_OVERLAY_ARRAY_SUBQUERY_IN",
-    "Fence an __in subquery as `lhs = ANY (ARRAY(subquery))`.",
+    "Fence a foreign key's __in subquery as `lhs = ANY (ARRAY(subquery))`.",
+)
+M2M_FENCE = Switch(
+    "m2m-fence",
+    "DJANGO_OVERLAY_M2M_FENCE",
+    "Add the redundant fence to an m2m traversal between two overlay views.",
 )
 
 SWITCHES = (
@@ -56,6 +61,7 @@ SWITCHES = (
     REDIRECT_SELECT_RELATED,
     FORCE_HASH_JOINS,
     ARRAY_SUBQUERY_IN,
+    M2M_FENCE,
 )
 
 # What counts as on when the value arrives as text. Anything else is off,

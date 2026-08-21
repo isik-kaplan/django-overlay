@@ -1,6 +1,6 @@
 """Every combination of the four query optimisations, checked for correctness.
 
-Each of the four is a performance mechanism that must not change an answer, and
+Each is a performance mechanism that must not change an answer, and
 each has an opt-out because each has a regime where it loses -- the array fence
 crosses over from 2.0x faster to 2.3x slower somewhere between a 25,000-row and
 a 1,000,000-row scope, and the nested-loop ban costs 5-13% on the two- and
@@ -15,8 +15,8 @@ cannot be run with a flag off either: 44 tests assert that the rewrite fired.
 That left the combinations untested, and not for want of single-flag coverage:
 every flag had an off-state test, but no test had ever turned two off at once,
 which is exactly what `django-overlay benchmark --no-optimisations` runs. This
-file closes that. All sixteen combinations, because sixteen is small enough that
-choosing a subset would need an argument nobody could check.
+file closes that. Every combination, because the count is still small enough that choosing a
+subset would need an argument nobody could check.
 
 It is differential rather than SQL-pinning, deliberately. Turning an
 optimisation off is *supposed* to change the SQL; what it must never change is
@@ -57,13 +57,14 @@ SWITCHES = (
     "DJANGO_OVERLAY_REDIRECT_SELECT_RELATED",
     "DJANGO_OVERLAY_FORCE_HASH_JOINS",
     "DJANGO_OVERLAY_ARRAY_SUBQUERY_IN",
+    "DJANGO_OVERLAY_M2M_FENCE",
 )
 
 ALL_ON = dict.fromkeys(SWITCHES, True)
 
 
 def _combinations():
-    """Every on/off assignment of the four, named by what is off."""
+    """Every on/off assignment, named by what is off."""
     for states in itertools.product((True, False), repeat=len(SWITCHES)):
         settings = dict(zip(SWITCHES, states, strict=True))
         off = [name for name, on in settings.items() if not on]
@@ -241,7 +242,8 @@ def test_there_is_a_case_with_every_switch_off():
     """The arm `--no-optimisations` runs, and the one that had no test at all."""
     ids = {param.id for param in _combinations()}
     assert "everything-on" in ids
-    assert (
-        "rewrite-traversals-redirect-select-related-force-hash-joins-array-subquery-in" in ids
+    everything_off = "-".join(
+        name.removeprefix("DJANGO_OVERLAY_").lower().replace("_", "-") for name in SWITCHES
     )
+    assert everything_off in ids
     assert len(ids) == 2 ** len(SWITCHES)

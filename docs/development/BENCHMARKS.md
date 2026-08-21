@@ -47,7 +47,7 @@ view's fault or the query's.
 
 ## Turning the optimisations off
 
-The library carries four query optimisations, all on by default. Each one has a
+The library carries five query optimisations, all on by default. Each one has a
 flag, so the question the benchmark answers is not only "overlay against a plain
 table" but "this rewrite against no rewrite":
 
@@ -62,10 +62,19 @@ uv run django-overlay benchmark --scale 1.0 --no-optimisations
 | `--no-redirect-select-related` | `DJANGO_OVERLAY_REDIRECT_SELECT_RELATED` |
 | `--no-force-hash-joins` | `DJANGO_OVERLAY_FORCE_HASH_JOINS` |
 | `--no-array-subquery-in` | `DJANGO_OVERLAY_ARRAY_SUBQUERY_IN` |
+| `--no-m2m-fence` | `DJANGO_OVERLAY_M2M_FENCE` |
 
-`--no-optimisations` turns all four off. An individual flag still wins against
+`--no-optimisations` turns them all off. An individual flag still wins against
 it, so `--no-optimisations --force-hash-joins` prices the nested-loop ban on its
-own rather than the four together. The names live in `benchmark/switches.py`,
+own rather than all of them together.
+
+`ARRAY_SUBQUERY_IN` and `M2M_FENCE` were one flag until they were split. It gated
+two unrelated things — the `fk__in=<subquery>` rewrite and the m2m fence — so
+turning it off to spare one broad foreign-key filter also unfenced every m2m
+traversal, giving away 306.6ms → 0.4ms selective and 7,896.5ms → 105.9ms broad to
+fix something else. The fence's flag gates whether the fence is *added*, not how
+it compiles: a fence compiled as a plain `IN` is the one combination with no
+argument for it, carrying the extra semi-join and none of the benefit. The names live in `benchmark/switches.py`,
 which the CLI, the settings module and the environment record all read, and a
 test asserts each flag reaches the library's own gate — a flag that moves a
 setting nothing reads reports the default arm under the other arm's name.
@@ -84,7 +93,19 @@ Two things follow from the switches being recorded in each run's environment:
 
 Mutation testing cannot reach any of this: every mutant runs under the default
 settings, so the non-default configurations are invisible to it by construction.
-The flags are how they get exercised at all.
+`tests/test_optimisations_off.py` is what covers them — every on/off combination,
+differential against all-on, asserting identical rows rather than identical SQL.
+
+None of these flags make the library adapt at runtime, and none ever will.
+Every optimisation is decided by **query shape** alone: which models are joined,
+how many overlay views are involved, whether there is a `LIMIT`, whether an rhs
+is a literal or a subquery. Nothing consults row counts, `pg_class.reltuples` or
+statistics, because SQL that depends on database state is SQL you cannot read off
+the code — the same query would plan differently on two machines and a stale
+`ANALYZE` would change behaviour silently. Where the right answer genuinely
+depends on data size, the library picks a static default and offers a manual
+per-query opt-in instead; see `OverlayFencedIn` for the one case, reachable as
+`filter(pk__overlay_fenced_in=<queryset>)`.
 
 ## Scale
 

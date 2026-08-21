@@ -24,6 +24,27 @@ from .planning import (
 )
 
 
+def _m2m_fence_enabled() -> bool:
+    """settings.DJANGO_OVERLAY_M2M_FENCE turns the m2m fence off on its own.
+
+    Split out of DJANGO_OVERLAY_ARRAY_SUBQUERY_IN, which used to gate two
+    unrelated things: the `fk__in=<subquery>` rewrite, and this. One flag for
+    both meant that turning it off to spare a broad foreign-key filter also
+    unfenced every m2m traversal -- 306.6ms -> 0.4ms selective and 7,896.5ms ->
+    105.9ms broad, given away to fix something else.
+
+    It gates whether the fence is *added*, not how it compiles, because a fence
+    compiled as a plain `IN` is the one combination with no argument for it: an
+    extra semi-join costed with the same blind appendrel estimate the fence
+    exists to route around, carrying all of the cost and none of the benefit.
+    On or absent -- there is nothing in between worth having.
+    """
+    configured = getattr(settings, "DJANGO_OVERLAY_M2M_FENCE", True)
+    if not isinstance(configured, bool):
+        raise ImproperlyConfigured(f"settings.DJANGO_OVERLAY_M2M_FENCE must be a bool, got {configured!r}.")
+    return configured
+
+
 def _rewrite_traversals_enabled() -> bool:
     """settings.DJANGO_OVERLAY_REWRITE_TRAVERSALS turns OverlayQuery's rewrite
     off. On by default, because leaving it off means every application author
@@ -211,6 +232,8 @@ class OverlayQuery(sql.Query):
         if hasattr(value, "resolve_expression"):
             return None
         if not _rewrite_traversals_enabled():
+            return None
+        if not _m2m_fence_enabled():
             return None
 
         head, _, rest = path.partition("__")
