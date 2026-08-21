@@ -152,7 +152,21 @@ Swept at 1,000,000 people, the same subquery compiled both ways:
 
 So it stops paying rather than turning into a penalty on this shape: reach for it
 when you know the scope is selective, leave `pk__in` alone when you know it is
-not or cannot tell. It resolves on any overlay model and raises `FieldError` on a
+not or cannot tell.
+
+The threshold to carry in your head is a **fraction of the table, not a row
+count** — measured at both 300,000 and 1,000,000 people, the fence crosses over
+somewhere between a scope matching 5% of the table and one matching 50%:
+
+| scope, as a share of the table | at 300,000 people | at 1,000,000 |
+|---|---|---|
+| ~0.02% | ×70.7 | ×11–13 |
+| 0.5% | ×7.0 | ×5.2 |
+| 5% | ×2.8 | ×1.8 |
+| 50% | ×0.9 | ×0.5 |
+
+Which is why no static row count would have been the right default: the same
+absolute scope is worth fencing in a big table and not worth it in a small one. It resolves on any overlay model and raises `FieldError` on a
 plain one, because the resolution lives on the overlay query rather than on the
 field.
 

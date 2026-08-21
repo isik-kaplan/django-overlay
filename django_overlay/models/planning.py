@@ -55,13 +55,25 @@ def _force_hash_joins_enabled() -> bool:
 # earlier single threshold of 4 blocked the 14x ordered-page win. Neither number
 # alone fits the data.
 #
-# Both are now pinned from both sides at scale 1.0, two passes agreeing, which
-# is what makes 4 a measurement rather than a guess. Banning at 3 views with no
-# LIMIT costs 18ms -> 57ms, so the threshold has to be above 3; not banning at
-# 5 views is >30s against 752ms, so it has to be at or below 5. That leaves 4
-# or 5, and they behave identically on every m2m shape -- one hop is 3 views and
-# two are 5, so nothing distinguishes them except a 4-view query, a foreign-key
-# chain plus a second join, which still has not been measured on its own.
+# Both are pinned from both sides at scale 1.0, two passes agreeing, and the
+# unsliced one is now determined exactly rather than to within a range. Banning
+# at 3 views with no LIMIT costs 18ms -> 57ms; banning at 4 costs 3ms -> 36ms;
+# not banning at 5 is >30s against 752ms. So it must not fire at 4 and must fire
+# at 5, and 5 is the only integer that does both.
+#
+# It was 4 until the 4-view shape was measured, on the reasoning that 4 and 5
+# behave identically on every m2m shape -- one hop is 3 views and two are 5 --
+# so 4 was the smallest integer above one hop and nothing distinguished it from
+# 5. Something does. Views are counted distinct, so an m2m hop steps 3 -> 5 -> 7
+# and never lands on 4; but starting from a *through* model and traversing out of
+# it does: person_address, person, person_phone, phone. That is one hop with an
+# extra base view, and at 45 rows the ban made it 3ms -> 36ms -- the same shape
+# of regression that ruled out a single threshold of 2, one view further along.
+#
+# Which says what the count actually is: a proxy for how many hops the planner
+# has to estimate blindly, and a leaky one. Four views is where it leaks, because
+# a query can reach four with one hop. The broad version of the same shape is
+# x1.1 either way, so nothing is given up by not banning it.
 #
 # The same run is why there are two numbers and not one, stated as sharply as it
 # gets: at 3 views, unsliced wants the nested loop kept (banning costs 3.2x) and
@@ -78,7 +90,7 @@ def _force_hash_joins_enabled() -> bool:
 # have put a >30s query back into the exact case the mechanism exists for. The
 # low-scale cost is real; it is the price of the shape that does not finish
 # without it, and it is the right trade.
-_HASH_JOIN_THRESHOLD = 4
+_HASH_JOIN_THRESHOLD = 5
 _HASH_JOIN_THRESHOLD_LIMITED = 2
 
 

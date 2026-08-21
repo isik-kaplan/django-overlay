@@ -28,7 +28,13 @@ from django_overlay.models import (
     _overlay_views_read,
     planning,
 )
-from tests.testapp.models import BenchPerson, Member, PlainPerson, Roster
+from tests.testapp.models import (
+    BenchPerson,
+    BenchPersonAddress,
+    Member,
+    PlainPerson,
+    Roster,
+)
 from tests.testapp_shared.models import MemberSource, RosterSource
 
 
@@ -36,7 +42,10 @@ pytestmark = pytest.mark.django_db
 
 OFF = override_settings(DJANGO_OVERLAY_FORCE_HASH_JOINS=False)
 
+ONE_HOP = {"addresses__city": "city0"}
 TWO_HOPS = {"addresses__city": "city0", "phones__kind": "mobile"}
+# One hop reached from the through model, which is four views rather than three.
+FOUR_VIEWS = {"person__phones__number": "+447000000042"}
 BAN = "SET enable_nestloop = off"
 
 
@@ -209,6 +218,45 @@ def test_the_threshold_counts_one_hop_as_three_views_and_two_as_five():
     assert _overlay_views_joined(one_hop) == 3
     assert _overlay_views_joined(two_hops) == 5
     assert _HASH_JOIN_THRESHOLD_LIMITED <= 3 < _HASH_JOIN_THRESHOLD <= 5
+
+
+def test_four_views_from_one_hop_is_not_banned():
+    """The shape that decided the unsliced threshold, and the regression guard
+    on it.
+
+    Views are counted distinct, so an m2m hop steps 3 -> 5 -> 7 and never lands
+    on 4 -- which is why the threshold sat at 4 for a while on the reasoning
+    that nothing could tell 4 and 5 apart. Starting from the *through* model and
+    traversing out of it does land on 4: person_address, person, person_phone,
+    phone. That is still one hop, with an extra base view along for the ride.
+
+    Measured at 1,000,000 people on a 45-row scope, the ban made it 3ms -> 36ms
+    -- the same regression that ruled out a single threshold of 2, one view
+    further along. Lower the threshold back to 4 and this fails.
+    """
+    four = BenchPersonAddress.objects.filter(**FOUR_VIEWS)
+    assert _overlay_views_joined(four.query) == 4, "the shape must still count four"
+    assert not any(BAN in statement for statement in statements(four))
+
+
+def test_the_view_count_is_a_proxy_for_hops_and_four_is_where_it_leaks():
+    """Why the number is 5 and not 4, as an assertion rather than a comment.
+
+    The count stands in for how many joins the planner has to size with no
+    statistics. One hop is three views and needs no ban; two hops is five and
+    does. Four is reachable with one hop, so a threshold of 4 would ban a
+    one-hop query -- which is exactly what it did.
+    """
+    one_hop = BenchPerson.objects.filter(**ONE_HOP).query
+    one_hop_from_through = BenchPersonAddress.objects.filter(**FOUR_VIEWS).query
+    two_hops = BenchPerson.objects.filter(**TWO_HOPS).query
+
+    assert _overlay_views_joined(one_hop) == 3
+    assert _overlay_views_joined(one_hop_from_through) == 4
+    assert _overlay_views_joined(two_hops) == 5
+    # The threshold has to sit above every one-hop shape and at or below two.
+    assert _overlay_views_joined(one_hop_from_through) < _HASH_JOIN_THRESHOLD
+    assert _HASH_JOIN_THRESHOLD <= _overlay_views_joined(two_hops)
 
 
 def test_a_limit_lowers_the_bar_rather_than_removing_it():
