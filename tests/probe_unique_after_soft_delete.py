@@ -106,12 +106,18 @@ def test_freeing_a_unique_value_with_a_soft_delete():
     with connection.cursor() as cursor:
         try:
             # --- (a) a locally-created row, no source involved -----------------
+            # Blocker (a) cannot arise here any more, so the partial index has
+            # nothing to exclude and the answer no longer depends on it. Soft
+            # delete is decided per row and an organic row has no source row to
+            # mask, so deleting one is a plain DELETE and its value is free the
+            # way a plain table's would be. Both cases are still run, because
+            # "the partial index stopped mattering" is the fact worth pinning.
             for partial in (False, True):
                 setup(cursor, partial_index=partial, mask_aware_trigger=False)
                 obj = SoftDeleteTest.objects.create(first_name="local")
                 obj.delete()
                 reused = attempt(lambda: SoftDeleteTest.objects.create(first_name="local"))
-                check(f"reuse an organic row's value       (partial index={partial})", partial, reused)
+                check(f"reuse an organic row's value       (partial index={partial})", True, reused)
 
             # --- (b) a source-backed row, masked by a tombstone ----------------
             for mask_aware in (False, True):

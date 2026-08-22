@@ -71,7 +71,9 @@ def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None
         )
     )
     execute(
-        overlay_sql.build_instead_of_delete_sql(view_name, tenant_schema, base_table, pk_column, columns, soft_delete)
+        overlay_sql.build_instead_of_delete_sql(
+            view_name, tenant_schema, base_table, pk_column, columns, soft_delete, source, strategy
+        )
     )
 
 

@@ -162,9 +162,8 @@ def test_soft_delete_orm_compatibility():
     run("re-inserting the same pk after delete", _reinsert_same_pk)
 
     def _tombstone_visible_in_base_table():
-        obj = organic(first_name="tomb")
-        pk = obj.pk
-        obj.delete()
+        pk = source_row(first_name="tomb")
+        SoftDeleteTest.objects.filter(pk=pk).delete()
         with connection.cursor() as cursor:
             cursor.execute("SELECT _overlay_deleted FROM softdeletetest WHERE id = %s", [pk])
             row = cursor.fetchone()
@@ -173,6 +172,29 @@ def test_soft_delete_orm_compatibility():
         return "tombstone kept in the base table (invisible through the view)"
 
     run("tombstone is invisible through the view only", _tombstone_visible_in_base_table)
+
+    def _organic_delete_leaves_nothing():
+        obj = organic(first_name="residue")
+        pk = obj.pk
+        obj.delete()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM softdeletetest WHERE id = %s", [pk])
+            if cursor.fetchone() is not None:
+                raise Diverges("a tombstone with nothing to mask — invisible forever, and still holding the pk")
+        return "row gone from the base table, as on a plain table"
+
+    run("deleting an organic row leaves no residue", _organic_delete_leaves_nothing)
+
+    def _reinsert_a_masked_source_pk():
+        pk = source_row(first_name="masked")
+        SoftDeleteTest.objects.filter(pk=pk).delete()
+        try:
+            SoftDeleteTest.objects.create(id=pk, first_name="reused")
+        except IntegrityError:
+            raise Diverges("the tombstone holds the pk — which is the only way to keep the source row masked") from None
+        return "pk reusable"
+
+    run("re-inserting a masked source row's pk", _reinsert_a_masked_source_pk)
 
     def _unique_value_reuse():
         obj = SoftDeleteUniqueTest.objects.create(ssn="probe-1", email="probe-1@x", first_name="probe", last_name="one")
@@ -210,7 +232,15 @@ def test_soft_delete_orm_compatibility():
     ok = sum(1 for _, s, _ in RESULTS if s == "OK")
     print(f"\n{ok} OK / {len(RESULTS) - ok} not OK")
 
-    # Pinned rather than asserted clean: the pk one is inherent (a tombstone
-    # holds its row, and Postgres has no partial primary key). A *second*
-    # divergence, or this one disappearing, both deserve a failure.
-    assert [name for name, status, _ in RESULTS if status != "OK"] == ["re-inserting the same pk after delete"]
+    # Pinned rather than asserted clean: one divergence is inherent, and it is
+    # the price of masking rather than a defect. A tombstone over a source row
+    # has to hold that row's pk -- that is what hides the source row -- and
+    # Postgres has no partial primary key to exclude it from.
+    #
+    # It used to be the organic row that diverged here, on the same line. That
+    # was the defect: a tombstone over nothing masks nothing, and only keeps a
+    # pk and a set of index entries out of circulation for the life of the
+    # table. Soft delete is now decided per row, so an organic delete is a
+    # delete. A *second* divergence, or this one disappearing, both deserve a
+    # failure.
+    assert [name for name, status, _ in RESULTS if status != "OK"] == ["re-inserting a masked source row's pk"]

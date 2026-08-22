@@ -1,16 +1,42 @@
 CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
 BEGIN
-  -- Soft delete: flag the row instead of removing it, so a source-backed
-  -- row stays masked forever instead of reappearing once its base copy is gone.
-  UPDATE {{ tenant_schema | qi }}.{{ base_table | qi }} SET _overlay_deleted = TRUE WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
-  IF NOT FOUND THEN
-    INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
-      {%- for c in columns -%}{{ c | qi }}, {% endfor -%}_overlay_deleted
-    ) VALUES (
-      {%- for c in columns -%}OLD.{{ c | qi }}, {% endfor -%}TRUE
-    )
-    ON CONFLICT ({{ pk_column | qi }}) DO UPDATE SET _overlay_deleted = TRUE;
+{%- if source %}
+  -- Soft delete, but only where soft delete buys anything.
+  --
+  -- The flag has exactly one job: keep a source row masked, so that removing
+  -- the base copy does not un-hide the vendor's original. A row with no source
+  -- row behind it has nothing to mask, and flagging it leaves a row that is
+  -- invisible to the view forever while still holding its index entries and its
+  -- primary key -- a partial primary key not being a thing in Postgres. So the
+  -- decision is per row rather than per model: flag what shadows something,
+  -- delete what does not.
+  --
+  -- Costs one indexed lookup against the source table per deleted row. The
+  -- alternative is residue that accumulates silently for the lifetime of the
+  -- table, and that nothing in the ORM will ever show you.
+  IF EXISTS (
+    SELECT 1 FROM {{ source.schema | qi }}.{{ source.table | qi }}
+    WHERE {{ source.id_column | qi }} = {{ "-" if source.negate }}OLD.{{ pk_column | qi }}
+  ) THEN
+    UPDATE {{ tenant_schema | qi }}.{{ base_table | qi }} SET _overlay_deleted = TRUE WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
+    IF NOT FOUND THEN
+      -- A source row nobody had materialised yet: the tombstone is the only
+      -- thing that will hide it, so it has to be created.
+      INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
+        {%- for c in columns -%}{{ c | qi }}, {% endfor -%}_overlay_deleted
+      ) VALUES (
+        {%- for c in columns -%}OLD.{{ c | qi }}, {% endfor -%}TRUE
+      )
+      ON CONFLICT ({{ pk_column | qi }}) DO UPDATE SET _overlay_deleted = TRUE;
+    END IF;
+  ELSE
+    DELETE FROM {{ tenant_schema | qi }}.{{ base_table | qi }} WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
   END IF;
+{%- else %}
+  -- No source table at all, so nothing can ever need masking and the flag can
+  -- never earn its place. Every row here is the tenant's own.
+  DELETE FROM {{ tenant_schema | qi }}.{{ base_table | qi }} WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
+{%- endif %}
   RETURN OLD;
 END;
 $$ LANGUAGE plpgsql;
