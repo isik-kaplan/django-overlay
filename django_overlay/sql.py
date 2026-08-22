@@ -31,6 +31,19 @@ def anti_join_kind(overridable: bool, soft_delete: bool) -> str | None:
     return "tombstones" if soft_delete else None
 
 
+# The view's origin column, and the two literals it carries.
+#
+# One definition, because four places have to agree about them: the view
+# template writes the literals, the queryset filters on them, the tests assert
+# both, and a project reading `person.overlay_origin` compares against them.
+#
+# Underscore-prefixed like `_overlay_deleted`, so it stays out of the namespace
+# a model's own fields live in.
+ORIGIN_COLUMN = "_overlay_origin"
+ORIGIN_BASE = "base"
+ORIGIN_SOURCE = "source"
+
+
 def build_view_sql(
     view_name: str,
     tenant_schema: str,
@@ -52,6 +65,9 @@ def build_view_sql(
         source=_source_context(source, strategy),
         soft_delete=soft_delete,
         anti_join=anti_join_kind(overridable, soft_delete),
+        origin_column=ORIGIN_COLUMN,
+        origin_base=ORIGIN_BASE,
+        origin_source=ORIGIN_SOURCE,
     )
 
 
