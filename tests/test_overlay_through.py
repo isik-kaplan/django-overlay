@@ -197,13 +197,26 @@ def test_prefetch_related_across_the_through_view(vendor_membership):
 
 
 def test_the_through_view_has_the_expected_columns():
+    """Two overlay columns, and they sit on opposite sides on purpose.
+
+    `_overlay_deleted` is base-only: a tombstone is how the base table records a
+    deletion, and the view exists to hide them. `_overlay_origin` is view-only:
+    it is a literal per branch of the UNION ALL, so it has nothing to store and
+    the base table has no column for it -- which is what keeps the INSTEAD OF
+    triggers, whose insert list is model._meta.fields, unaware of it.
+    """
     with connection.cursor() as cursor:
         cursor.execute(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_name = 'rostermembership_view' ORDER BY ordinal_position"
         )
-        columns = {row[0] for row in cursor.fetchall()}
-    assert columns == {"id", "roster_id", "member_id", "role"}
+        ordered = [row[0] for row in cursor.fetchall()]
+        columns = set(ordered)
+    assert columns == {"_overlay_origin", "id", "roster_id", "member_id", "role"}
+    assert ordered[0] == "_overlay_origin", (
+        "first, not last: CREATE OR REPLACE VIEW may only append columns, so with "
+        "the origin at the end every AddField migration would try to rename it"
+    )
     assert "_overlay_deleted" not in columns, "the tombstone flag is base-only"
 
 

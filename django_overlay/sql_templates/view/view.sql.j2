@@ -4,14 +4,41 @@
 {%- if not loop.last %}, {% endif -%}
 {%- endfor -%}
 {%- endmacro -%}
+{#- Which branch a row came from, as a literal per branch rather than anything
+    computed. That is the whole trick: a constant in the target list lets
+    Postgres prove the other branch contributes nothing to `origin = '...'` and
+    drop it -- Append node, anti-join and all -- so base_only() and
+    source_only() cost less than querying the view at all.
+
+    It has to stay a constant. A CASE that also told organic from overridden
+    was measured: unreferenced it is free, because Postgres eliminates an
+    unused target-list expression, but the moment you filter on it nothing can
+    be proved and nothing is pruned. `origin = 'source'` then scanned every
+    base row, hashed the whole source table to evaluate the CASE, discarded all
+    of it and returned zero rows -- 17.4ms against 5.2ms for scanning the
+    entire view. Those two populations are a semi-join in the queryset instead,
+    paid by the callers who ask for them.
+
+    Not in `columns`, which is model._meta.fields and drives both this select
+    list and the INSERT list inside the INSTEAD OF triggers. Keeping it out
+    means the triggers need no knowledge of it and Django, which names its
+    columns explicitly, never selects it by accident.
+
+    First rather than last, which is not cosmetic. CREATE OR REPLACE VIEW may
+    only *append* columns -- rename one and Postgres refuses -- so with the
+    origin at the end, every AddField migration inserts a model column in front
+    of it and the replace fails with "cannot change name of view column". In
+    front, model columns always append and every later migration replaces
+    cleanly. Introducing the column into an existing project is still a drop
+    and recreate, because it moves every column along by one. -#}
 CREATE OR REPLACE VIEW {{ tenant_schema | qi }}.{{ view_name | qi }} AS
-SELECT {{ select_list(pk_column | qi) }} FROM {{ tenant_schema | qi }}.{{ base_table | qi }}
+SELECT '{{ origin_base }}' AS {{ origin_column | qi }}, {{ select_list(pk_column | qi) }} FROM {{ tenant_schema | qi }}.{{ base_table | qi }}
 {% if soft_delete -%}
 WHERE NOT _overlay_deleted
 {% endif -%}
 {% if source -%}
 UNION ALL
-SELECT {{ select_list(("-" if source.negate else "") ~ (source.id_column | qi)) }} FROM {{ source.schema | qi }}.{{ source.table | qi }}
+SELECT '{{ origin_source }}' AS {{ origin_column | qi }}, {{ select_list(("-" if source.negate else "") ~ (source.id_column | qi)) }} FROM {{ source.schema | qi }}.{{ source.table | qi }}
 {#- NOT EXISTS, not NOT IN. Both express "the base table hasn't taken this id
     over", but NOT IN makes Postgres hash every base row before it can rule out
     a single source row -- a point lookup measured 39ms against 0.03ms once this

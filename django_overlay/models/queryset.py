@@ -12,6 +12,8 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models, transaction
 from django.db.models.constants import LOOKUP_SEP
 
+from .. import sql as overlay_sql
+from .._templating import _qi
 from ..exceptions import OverlayConfigurationError
 from ..strategies import negates_source_ids
 from .query import OverlayQuery
@@ -65,6 +67,128 @@ class OverlayQuerySet(models.QuerySet):
             query = OverlayQuery(model)
         super().__init__(model=model, query=query, using=using, hints=hints)
         self._overlay_redirected = ()
+
+    # ---------------------------------------------- which branch a row is from
+
+    def with_origin(self, alias: str = "overlay_origin"):
+        """Annotate each row with the branch it came from: "base" or "source".
+
+        Free. The column is a literal in each branch of the view's UNION ALL, so
+        reading it costs a constant per row and nothing else -- no join, no
+        lookup against the source table.
+        """
+        return self.annotate(**{alias: self._origin_expression()})
+
+    def base_only(self):
+        """Only rows the tenant's own table holds -- edited or created here.
+
+        Cheaper than not filtering at all, which is the point. The origin column
+        is a constant per branch, so Postgres can prove the source branch
+        contributes nothing and drop it: the Append node goes, and with it the
+        anti-join the docs call the dominant cost of the whole view. What is
+        left is a plain scan of the base table.
+
+        That also takes the query out of the overlay's cost model entirely.
+        There is no appendrel left to mis-estimate, so nothing here needs the
+        nested-loop ban, the m2m fence or the traversal rewrite.
+        """
+        return self._filter_origin(overlay_sql.ORIGIN_BASE)
+
+    def source_only(self):
+        """Only vendor rows the tenant has never touched.
+
+        The mirror image: the base branch is pruned instead, leaving the source
+        scan and its anti-join.
+        """
+        return self._filter_origin(overlay_sql.ORIGIN_SOURCE)
+
+    def overridden(self):
+        """Base rows that shadow a source row -- vendor records edited here.
+
+        Costs one semi-join against the source table on top of `base_only()`.
+        That join is why the view does not carry a four-way origin column: as a
+        literal per branch the origin prunes, and as anything computed it stops
+        pruning for everybody. Paid here, by the caller who asked for it.
+        """
+        shadows = self._shadow_predicate()
+        return self.none() if shadows is None else self.base_only().filter(shadows)
+
+    def organic(self):
+        """Base rows with no source counterpart -- created here, not the
+        vendor's. `base_only()` is `organic()` plus `overridden()`."""
+        shadows = self._shadow_predicate()
+        scoped = self.base_only()
+        return scoped if shadows is None else scoped.exclude(shadows)
+
+    # -- the machinery under those five
+
+    def _origin_column(self) -> str:
+        """The view's origin column, qualified.
+
+        Raw rather than a model field, deliberately. A field would be a column
+        Django puts in every INSERT, and the view is written through INSTEAD OF
+        triggers whose column list comes from model._meta.fields -- so a field
+        here would have to be excluded from writes in several places. An
+        expression needs none of that: nothing changes about inserts, updates,
+        or the triggers.
+        """
+        return f"{_qi(self.model._meta.db_table)}.{_qi(overlay_sql.ORIGIN_COLUMN)}"
+
+    def _origin_expression(self):
+        """The column as something annotate() can read back into Python.
+
+        No output_field, deliberately, and not an oversight to correct: RawSQL
+        substitutes a bare Field() for a missing one, and Django registers no
+        lookup or transform that a TextField would have and a bare Field would
+        not. Declaring the type was accurate and changed nothing -- two mutants
+        said so, by removing it with every test still passing. The BooleanField
+        below is the opposite case and has to stay.
+        """
+        return models.expressions.RawSQL(self._origin_column(), ())
+
+    # The two below are conditions handed straight to filter()/exclude(), not
+    # annotations compared to a value. Annotating needs an alias, and an alias
+    # nothing ever reads is a name any change to which is unobservable -- four
+    # surviving mutants worth, every one of them a rename. Without the alias
+    # they cannot exist.
+    #
+    # It is also what makes the output_field below load-bearing: filter()
+    # refuses an expression that is not conditional, and an expression is only
+    # conditional when its output_field is a BooleanField. Drop it and this
+    # raises, where on an annotation it would have gone unnoticed.
+
+    def _filter_origin(self, value):
+        return self.filter(
+            models.expressions.RawSQL(
+                f"{self._origin_column()} = %s", (value,), output_field=models.BooleanField()
+            )
+        )
+
+    def _shadow_predicate(self):
+        """EXISTS() against the source row a base row would be shadowing, or
+        None when the model has no source table for it to shadow.
+
+        The two callers above take it from here rather than passing a flag down.
+        A flag would be read for its truthiness only, which makes every other
+        falsey value the same code -- `shadowing=False` and `shadowing=None`
+        being indistinguishable is a surviving mutant, and an accurate one. It
+        also put both sourceless answers in one line here, where `overridden()`
+        returning nothing and `organic()` returning everything look like a pair
+        of opposites rather than two unrelated facts.
+        """
+        source = self.model.get_source()
+        if source is None:
+            return None
+
+        table = _qi(self.model._meta.db_table)
+        pk = _qi(self.model._meta.pk.column)
+        sign = "-" if negates_source_ids(self.model._overlay_meta.strategy) else ""
+        return models.expressions.RawSQL(
+            f"EXISTS (SELECT 1 FROM {_qi(source.schema)}.{_qi(source.table)} "
+            f"WHERE {_qi(source.table)}.{_qi(source.id_column)} = {sign}{table}.{pk})",
+            (),
+            output_field=models.BooleanField(),
+        )
 
     # ------------------------------------------------ select_related routing
 
