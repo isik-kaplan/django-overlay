@@ -133,6 +133,8 @@ def build_instead_of_delete_sql(
     pk_column: str = "id",
     columns=None,
     soft_delete: bool = False,
+    source=None,
+    strategy: Strategy = Strategy.NEGATIVE_ID,
 ) -> str:
     template = "triggers/instead_of_delete_soft.sql.j2" if soft_delete else "triggers/instead_of_delete.sql.j2"
     return render(
@@ -143,6 +145,7 @@ def build_instead_of_delete_sql(
         function_name=f"{view_name}_instead_of_delete",
         pk_column=pk_column,
         columns=columns,
+        source=_source_context(source, strategy),
     )
 
 
