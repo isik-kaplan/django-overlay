@@ -55,15 +55,15 @@ def target_tables_for(target, tenant_schema: str, soft_delete: bool | None = Non
     taken from historical state: a trigger rebuilt while replaying an older
     migration must not reference `_overlay_deleted` before the migration that
     adds it has run."""
-    tables = [
-        {
-            "schema": tenant_schema,
-            "table": target._base_model._meta.db_table,
-            "id_column": "id",
-            "negate": False,
-            "soft_delete": target._overlay_meta.soft_delete if soft_delete is None else soft_delete,
-        }
-    ]
+    masks = target._overlay_meta.soft_delete if soft_delete is None else soft_delete
+    base = {
+        "schema": tenant_schema,
+        "table": target._base_model._meta.db_table,
+        "id_column": "id",
+        "negate": False,
+        "soft_delete": masks,
+    }
+    tables = [base]
     source = target.get_source()
     if source is not None:
         negate = negates_source_ids(target._overlay_meta.strategy)
@@ -74,6 +74,16 @@ def target_tables_for(target, tenant_schema: str, soft_delete: bool | None = Non
                 "id_column": source.id_column,
                 "negate": negate,
                 "soft_delete": False,
+                # A tombstone hides the source row from the view, so it has to
+                # hide it from the FK check too. Without this the source branch
+                # accepts a row the view will not return, and you get a
+                # reference you can write and cannot read back -- the whole of
+                # The base branch already excludes tombstones;
+                # this is the same exclusion, applied from the other side.
+                #
+                # `base` rather than a copy: the tombstone that masks a source
+                # row lives in that exact table, under the un-negated id.
+                "masked_by": base if masks else None,
             }
         )
     return tables

@@ -140,13 +140,32 @@ def test_the_soft_delete_override_is_used_only_when_it_is_given():
 
 
 def test_the_source_entry_never_carries_soft_delete():
-    """A vendor table has no tombstone column, so this key is always False --
-    and it has to be spelled the way the template reads it."""
+    """A vendor table has no tombstone column of its own, so this key is always
+    False on the source entry -- hiding a masked source row is `masked_by`'s
+    job. Both have to be spelled the way the template reads them."""
     targets = AddressNote._meta.get_field("address").target_tables("public")
     source = [t for t in targets if t["table"] == "testapp_shared_addresssource"][0]
 
-    assert set(source) == {"schema", "table", "id_column", "negate", "soft_delete"}
+    assert set(source) == {"schema", "table", "id_column", "negate", "soft_delete", "masked_by"}
     assert source["soft_delete"] is False
+
+
+def test_the_source_entry_points_at_the_table_that_can_mask_it():
+    """A tombstone hides the source row from the view, so the
+    FK check has to go looking for one -- and it lives in the target's base
+    table, under the un-negated id.
+
+    Only when the target soft deletes. Otherwise no tombstone can exist and the
+    extra EXISTS would be dead weight on every insert and every update of the
+    column."""
+    from django_overlay.fields import target_tables_for
+
+    masking = target_tables_for(Address, "public", soft_delete=True)
+    not_masking = target_tables_for(Address, "public", soft_delete=False)
+
+    assert masking[1]["masked_by"] is masking[0], "the base entry itself, not a copy of it"
+    assert masking[1]["masked_by"]["table"] == Address._base_model._meta.db_table
+    assert not_masking[1]["masked_by"] is None
 
 
 def test_deconstructing_a_field_that_never_had_db_constraint_is_fine():
