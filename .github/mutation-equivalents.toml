@@ -245,33 +245,6 @@ rather than counted, so it stays visible. Confirmed a genuine infinite loop and
 not slowness -- `nodes` is shortened on no path.
 """
 
-["django_overlay.models.planning.x__nested_queries__mutmut_49"]
-reason = """
-getattr(query, "annotations", {}) -> the same with None as the default. Every
-object that reaches this line was admitted by a `hasattr(inner, "alias_map")`
-check, so it is a Query, and Query.__init__ sets annotations to {} -- the
-default is unreachable and `.values()` is called on the attribute either way. A
-pragma cannot reach it: the mutation belongs to an argument inside a `for`
-statement's iterable.
-"""
-
-["django_overlay.models.planning.x__nested_queries__mutmut_52"]
-reason = """
-getattr(query, "annotations", {}) -> getattr(query, "annotations"). Same
-reasoning as mutmut_49: the attribute always exists, so whether a default is
-supplied is unobservable. The two-argument form would raise only for an object
-that is not a Query, and none reaches this line.
-"""
-
-["django_overlay.models.planning.x__overlay_views_read__mutmut_11"]
-reason = """
-getattr(join, "table_name", None) -> getattr(join, "table_name"). Every value
-in alias_map is a Join or a BaseTable, and both assign self.table_name in their
-__init__ (django/db/models/sql/datastructures.py, lines 57 and 192), so the
-default is never used and its absence cannot raise. Out of a pragma's reach: it
-is one argument of a call inside a `for` body whose other mutations are killed.
-"""
-
 ["django_overlay.models.query.xǁOverlayQueryǁ_traversal_rewrite__mutmut_37"]
 reason = """
 getattr(target, "_is_overlay_view_model", False) -> the same with None. The
