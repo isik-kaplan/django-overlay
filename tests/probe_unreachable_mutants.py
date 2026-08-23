@@ -284,6 +284,13 @@ MUTANTS = [
     ),
     (
         "sql",
+        "the FK trigger accepts a masked source row as a target",
+        "django_overlay/sql_templates/triggers/constraint_trigger.sql.j2",
+        '{% if t.masked_by %} AND NOT EXISTS (SELECT 1 FROM {{ t.masked_by.schema | qi }}.{{ t.masked_by.table | qi }} WHERE {{ t.masked_by.table | qi }}.{{ t.masked_by.id_column | qi }} = NEW.{{ column | qi }} AND {{ t.masked_by.table | qi }}._overlay_deleted){% endif %}',
+        "",
+    ),
+    (
+        "sql",
         "the FK trigger drops its own existence re-check",
         "django_overlay/sql_templates/triggers/constraint_trigger.sql.j2",
         "  IF NOT EXISTS (\n    SELECT 1 FROM {{ tenant_schema | qi }}.{{ referencing_table | qi }}\n    WHERE {{ referencing_pk | qi }} = NEW.{{ referencing_pk | qi }}\n      AND {{ column | qi }} IS NOT DISTINCT FROM NEW.{{ column | qi }}\n  ) THEN\n    RETURN NULL;\n  END IF;",

@@ -22,7 +22,7 @@ BEGIN
      AND NEW.{{ column | qi }} IS NOT NULL
      AND NOT (
        {% for t in target_tables -%}
-       EXISTS (SELECT 1 FROM {{ t.schema | qi }}.{{ t.table | qi }} WHERE {{ t.id_column | qi }} = {{ "-" if t.negate }}NEW.{{ column | qi }}{% if t.soft_delete %} AND NOT _overlay_deleted{% endif %})
+       EXISTS (SELECT 1 FROM {{ t.schema | qi }}.{{ t.table | qi }} WHERE {{ t.id_column | qi }} = {{ "-" if t.negate }}NEW.{{ column | qi }}{% if t.soft_delete %} AND NOT _overlay_deleted{% endif %}{% if t.masked_by %} AND NOT EXISTS (SELECT 1 FROM {{ t.masked_by.schema | qi }}.{{ t.masked_by.table | qi }} WHERE {{ t.masked_by.table | qi }}.{{ t.masked_by.id_column | qi }} = NEW.{{ column | qi }} AND {{ t.masked_by.table | qi }}._overlay_deleted){% endif %})
        {%- if not loop.last %} OR {% endif %}
        {% endfor -%}
      )

@@ -84,6 +84,50 @@ def test_a_tombstone_whose_source_row_is_gone_is_not_a_valid_target(db_cursor):
             db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
 
 
+def test_a_masked_source_row_is_not_a_valid_target_for_a_new_reference(db_cursor):
+    """The case the FK trigger used to accept.
+
+    The base row is a tombstone and the vendor's row is still sitting in the
+    source table, so the trigger's source branch found it and let the reference
+    through -- while the view, whose anti-join drops any source row a tombstone
+    shadows, reported the target as gone. A reference you could write and could
+    not read back.
+    """
+    source = SoftDeleteTestSource.objects.create(first_name="Masked")
+    target_pk = -source.id
+    SoftDeleteTest.objects.get(pk=target_pk).delete()
+
+    db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+    db_cursor.execute("SET CONSTRAINTS ALL DEFERRED")
+
+    with pytest.raises(IntegrityError, match="not found in any target table"):
+        with transaction.atomic():
+            SoftDeleteTestNote.objects.create(target_id=target_pk, text="new note")
+            db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
+def test_an_untouched_source_row_is_still_a_valid_target(db_cursor):
+    """The other half, and the reason the exclusion has to be narrow: masking
+    is what disqualifies a source row, not being a source row."""
+    source = SoftDeleteTestSource.objects.create(first_name="Untouched")
+
+    with transaction.atomic():
+        SoftDeleteTestNote.objects.create(target_id=-source.id, text="fine")
+        db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
+def test_an_overridden_source_row_is_still_a_valid_target(db_cursor):
+    """And a source row that was edited here is visible through the base
+    branch, so it stays referenceable."""
+    source = SoftDeleteTestSource.objects.create(first_name="Vendor")
+    target_pk = -source.id
+    SoftDeleteTest.objects.filter(pk=target_pk).update(first_name="Edited")
+
+    with transaction.atomic():
+        SoftDeleteTestNote.objects.create(target_id=target_pk, text="fine")
+        db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
 def test_a_deleted_organic_row_is_not_a_valid_target_for_a_new_reference(db_cursor):
     """Same refusal, different reason: an organic row is hard-deleted, so the
     target is simply gone rather than masked."""
