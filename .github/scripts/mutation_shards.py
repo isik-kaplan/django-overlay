@@ -70,6 +70,7 @@ SHARDS = {
         "django_overlay/models/base.py",
         "django_overlay/models/meta.py",
         "django_overlay/models/planning.py",
+        "django_overlay/source_model.py",
     ],
     # The declaration-time diagnostics.
     "checks": [

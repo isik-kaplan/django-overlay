@@ -9,6 +9,7 @@ from django.db import models
 from .. import uniqueness
 from ..exceptions import OverlayConfigurationError
 from ..fields import base_model_copy, hide_reverse_side
+from ..source_model import build_source_model, source_pk_for
 from ..strategies import Strategy, default_id_field
 from .meta import OverlayMeta, _split_meta_options
 from .queryset import OverlayManager
@@ -164,6 +165,37 @@ class OverlayModel(models.Model, metaclass=OverlayModelBase):
     @classmethod
     def get_source(cls):
         return cls._overlay_meta.get_source()
+
+    @classmethod
+    def source_table(cls):
+        """A read-only model over the vendor's table, or None without one.
+
+        The view cannot show you a source row that a base row shadows -- the
+        anti-join is what removes it -- so the vendor's original values for an
+        overridden row are unreachable through the ORM. This is the way to read
+        them without `reset_to_source()`, which destroys the override to get
+        there. See django_overlay/source_model.py, and note the ids are the
+        vendor's rather than the view's.
+
+        Built once per model and cached on the class: it is a type, and
+        rebuilding it per call would make two rows of the same table compare
+        unequal.
+        """
+        if "_source_model" not in cls.__dict__:
+            cls._source_model = build_source_model(cls)
+        return cls._source_model
+
+    def source_row(self):
+        """The vendor's row behind this one, or None.
+
+        The whole point of the source model, and the spelling that never asks
+        the caller to convert an id: this row already knows its own view pk, so
+        the strategy's mapping is applied here rather than by hand.
+        """
+        model = type(self).source_table()
+        if model is None:
+            return None
+        return model.objects.filter(pk=source_pk_for(type(self), self.pk)).first()
 
     def get_constraints(self):
         """Meta.constraints live on the hidden base model, because that's the
