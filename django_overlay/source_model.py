@@ -70,15 +70,12 @@ def _plain_copy(field):
     if field.is_relation:
         target = field.target_field
         plain = _PLAIN_FOR_AUTO.get(type(target))
-        copied = plain(null=field.null) if plain is not None else target.clone()
+        copied = plain() if plain is not None else target.clone()
         copied.primary_key = False
-        copied.remote_field = None
         copied.null = field.null
         copied.db_column = field.column
         return field.attname, copied
-    copied = field.clone()
-    copied.remote_field = None
-    return field.name, copied
+    return field.name, field.clone()
 
 
 class ReadOnlySourceManager(models.Manager):
@@ -90,7 +87,7 @@ class ReadOnlySourceManager(models.Manager):
     and one who asks for it has said so.
     """
 
-    def __init__(self, extra_where=""):
+    def __init__(self, extra_where):
         super().__init__()
         self._extra_where = extra_where
 
@@ -116,9 +113,7 @@ def build_source_model(view_model):
         "__module__": view_model.__module__,
         "objects": ReadOnlySourceManager(source.extra_where),
     }
-    for field in base._meta.concrete_fields:
-        if field.name == SHADOW_FLAG:
-            continue
+    for field in (f for f in base._meta.concrete_fields if f.name != SHADOW_FLAG):
         name, copied = _plain_copy(field)
         if field.primary_key:
             copied.db_column = source.id_column
@@ -133,18 +128,15 @@ def build_source_model(view_model):
 
     attrs["save"] = _refuse
     attrs["delete"] = _refuse
-    attrs["Meta"] = type(
-        "Meta",
-        (),
-        {
-            # A private registry: nothing below is a real installed model, so
-            # two models never claim one db_table and W035 never fires.
-            "apps": Apps(),
-            "app_label": "django_overlay_source",
-            "db_table": f'"{source.schema}"."{source.table}"',
-            "managed": False,
-        },
-    )
+    class Meta:
+        # A private registry: nothing here is a real installed model, so two
+        # models never claim one db_table and W035 never fires.
+        apps = Apps()
+        app_label = "django_overlay_source"
+        db_table = f'"{source.schema}"."{source.table}"'
+        managed = False
+
+    attrs["Meta"] = Meta
     return type(f"{view_model.__name__}SourceRow", (models.Model,), attrs)
 
 
