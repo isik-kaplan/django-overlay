@@ -576,3 +576,84 @@ class BenchPersonEmailSource(models.Model):
             models.Index(fields=["email_id"], name="bpes_email_idx"),
             models.Index(fields=["person_id", "email_id"], name="bpes_pair_idx"),
         ]
+
+
+# Source tables for models that used to have none.
+#
+# Each of these models tests a mechanism (Meta forwarding, field renames, a
+# digit-leading table name, a plain FK with related_name, an overlay FK, a
+# custom manager) rather than sourcelessness. Now that an overlay model must
+# have a source, they get the smallest source table that keeps the shape they
+# were declared to test.
+
+
+class MetaTestSource(models.Model):
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [models.Index(fields=["name"], name="metatestsource_name_idx")]
+
+
+class RenameFieldTestSource(models.Model):
+    renamed_field = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "testapp_shared"
+
+
+class DigitLeadingTableNameTestSource(models.Model):
+    label = models.CharField(max_length=100, default="x")
+
+    class Meta:
+        app_label = "testapp_shared"
+
+
+class VendorThingSource(models.Model):
+    # A plain column rather than a FK: this is a vendor's table, and it holds
+    # whatever id the referenced row has, with no constraint of ours on it.
+    vendor_id = models.IntegerField()
+    label = models.CharField(max_length=100, default="x")
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [models.Index(fields=["vendor_id"], name="vendorthingsource_vendor_idx")]
+
+
+class PersonNoteSource(models.Model):
+    # Holds *view* ids, negated, the same way any source-side FK column must —
+    # holds ids the view exposes, not the vendor's own.
+    person_id = models.IntegerField()
+    text = models.TextField()
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [models.Index(fields=["person_id"], name="personnotesource_person_idx")]
+
+
+class CustomManagerTestSource(models.Model):
+    label = models.CharField(max_length=100, default="x")
+
+    class Meta:
+        app_label = "testapp_shared"
+
+
+class UniqueTestNoSoftDeleteSource(models.Model):
+    ssn = models.CharField(max_length=20)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [models.Index(fields=["ssn"], name="utnsds_ssn_idx")]
+
+
+class SoftDeletePlainUniqueTestSource(models.Model):
+    code = models.CharField(max_length=20)
+    tag = models.CharField(max_length=20, blank=True, default="")
+    vendor_id = models.IntegerField(null=True)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["code"], name="sdputs_code_idx"),
+            models.Index(fields=["vendor_id"], name="sdputs_vendor_idx"),
+        ]

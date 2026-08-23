@@ -179,12 +179,6 @@ def test_deconstructing_a_field_that_never_had_db_constraint_is_fine():
     assert "db_constraint" not in kwargs
 
 
-def test_target_tables_for_a_source_less_model_has_no_source_entry():
-    targets = MetaTestNote._meta.get_field("meta_test").target_tables("public")
-    assert len(targets) == 1
-    assert targets[0]["table"] == MetaTest.base_table()._meta.db_table
-
-
 @pytest.mark.django_db
 def test_a_bonus_fk_to_a_source_less_model_round_trips_and_still_rejects_a_bogus_id(db_cursor):
     meta_test = MetaTest.objects.create(name="Has Note")

@@ -46,8 +46,9 @@ class OverlayForeignKey(models.ForeignKey):
 
 def target_tables_for(target, tenant_schema: str, soft_delete: bool | None = None) -> list[dict]:
     """[{"schema", "table", "id_column", "negate", "soft_delete"}, ...] for
-    `target`'s base table (never negated) plus its source, if any (negated
-    for a NEGATIVE_ID target). Takes the target model directly, not `self`, so a
+    `target`'s base table (never negated) and its source (negated for a
+    NEGATIVE_ID target). Always both: an overlay model
+    without a source is refused at declaration time. Takes the target model directly, not `self`, so a
     migration operation can call it against a *live* model even when the
     referencing field only exists in migration-historical state.
 
@@ -63,30 +64,27 @@ def target_tables_for(target, tenant_schema: str, soft_delete: bool | None = Non
         "negate": False,
         "soft_delete": masks,
     }
-    tables = [base]
     source = target.get_source()
-    if source is not None:
-        negate = negates_source_ids(target._overlay_meta.strategy)
-        tables.append(
-            {
-                "schema": source.schema,
-                "table": source.table,
-                "id_column": source.id_column,
-                "negate": negate,
-                "soft_delete": False,
-                # A tombstone hides the source row from the view, so it has to
-                # hide it from the FK check too. Without this the source branch
-                # accepts a row the view will not return, and you get a
-                # reference you can write and cannot read back -- the whole of
-                # The base branch already excludes tombstones;
-                # this is the same exclusion, applied from the other side.
-                #
-                # `base` rather than a copy: the tombstone that masks a source
-                # row lives in that exact table, under the un-negated id.
-                "masked_by": base if masks else None,
-            }
-        )
-    return tables
+    return [
+        base,
+        {
+            "schema": source.schema,
+            "table": source.table,
+            "id_column": source.id_column,
+            "negate": negates_source_ids(target._overlay_meta.strategy),
+            "soft_delete": False,
+            # A tombstone hides the source row from the view, so it has to hide
+            # it from the FK check too. Without this the source branch accepts
+            # a row the view will not return, and you get a reference you can
+            # write and cannot read back. The
+            # base branch already excludes tombstones; this is the same
+            # exclusion, applied from the other side.
+            #
+            # `base` rather than a copy: the tombstone that masks a source row
+            # lives in that exact table, under the un-negated id.
+            "masked_by": base if masks else None,
+        },
+    ]
 
 
 def _array_subquery_in_enabled() -> bool:

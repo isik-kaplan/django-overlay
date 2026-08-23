@@ -1,6 +1,8 @@
 import re
 
 import pytest
+
+from django_overlay.sources import SourceTable
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.test import override_settings
@@ -93,7 +95,9 @@ def test_overlaymeta_not_subclassing_the_base_class_is_rejected():
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 def test_overlaymeta_without_get_source_override_is_rejected():
@@ -102,6 +106,43 @@ def test_overlaymeta_without_get_source_override_is_rejected():
         class NoSources(OverlayModel):
             class OverlayMeta(OverlayMeta):
                 table_name = "no_sources"
+
+
+def test_a_source_less_overlay_model_is_rejected():
+    """An overlay model with no source is a view over one table, three
+    INSTEAD OF triggers routing writes straight back to it, and a tombstone
+    column that can never be set — soft delete is decided per row, and a row
+    with nothing to mask is hard deleted. The uniqueness machinery degenerates
+    the same way: the source-side check has no source to check.
+
+    A plain models.Model is the thing being asked for, and OverlayForeignKey
+    works from one, so nothing is lost by refusing."""
+    with pytest.raises(OverlayConfigurationError, match="nothing to overlay"):
+
+        class Sourceless(OverlayModel):
+            class OverlayMeta(OverlayMeta):
+                table_name = "sourceless"
+
+                @staticmethod
+                def get_source():
+                    return None
+
+
+def test_the_refusal_says_what_to_write_instead():
+    """A rejection that does not name the alternative just moves the problem."""
+    with pytest.raises(OverlayConfigurationError) as raised:
+
+        class AlsoSourceless(OverlayModel):
+            class OverlayMeta(OverlayMeta):
+                table_name = "also_sourceless"
+
+                @staticmethod
+                def get_source():
+                    return None
+
+    message = str(raised.value)
+    assert "models.Model" in message
+    assert "OverlayForeignKey" in message
 
 
 def test_default_strategy_falls_back_to_uuid4_when_unconfigured():
@@ -139,7 +180,9 @@ def test_overlay_meta_strategy_rejects_a_non_strategy_value():
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 def test_overlay_meta_soft_delete_rejects_a_non_bool_value():
@@ -154,7 +197,9 @@ def test_overlay_meta_soft_delete_rejects_a_non_bool_value():
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 _non_strategy_value = st.one_of(
@@ -175,7 +220,9 @@ def test_overlay_meta_strategy_rejects_any_non_strategy_value(value):
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 _non_bool_value = st.one_of(st.text(), st.integers(), st.floats(allow_nan=False), st.none(), st.lists(st.integers()))
@@ -194,7 +241,9 @@ def test_overlay_meta_soft_delete_rejects_any_non_bool_value(value):
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 def test_meta_db_table_is_rejected():
@@ -209,7 +258,9 @@ def test_meta_db_table_is_rejected():
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 def test_meta_managed_is_rejected():
@@ -224,7 +275,9 @@ def test_meta_managed_is_rejected():
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 def test_meta_permissions_is_rejected():
@@ -241,7 +294,9 @@ def test_meta_permissions_is_rejected():
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 def test_meta_default_permissions_is_rejected():
@@ -262,7 +317,9 @@ def test_meta_default_permissions_is_rejected():
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 def test_base_model_gets_no_default_permissions():
@@ -281,7 +338,7 @@ def test_a_user_declared_id_field_is_not_overridden_by_the_strategy_default():
 
             @staticmethod
             def get_source():
-                return None
+                return SourceTable(schema="public", table="testapp_shared_personsource")
 
     assert isinstance(HasCustomId._meta.get_field("id"), models.CharField)
 
@@ -296,7 +353,7 @@ def test_meta_app_label_reaches_both_the_base_and_view_model():
 
             @staticmethod
             def get_source():
-                return None
+                return SourceTable(schema="public", table="testapp_shared_personsource")
 
     assert HasExplicitAppLabel._meta.app_label == "testapp"
     assert HasExplicitAppLabel.base_table()._meta.app_label == "testapp"
@@ -337,7 +394,9 @@ def test_declaring_your_own_overlay_deleted_field_is_rejected():
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 def test_abstract_overlaymodel_subclass_is_not_split():
@@ -393,7 +452,7 @@ def test_an_abstract_overlay_base_is_still_allowed():
 
             @staticmethod
             def get_source():
-                return None
+                return SourceTable(schema="public", table="testapp_shared_personsource")
 
     assert Concrete._meta.get_field("nickname") is not None
     assert Concrete.base_table()._meta.db_table == "abstract_base_child"

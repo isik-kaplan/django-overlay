@@ -67,11 +67,6 @@ def test_a_uuid_strategy_needs_no_negation():
 # --------------------------------------------------------------- the model
 
 
-def test_a_model_with_no_source_has_no_source_model():
-    assert MetaTest.source_table() is None
-    assert MetaTest.objects.create(name="ours").source_row() is None
-
-
 def test_the_model_is_cached_so_rows_compare_equal():
     """Rebuilding the type per call would make two reads of one row unequal."""
     assert Person.source_table() is Person.source_table()

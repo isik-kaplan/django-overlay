@@ -297,7 +297,7 @@ class MetaTest(OverlayModel):
 
         @staticmethod
         def get_source():
-            return None
+            return SourceTable(schema="public", table="testapp_shared_metatestsource")
 
 
 class MetaTestNote(models.Model):
@@ -318,12 +318,13 @@ class NullableFkTest(models.Model):
 
 
 class UniqueTestNoSource(OverlayModel):
-    """OverlayUniqueConstraint with no source — native UNIQUE only, no trigger.
+    """The model that opts *out* of soft delete, so the hard-delete path stays
+    covered now that soft delete is the default.
 
-    Also the model that opts *out* of soft delete, so the hard-delete path
-    stays covered now that soft delete is the default. A purely organic model
-    is the natural place for it: with no source row to keep masked, a tombstone
-    buys nothing and holds an index entry forever."""
+    It used to be sourceless as well, and was named for that; that is
+    now illegal, and the name was doing two jobs anyway. Deleting a row here
+    removes it outright; where the row shadows a source row, the source row
+    comes back, which is exactly what opting out of soft delete means."""
 
     ssn = models.CharField(max_length=20)
 
@@ -336,7 +337,7 @@ class UniqueTestNoSource(OverlayModel):
 
         @staticmethod
         def get_source():
-            return None
+            return SourceTable(schema="public", table="testapp_shared_uniquetestnosoftdeletesource")
 
 
 class FilteredSourceTest(OverlayModel):
@@ -390,7 +391,7 @@ class RenameFieldTest(OverlayModel):
 
         @staticmethod
         def get_source():
-            return None
+            return SourceTable(schema="public", table="testapp_shared_renamefieldtestsource")
 
 
 class RenameFkTest(models.Model):
@@ -468,18 +469,6 @@ class SoftDeleteTest(OverlayModel):
             return SourceTable(schema="public", table="testapp_shared_softdeletetestsource")
 
 
-class SoftDeleteTestNoSource(OverlayModel):
-    label = models.CharField(max_length=100, default="x")
-
-    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
-        table_name = "softdeletetestnosource"
-        soft_delete = True
-
-        @staticmethod
-        def get_source():
-            return None
-
-
 class SoftDeleteTestNote(models.Model):
     target = OverlayForeignKey(SoftDeleteTest, on_delete=models.CASCADE, related_name="notes")
     text = models.TextField()
@@ -496,7 +485,7 @@ class DigitLeadingTableNameTest(OverlayModel):
 
         @staticmethod
         def get_source():
-            return None
+            return SourceTable(schema="public", table="testapp_shared_digitleadingtablenametestsource")
 
 
 class Vendor(models.Model):
@@ -521,7 +510,7 @@ class VendorThing(OverlayModel):
 
         @staticmethod
         def get_source():
-            return None
+            return SourceTable(schema="public", table="testapp_shared_vendorthingsource")
 
 
 class PersonNote(OverlayModel):
@@ -541,7 +530,7 @@ class PersonNote(OverlayModel):
 
         @staticmethod
         def get_source():
-            return None
+            return SourceTable(schema="public", table="testapp_shared_personnotesource")
 
 
 class LabelManager(models.Manager):
@@ -562,7 +551,7 @@ class CustomManagerTest(OverlayModel):
 
         @staticmethod
         def get_source():
-            return None
+            return SourceTable(schema="public", table="testapp_shared_custommanagertestsource")
 
 
 class SoftDeleteUniqueTest(OverlayModel):
@@ -596,9 +585,10 @@ class SoftDeleteUniqueTest(OverlayModel):
 
 
 class SoftDeletePlainUniqueTest(OverlayModel):
-    """soft_delete with no source, plus a CheckConstraint that must be left
-    alone by the narrowing, and the ForeignKey-instead-of-OneToOneField shape
-    the error message recommends."""
+    """A CheckConstraint that must be left alone by the uniqueness narrowing,
+    plus the ForeignKey-instead-of-OneToOneField shape the error message
+    recommends. Sourceless once; neither of those jobs needed it
+    to be."""
 
     code = models.CharField(max_length=20)
     tag = models.CharField(max_length=20, blank=True, default="")
@@ -619,7 +609,7 @@ class SoftDeletePlainUniqueTest(OverlayModel):
 
         @staticmethod
         def get_source():
-            return None
+            return SourceTable(schema="public", table="testapp_shared_softdeleteplainuniquetestsource")
 
 
 class NullableUniqueTest(OverlayModel):

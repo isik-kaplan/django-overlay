@@ -66,7 +66,20 @@ class OverlayModelBase(models.base.ModelBase):
             raise OverlayConfigurationError(f"{name}.OverlayMeta must subclass django_overlay.models.OverlayMeta.")
         if "get_source" not in overlay_meta.__dict__:
             raise OverlayConfigurationError(
-                f"{name}.OverlayMeta must implement get_source() returning a SourceTable | None."
+                f"{name}.OverlayMeta must implement get_source() returning a SourceTable."
+            )
+        if overlay_meta.get_source() is None:
+            # An overlay model with no source is a view over one table, three
+            # INSTEAD OF triggers routing writes straight back to it, and a
+            # tombstone column that can never be set -- soft delete is decided
+            # per row, and a row with nothing to mask is hard deleted. The
+            # uniqueness machinery degenerates too: the source-side check has
+            # no source to check.
+            raise OverlayConfigurationError(
+                f"{name}.OverlayMeta.get_source() returns None, but an overlay model exists to layer "
+                "your table over a source table — without one there is nothing to overlay, and the "
+                "view and triggers only cost you. Use a plain models.Model; if other overlay models "
+                "need to point at it, OverlayForeignKey works from a plain model too."
             )
         if not isinstance(overlay_meta.strategy, Strategy):
             raise OverlayConfigurationError(
@@ -168,7 +181,7 @@ class OverlayModel(models.Model, metaclass=OverlayModelBase):
 
     @classmethod
     def source_table(cls):
-        """A read-only model over the vendor's table, or None without one.
+        """A read-only model over the vendor's table.
 
         The view cannot show you a source row that a base row shadows -- the
         anti-join is what removes it -- so the vendor's original values for an
@@ -186,15 +199,13 @@ class OverlayModel(models.Model, metaclass=OverlayModelBase):
         return cls._source_model
 
     def source_row(self):
-        """The vendor's row behind this one, or None.
+        """The vendor's row behind this one, or None if the vendor has none.
 
         The whole point of the source model, and the spelling that never asks
         the caller to convert an id: this row already knows its own view pk, so
         the strategy's mapping is applied here rather than by hand.
         """
         model = type(self).source_table()
-        if model is None:
-            return None
         return model.objects.filter(pk=source_pk_for(type(self), self.pk)).first()
 
     def get_constraints(self):

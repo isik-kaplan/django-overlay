@@ -102,18 +102,6 @@ def test_a_uuid_strategy_needs_no_negation(mixed):
     assert names(PersonUuid4.objects.organic()) == ["ours"]
 
 
-def test_a_model_with_no_source_has_nothing_to_shadow():
-    """Answered without touching the database rather than by emitting an EXISTS
-    against a table that is not there: with no source, every base row is organic
-    and none can be overridden."""
-    MetaTest.objects.create(name="ours")
-
-    assert MetaTest.get_source() is None
-    assert MetaTest.objects.overridden().count() == 0
-    assert MetaTest.objects.organic().count() == 1
-    assert MetaTest.objects.base_only().count() == 1
-
-
 # ------------------------------------------------------------------- reading it
 
 

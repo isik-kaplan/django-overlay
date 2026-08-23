@@ -105,11 +105,12 @@ class ReadOnlySourceManager(models.Manager):
 
 
 def build_source_model(view_model):
-    """The source model for `view_model`, or None if it has no source."""
-    source = view_model.get_source()
-    if source is None:
-        return None
+    """The source model for `view_model`.
 
+    Every overlay model has a source -- a sourceless one is refused at
+    declaration time -- so there is no "no source" case to answer for.
+    """
+    source = view_model.get_source()
     base = view_model.base_table()
     attrs = {
         "__module__": view_model.__module__,

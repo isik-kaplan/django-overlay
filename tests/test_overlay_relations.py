@@ -10,6 +10,7 @@ from django.db import IntegrityError, connection, models, transaction
 from django.test.utils import isolate_apps
 
 from django_overlay import checks
+from django_overlay.sources import SourceTable
 from django_overlay.fields import OverlayForeignKey
 from django_overlay.models import OverlayMeta, OverlayModel
 from django_overlay.strategies import Strategy
@@ -167,7 +168,7 @@ def test_a_self_referential_overlay_foreign_key_builds_and_hides_only_the_base_s
 
             @staticmethod
             def get_source():
-                return None
+                return SourceTable(schema="public", table="testapp_shared_personsource")
 
     assert SelfRef._meta.get_field("parent").remote_field.model is SelfRef
     assert SelfRef._meta.get_field("parent").remote_field.related_name == "children"

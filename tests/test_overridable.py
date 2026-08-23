@@ -19,6 +19,8 @@ failure mode available here — hence a hard error rather than a warning.
 """
 
 import pytest
+
+from django_overlay.sources import SourceTable
 from django.db import NotSupportedError, connection, transaction
 from django.db.models import Q
 
@@ -293,7 +295,9 @@ def test_overridable_must_be_a_bool():
 
                 @staticmethod
                 def get_source():
-                    return None
+                    # Any source will do: these models are declared to exercise
+                    # the metaclass, never migrated, so nothing reads the table.
+                    return SourceTable(schema="public", table="testapp_shared_personsource")
 
 
 def test_overridable_defaults_to_true():

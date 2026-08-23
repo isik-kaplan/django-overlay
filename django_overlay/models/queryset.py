@@ -110,15 +110,12 @@ class OverlayQuerySet(models.QuerySet):
         literal per branch the origin prunes, and as anything computed it stops
         pruning for everybody. Paid here, by the caller who asked for it.
         """
-        shadows = self._shadow_predicate()
-        return self.none() if shadows is None else self.base_only().filter(shadows)
+        return self.base_only().filter(self._shadow_predicate())
 
     def organic(self):
         """Base rows with no source counterpart -- created here, not the
         vendor's. `base_only()` is `organic()` plus `overridden()`."""
-        shadows = self._shadow_predicate()
-        scoped = self.base_only()
-        return scoped if shadows is None else scoped.exclude(shadows)
+        return self.base_only().exclude(self._shadow_predicate())
 
     # -- the machinery under those five
 
@@ -165,21 +162,18 @@ class OverlayQuerySet(models.QuerySet):
         )
 
     def _shadow_predicate(self):
-        """EXISTS() against the source row a base row would be shadowing, or
-        None when the model has no source table for it to shadow.
+        """EXISTS() against the source row a base row would be shadowing.
 
-        The two callers above take it from here rather than passing a flag down.
-        A flag would be read for its truthiness only, which makes every other
-        falsey value the same code -- `shadowing=False` and `shadowing=None`
-        being indistinguishable is a surviving mutant, and an accurate one. It
-        also put both sourceless answers in one line here, where `overridden()`
-        returning nothing and `organic()` returning everything look like a pair
-        of opposites rather than two unrelated facts.
+        The two callers above take it from here rather than passing a flag
+        down. A flag would be read for its truthiness only, which makes every
+        other falsey value the same code -- `shadowing=False` and
+        `shadowing=None` being indistinguishable is a surviving mutant, and an
+        accurate one.
+
+        No sourceless case to answer for: an overlay model without a source is
+        refused at declaration time.
         """
         source = self.model.get_source()
-        if source is None:
-            return None
-
         table = _qi(self.model._meta.db_table)
         pk = _qi(self.model._meta.pk.column)
         sign = "-" if negates_source_ids(self.model._overlay_meta.strategy) else ""
