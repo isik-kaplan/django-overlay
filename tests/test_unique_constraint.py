@@ -74,15 +74,6 @@ def test_source_less_model_relies_on_the_native_postgres_constraint_alone():
             UniqueTestNoSource.objects.create(ssn="777-77-7777")
 
 
-def test_source_less_model_has_no_extra_trigger(db_cursor):
-    base_table = UniqueTestNoSource.base_table()._meta.db_table
-    db_cursor.execute(
-        "SELECT tgname FROM pg_trigger WHERE tgrelid = %s::regclass AND tgname LIKE 'overlayunique_%%'",
-        [base_table],
-    )
-    assert db_cursor.fetchone() is None
-
-
 def test_updating_an_unrelated_column_does_not_reject_a_row_whose_value_later_collided_with_a_drifted_source(
     db_cursor,
 ):

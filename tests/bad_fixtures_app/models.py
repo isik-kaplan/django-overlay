@@ -1,5 +1,6 @@
 from django.db import models
 
+from django_overlay.sources import SourceTable
 from django_overlay.models import OverlayMeta, OverlayModel
 from tests.testapp.models import Address, Person
 
@@ -44,4 +45,4 @@ class BadUniqueness(OverlayModel):
 
         @staticmethod
         def get_source():
-            return None
+            return SourceTable(schema="public", table="testapp_shared_personsource")

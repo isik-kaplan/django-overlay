@@ -1,7 +1,7 @@
 import pytest
 from django.db import IntegrityError, transaction
 
-from tests.testapp.models import SoftDeleteTest, SoftDeleteTestNoSource, SoftDeleteTestNote
+from tests.testapp.models import SoftDeleteTest, SoftDeleteTestNote
 from tests.testapp_shared.models import SoftDeleteTestSource
 
 
@@ -42,14 +42,18 @@ def test_reset_to_source_without_a_prior_delete_discards_an_edit():
     assert SoftDeleteTest.objects.get(id=view_id).first_name == "Pristine"
 
 
-def test_delete_and_reset_to_source_both_permanently_remove_an_organic_row_with_no_source():
-    organic = SoftDeleteTestNoSource.objects.create(label="temp")
+def test_delete_and_reset_to_source_both_permanently_remove_an_organic_row():
+    """An organic row has no source row behind it, so there is nothing for
+    either operation to fall back to. Used to be asserted against a sourceless
+    model; the organic row *inside* a sourced model is now the only
+    way this state exists."""
+    organic = SoftDeleteTest.objects.create(first_name="temp")
     organic.delete()
-    assert not SoftDeleteTestNoSource.objects.filter(pk=organic.pk).exists()
+    assert not SoftDeleteTest.objects.filter(pk=organic.pk).exists()
 
-    other = SoftDeleteTestNoSource.objects.create(label="temp2")
-    SoftDeleteTestNoSource(pk=other.pk).reset_to_source()
-    assert not SoftDeleteTestNoSource.objects.filter(pk=other.pk).exists()
+    other = SoftDeleteTest.objects.create(first_name="temp2")
+    SoftDeleteTest(pk=other.pk).reset_to_source()
+    assert not SoftDeleteTest.objects.filter(pk=other.pk).exists()
 
 
 def test_a_tombstone_whose_source_row_is_gone_is_not_a_valid_target(db_cursor):
@@ -212,17 +216,6 @@ def test_deleting_an_untouched_source_row_creates_the_tombstone():
 
     assert base_rows(SoftDeleteTest) == [(view_id, True)]
     assert not SoftDeleteTest.objects.filter(id=view_id).exists()
-
-
-def test_a_sourceless_model_never_flags_anything():
-    """No source table, so no row here can ever need masking."""
-    organic = SoftDeleteTestNoSource.objects.create(label="temp")
-    pk = organic.pk
-
-    organic.delete()
-
-    assert base_rows(SoftDeleteTestNoSource) == []
-    assert not SoftDeleteTestNoSource.objects.filter(pk=pk).exists()
 
 
 def test_the_two_kinds_of_delete_coexist_on_one_model():

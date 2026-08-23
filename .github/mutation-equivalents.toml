@@ -50,13 +50,20 @@ nothing and the two calls are identical. Verified: OverlayUniqueConstraint
 deconstructs to ('...OverlayUniqueConstraint', (), {...}).
 """
 
-["django_overlay.management.commands.show_source_indexes.xǁCommandǁ_models__mutmut_13"]
+["django_overlay.management.commands.show_source_indexes.xǁCommandǁ_models__mutmut_12"]
 reason = """
 getattr(model, "_is_overlay_view_model", False) -> the same with None. The
-value is the left side of an `and`, where False and None are both falsy, so
-nothing downstream can tell them apart. Same shape as the exemption for
-checks._overlay_models_with_a_source, and out of a pragma's reach for the same
-reason: it sits in the `if` of a generator expression.
+value is read only as the `if` of a list comprehension, where False and None
+are both falsy, so nothing downstream can tell them apart. Same shape as the
+exemption for checks._overlay_models_with_a_source, and out of a pragma's reach
+for the same reason: it sits in the `if` of a comprehension.
+
+Was __mutmut_13 until the sourceless-model ban dropped the `and model.get_source() is not None`
+half of this condition. Removing a clause removes its mutations, so everything
+after it renumbered and 13 became `getattr("_is_overlay_view_model", False)` --
+a dropped argument, which raises and is killed. CI caught it in the safe
+direction: "exempted but something kills it now". Re-derived by reading the
+mutant bodies rather than by adjusting the number.
 """
 
 ["django_overlay.models.query.xǁOverlayQueryǁ_m2m_fence__mutmut_38"]

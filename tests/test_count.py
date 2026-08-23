@@ -26,7 +26,6 @@ from tests.testapp.models import (
     PersonNote,
     PersonUuid4,
     PersonUuid7Polyfill,
-    SoftDeleteTestNoSource,
 )
 from tests.testapp_shared.models import (
     FilteredSourceTestSource,
@@ -178,14 +177,6 @@ def test_hard_delete_model_has_no_deleted_filter():
 
 
 # ------------------------------------------- everything else falls through
-
-
-def test_a_model_without_a_source_falls_through():
-    """No source means no second branch to count — the view is just the base
-    table, and Django's own count is already the right query."""
-    SoftDeleteTestNoSource.objects.create(label="a")
-    assert not decomposed(SoftDeleteTestNoSource.objects.all())
-    assert SoftDeleteTestNoSource.objects.count() == 1
 
 
 @pytest.mark.parametrize(

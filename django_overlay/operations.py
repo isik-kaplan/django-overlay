@@ -30,6 +30,20 @@ def _drop_trigger_anywhere(schema_editor, tenant_schema: str, trigger_name: str)
     )
 
 
+def _live_model_or_none(app_label: str, model_name: str):
+    """The live model, or None once it has been deleted from the codebase.
+
+    The view is rendered from live code rather than migration state, because
+    neither the source table nor the id strategy is in the migration graph. The
+    price of that is this: a model that no longer exists cannot be looked up
+    while its old migrations are replayed.
+    """
+    try:
+        return django_apps.get_model(app_label, model_name)
+    except LookupError:
+        return None
+
+
 class SyncOverlayView(migrations.RunPython):
     """(Re)creates the view + its three INSTEAD OF triggers. `model_name`
     must be the view model (e.g. "Person"), not the hidden base model.
@@ -42,7 +56,19 @@ class SyncOverlayView(migrations.RunPython):
         self.model_name = model_name
 
         def forward(apps, schema_editor):
-            model = django_apps.get_model(app_label, model_name)
+            model = _live_model_or_none(app_label, model_name)
+            if model is None:
+                # The model has since been deleted from the codebase, and a
+                # later migration drops its view. Replaying this one has
+                # nothing to build and no live model to build it from -- the
+                # view comes from live code, not migration state, because
+                # neither the source table nor the strategy is in the graph.
+                #
+                # Skipping is correct rather than convenient: whatever this
+                # call would have created, the DeleteModel further along
+                # removes. Raising made deleting an overlay model impossible on
+                # a fresh database, which is how this was found.
+                return
             tenant_schema = _resolve_schema(schema_editor)
             # Columns from historical state (`apps`), not live code:
             # replaying migrations from scratch re-runs every past
@@ -64,7 +90,9 @@ class SyncOverlayView(migrations.RunPython):
             )
 
         def backward(apps, schema_editor):
-            model = django_apps.get_model(app_label, model_name)
+            model = _live_model_or_none(app_label, model_name)
+            if model is None:
+                return
             tenant_schema = _resolve_schema(schema_editor)
             _drop_view(schema_editor, tenant_schema, model._meta.db_table)
 
@@ -218,8 +246,7 @@ class AddOverlayUniqueConstraint(migrations.RunPython):
                 model._overlay_meta.strategy,
                 model._overlay_meta.soft_delete,
             )
-            if sql:
-                schema_editor.execute(sql)
+            schema_editor.execute(sql)
 
         def backward(apps, schema_editor):
             model = django_apps.get_model(app_label, model_name)

@@ -67,8 +67,8 @@ MUTANTS = [
         "operations",
         "SyncOverlayView resolves the wrong model",
         "django_overlay/operations.py",
-        "        def forward(apps, schema_editor):\n            model = django_apps.get_model(app_label, model_name)\n            tenant_schema = _resolve_schema(schema_editor)\n            # Columns from historical state",
-        "        def forward(apps, schema_editor):\n            model = None\n            tenant_schema = _resolve_schema(schema_editor)\n            # Columns from historical state",
+        "    try:\n        return django_apps.get_model(app_label, model_name)\n    except LookupError:\n        return None",
+        "    try:\n        return None\n    except LookupError:\n        return None",
     ),
     (
         "operations",
@@ -86,10 +86,10 @@ MUTANTS = [
     ),
     (
         "operations",
-        "AddOverlayUniqueConstraint skips the trigger when there *is* a source",
+        "AddOverlayUniqueConstraint never installs the source-side trigger",
         "django_overlay/operations.py",
-        "            if sql:\n                schema_editor.execute(sql)",
-        "            if not sql:\n                schema_editor.execute(sql)",
+        "                model._overlay_meta.soft_delete,\n            )\n            schema_editor.execute(sql)",
+        "                model._overlay_meta.soft_delete,\n            )",
     ),
     (
         "operations",

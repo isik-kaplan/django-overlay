@@ -204,11 +204,13 @@ def build_unique_constraint_trigger_sql(
     pk_column: str,
     strategy: Strategy = Strategy.NEGATIVE_ID,
     soft_delete: bool = False,
-) -> str | None:
-    """None if there's no source to guard against — Postgres's own UNIQUE
-    constraint on the base table already covers base-vs-base."""
-    if source is None:
-        return None
+) -> str:
+    """The source-side half of an OverlayUniqueConstraint.
+
+    Postgres's own UNIQUE on the base table already covers base-vs-base; this
+    is what makes the constraint hold across the view. There is always a source
+    to guard against, since a sourceless overlay model is refused outright.
+    """
     return render(
         "triggers/unique_constraint_trigger.sql.j2",
         tenant_schema=tenant_schema,

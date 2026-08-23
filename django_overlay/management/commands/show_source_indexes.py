@@ -44,7 +44,7 @@ class Command(BaseCommand):
         return [
             model
             for model in candidates
-            if getattr(model, "_is_overlay_view_model", False) and model.get_source() is not None
+            if getattr(model, "_is_overlay_view_model", False)
         ]
 
     def _report(self, cursor, model, tenant_schema: str, missing_only: bool) -> None:

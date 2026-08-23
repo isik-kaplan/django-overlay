@@ -156,10 +156,6 @@ def test_missing_only_still_reports_a_mismatch(db_cursor):
     assert "MISSING on person" in output
 
 
-def test_a_model_without_a_source_is_skipped():
-    assert run(model="testapp.MetaTest") == "No overlay models with a source table found.\n"
-
-
 def test_every_overlay_model_is_covered_by_default():
     output = run()
 
@@ -201,3 +197,21 @@ def test_compare_indexes_matches_on_shape_not_name():
     base = [{"name": "base_a", "shape": "btree (a)", "unique": False}]
 
     assert compare_indexes(source, base) == ([], [])
+
+
+def test_a_project_with_no_overlay_models_says_so(monkeypatch):
+    """The empty case is still reachable -- a project can install
+    django_overlay before declaring anything -- but it stopped being reachable
+    *through a sourceless model*, which is how it used to be covered. Since
+    every overlay model now has a source, so the only way in is having no
+    overlay models at all.
+    """
+    monkeypatch.setattr(show_source_indexes.Command, "_models", lambda self, label: [])
+    out = StringIO()
+
+    call_command("show_source_indexes", stdout=out)
+
+    # Equality, not `in`: mutmut's string mutation wraps the literal as
+    # "XX...XX", which still *contains* the original, so a substring assertion
+    # passes against it and the mutant survives.
+    assert out.getvalue().strip() == "No overlay models with a source table found."
