@@ -13,13 +13,44 @@ BEGIN
   UPDATE {{ tenant_schema | qi }}.{{ base_table | qi }} SET {{ merge("NEW") }} WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
   IF NOT FOUND THEN
 {%- if overridable %}
+    -- Copy-up in two statements, not one: materialise the row exactly as the
+    -- view presented it, then apply the edit on top. OLD is that row -- the
+    -- source values, with the id already negated for a source-derived row --
+    -- so the pair lands on the same base row a single INSERT of NEW would
+    -- have, and the tests below pin that.
+    --
+    -- The reason to spend the extra statement is that it makes the write
+    -- legible to anything watching the base table. A row-level AFTER trigger
+    -- (django-pghistory, or your own audit table) sees a materialise carrying
+    -- the source's own values, then a change touching only the columns the
+    -- caller actually edited. Collapsed into one INSERT, the first edit of a
+    -- row reports every column as written and there is no way to tell an
+    -- override from a value that merely came across with it -- which is the
+    -- question "has this tenant touched this field" needs answered, and the
+    -- one a refresh-from-source has to ask before overwriting anything.
+    --
+    -- It also makes this path agree with the bulk one.
+    -- OverlayQuerySet._copy_matched_rows_to_the_base_table() has always
+    -- materialised with a separate INSERT ... SELECT before its UPDATE, so a
+    -- queryset update and a save() of the same edit used to leave different
+    -- shapes behind. Now they leave the same two.
+    --
+    -- Only the first edit of a row pays it; once the base row exists the
+    -- UPDATE above matches and neither statement here runs.
+    --
+    -- DO NOTHING rather than DO UPDATE, and the merge moved below it. The
+    -- conflict case is a concurrent session materialising the same row between
+    -- our UPDATE finding nothing and this INSERT; their row is as good as
+    -- ours, so keep it and let the merge apply our columns on top. DO UPDATE
+    -- with the whole of EXCLUDED would have overwritten theirs wholesale.
     INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
       {%- for c in columns -%}{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, _overlay_deleted{% endif %}
     )
     VALUES (
-      {%- for c in columns -%}NEW.{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, FALSE{% endif %}
+      {%- for c in columns -%}OLD.{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, FALSE{% endif %}
     )
-    ON CONFLICT ({{ pk_column | qi }}) DO UPDATE SET {{ merge("EXCLUDED") }};
+    ON CONFLICT ({{ pk_column | qi }}) DO NOTHING;
+    UPDATE {{ tenant_schema | qi }}.{{ base_table | qi }} SET {{ merge("NEW") }} WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
 {%- else %}
     -- No base row matched, so this row is source-backed and updating it would
     -- mean materialising it. The model is declared overridable = False, and
