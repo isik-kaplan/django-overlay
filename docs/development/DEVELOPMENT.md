@@ -174,7 +174,7 @@ POSTGRES_USER=postgres uv run python tests/probe_unreachable_mutants.py
 POSTGRES_USER=postgres uv run python tests/probe_unreachable_mutants.py sql operations
 ```
 
-43 hand-chosen mutations, one suite run each, exit code = number of unexpected
+40 hand-chosen mutations, one suite run each, exit code = number of unexpected
 results. Unlike mutmut's generated mutants these are picked for meaning, so a
 survivor is always worth reading — and each one's `old` string must match the
 source exactly once, so a refactor that moves the code reports STALE rather

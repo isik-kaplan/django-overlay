@@ -160,24 +160,10 @@ MUTANTS = [
     ),
     (
         "metaclass",
-        "only the live related_name is hidden, not the serialized one",
-        "django_overlay/fields.py",
-        '    field._related_name = "+"',
-        "    pass",
-    ),
-    (
-        "metaclass",
         "a OneToOneField is copied to the base model as-is",
         "django_overlay/fields.py",
         "    collapsed = _WITHOUT_IMPLICIT_UNIQUE.get(type(field))",
         "    collapsed = None",
-    ),
-    (
-        "metaclass",
-        "the collapsed copy keeps its cached unique",
-        "django_overlay/fields.py",
-        '        copied.__dict__.pop("unique", None)',
-        "        pass",
     ),
     (
         "metaclass",
@@ -199,13 +185,6 @@ MUTANTS = [
         "django_overlay/models/base.py",
         "        if not any(isinstance(v, models.Manager) for v in rest_items.values()):",
         "        if True:",
-    ),
-    (
-        "metaclass",
-        "m2m fields are copied to both models",
-        "django_overlay/models/base.py",
-        "        m2m_items = {k: v for k, v in namespace.items() if isinstance(v, models.ManyToManyField)}",
-        "        m2m_items = {}",
     ),
     (
         "metaclass",

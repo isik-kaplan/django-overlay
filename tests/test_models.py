@@ -55,6 +55,46 @@ def test_m2m_fields_only_exist_on_the_view_model_not_the_base_model():
     assert Person.base_table()._meta.local_many_to_many == []
 
 
+@isolate_apps("tests.testapp")
+def test_m2m_stays_on_the_view_model_when_the_class_is_built_at_test_time():
+    """The same claim as above, about a model declared inside the test body.
+
+    The one above asserts on Person, which is built when tests.testapp.models
+    is imported -- so the metaclass has already run by the time mutmut picks a
+    mutant, and no mutation of the m2m split can be observed through it. That
+    is why this mutation lived in tests/probe_unreachable_mutants.py rather
+    than being covered here.
+
+    Declared in the test body, the metaclass runs with the mutant active and
+    the split becomes an ordinary thing the suite can check. Keep both: the one
+    above covers a real registered model with migrations behind it, this one
+    covers the code path that builds it.
+    """
+
+    class Tag(models.Model):
+        class Meta:
+            app_label = "testapp"
+
+    class Widget(OverlayModel):
+        name = models.CharField(max_length=10)
+        tags = models.ManyToManyField(Tag)
+
+        class Meta:
+            app_label = "testapp"
+
+        class OverlayMeta(OverlayMeta):
+            table_name = "widget_built_in_test"
+
+            @staticmethod
+            def get_source():
+                return SourceTable(schema="public", table="testapp_shared_personsource")
+
+    assert {f.name for f in Widget._meta.local_many_to_many} == {"tags"}
+    assert Widget._base_model._meta.local_many_to_many == [], (
+        "the base model must not carry the m2m -- it is the view model's alone"
+    )
+
+
 def test_field_instances_are_not_shared_between_view_and_base_model():
     # Field objects record a back-reference to their owning model, so
     # reusing one across two models corrupts whichever is set second.
