@@ -14,7 +14,6 @@ with the name of the file.
 """
 
 import importlib.util
-import re
 import sys
 import tomllib
 from pathlib import Path
@@ -131,26 +130,12 @@ def test_the_shard_names_are_what_the_workflow_dispatches():
         assert shard in workflow, f"shard {shard!r} has no job in mutation.yml"
 
 
-# ------------------------------------- the unreachable probe's own shard list
+# ------------------------------------ the unreachable probe's documented size
 #
-# The probe in tests/probe_unreachable_mutants.py covers what mutmut
-# structurally cannot, and its CI job is sharded by region for the same reason
-# `mutate` is sharded by subsystem. That makes its region list a second
-# hand-written map with the same failure mode: add a region and it runs in no
-# job, while the workflow still goes green having tested it nowhere.
-
-
-def workflow_matrix(key):
-    """The values of a `key: [a, b, c]` matrix line in mutation.yml.
-
-    Read with a regex rather than a YAML parser on purpose. pyyaml is not a
-    declared dependency here -- it is somebody else's transitive one -- and a
-    guard that silently stops running when that changes is worse than no guard.
-    """
-    workflow = (ROOT / ".github" / "workflows" / "mutation.yml").read_text()
-    found = re.search(rf"^ *{key}: \[(.+)\] *$", workflow, re.MULTILINE)
-    assert found, f"no `{key}: [...]` matrix line in mutation.yml"
-    return {value.strip() for value in found.group(1).split(",")}
+# The probe covers what mutmut structurally cannot. It ran as one CI job per
+# region while it was the longest job in the mutation workflow; it is one job
+# again now that it is not, so there is no matrix left to keep in sync. What
+# still rots is the count written into the prose.
 
 
 def probe_mutants():
@@ -160,20 +145,6 @@ def probe_mutants():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.MUTANTS
-
-
-def probe_regions():
-    """The regions the unreachable-mutant probe actually has mutations for."""
-    return {mutant[0] for mutant in probe_mutants()}
-
-
-def test_every_unreachable_region_is_dispatched_by_the_workflow():
-    """A region with no job is a region nothing runs, reported as nothing wrong."""
-    absent = probe_regions() - workflow_matrix("region")
-    assert not absent, (
-        f"region(s) {sorted(absent)} have mutations in probe_unreachable_mutants.py "
-        "but no job in mutation.yml, so nothing runs them"
-    )
 
 
 # docs/ is not in mutmut's also_copy, so it does not exist inside mutants/ and
@@ -201,19 +172,6 @@ def test_the_documented_mutation_count_is_the_real_one():
     assert f"{total} hand-chosen mutations" in docs, (
         f"DEVELOPMENT.md does not say there are {total} hand-chosen mutations; "
         "probe_unreachable_mutants.py has grown or shrunk since it was written"
-    )
-
-
-def test_the_workflow_dispatches_no_region_the_probe_has_dropped():
-    """The other direction: a job for a region that no longer exists.
-
-    The probe exits 1 on an unknown region rather than passing vacuously, so
-    this is caught in CI too -- but by a red shard whose message is about
-    argument parsing, hours after the push, and only for maintainers.
-    """
-    extra = workflow_matrix("region") - probe_regions()
-    assert not extra, (
-        f"mutation.yml dispatches region(s) {sorted(extra)} that probe_unreachable_mutants.py has no mutations for"
     )
 
 
