@@ -72,8 +72,13 @@ def test_a_mutant_that_hung_is_not_counted_as_dead(tmp_path, code):
     assert alive == ["django_overlay.sql.x_a__mutmut_1"]
 
 
-def test_the_kill_codes_agree_with_mutmut():
+def test_the_kill_codes_agree_with_mutmut(monkeypatch):
     """If mutmut renames or renumbers these, this has to fail rather than drift."""
+    # The one test here that needs the checkout rather than a scratch directory:
+    # mutmut reads its configuration from the working directory at import time,
+    # and finding no source_paths raises rather than falling back. See
+    # off_the_real_tree for why everything else has been moved off the tree.
+    monkeypatch.chdir(ROOT)
     from mutmut.__main__ import status_by_exit_code
 
     for code in confirm_survivors.KILLED_CODES:
@@ -141,9 +146,30 @@ def test_progress_names_each_mutant_as_it_is_settled():
 
 # ------------------------------------------------------------ the exit code
 
-@pytest.fixture
-def run_in(tmp_path, monkeypatch):
+@pytest.fixture(autouse=True)
+def off_the_real_tree(tmp_path, monkeypatch):
+    """Every test in this file runs from a scratch directory, and has to.
+
+    confirm() persists through write_cache(), and write_cache's path is
+    relative: "mutants/mutmut-confirmed-cache.json". So a test that exercises
+    confirm() without redirecting `save` writes the checkout's *own* phase-two
+    cache -- and what it writes is whatever that test happened to settle, which
+    is usually nothing. `pytest tests/test_confirm_survivors.py` emptied the
+    real cache every single time it ran, and the next local mutation run then
+    re-confirmed every survivor it had already paid for. Silently: an emptied
+    cache and a cold one are indistinguishable, so it read as a first run.
+
+    Pointing the module's CACHE attribute elsewhere would not fix it, because
+    write_cache binds it as a default argument at definition time. Moving the
+    working directory does, and it covers every other relative path in the
+    script at once.
+    """
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture
+def run_in(tmp_path):
+    """The scratch directory the test runs in -- see off_the_real_tree."""
     return tmp_path
 
 
@@ -457,6 +483,22 @@ def test_the_killing_test_is_read_out_of_pytest_output():
 
 def test_output_with_no_failure_names_no_test():
     assert confirm_survivors.killing_test("884 passed\n") is None
+
+
+def test_the_default_save_stays_relative_to_the_working_directory(tmp_path):
+    """The guard behind off_the_real_tree, which is a chdir and nothing more.
+
+    Moving the working directory only protects the checkout's cache while
+    write_cache's path is relative. Make it absolute -- resolve() it, anchor it
+    at the script like EQUIVALENTS -- and every test here would silently go
+    back to writing the real one, with nothing failing to say so.
+    """
+    assert not confirm_survivors.CACHE.is_absolute()
+    confirm_survivors.confirm(["a"], run=lambda name: (1, 1.0, "tests/test_x.py::test_y"),
+                              say=lambda *_: None, cache={}, hashes={}, root=str(tmp_path))
+    assert (tmp_path / "mutants" / "mutmut-confirmed-cache.json").exists(), (
+        "confirm() did not save where the working directory pointed"
+    )
 
 
 def test_a_corrupt_cache_is_ignored_rather_than_fatal(tmp_path):
