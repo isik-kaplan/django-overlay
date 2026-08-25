@@ -1,8 +1,6 @@
 import re
 
 import pytest
-
-from django_overlay.sources import SourceTable
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.test import override_settings
@@ -19,6 +17,7 @@ from django_overlay.models import (
     _default_strategy,
     _split_meta_options,
 )
+from django_overlay.sources import SourceTable
 from django_overlay.strategies import Strategy
 from tests.testapp.models import Address, AddressNote, Person, SoftDeleteTest
 

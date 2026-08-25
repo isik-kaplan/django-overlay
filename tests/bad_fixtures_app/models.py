@@ -1,7 +1,7 @@
 from django.db import models
 
-from django_overlay.sources import SourceTable
 from django_overlay.models import OverlayMeta, OverlayModel
+from django_overlay.sources import SourceTable
 from tests.testapp.models import Address, Person
 
 

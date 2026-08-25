@@ -7,8 +7,6 @@ tombstone is masking. See django_overlay/uniqueness.py.
 """
 
 import pytest
-
-from django_overlay.sources import SourceTable
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.test.utils import isolate_apps
@@ -16,6 +14,7 @@ from django.test.utils import isolate_apps
 from django_overlay.checks import uniqueness_error, unsupported_uniqueness
 from django_overlay.constraints import OverlayUniqueConstraint
 from django_overlay.models import OverlayMeta, OverlayModel
+from django_overlay.sources import SourceTable
 from django_overlay.uniqueness import constraint_name
 from tests.testapp.models import (
     SoftDeletePlainUniqueTest,
@@ -53,10 +52,15 @@ def _uniqueness_problems(meta_attrs=None, field_kwargs=None, soft_delete=True, e
     created."""
     _uniqueness_problems.counter += 1
     meta = type("Meta", (), {"app_label": "testapp", **(meta_attrs or {})})
+    source = SourceTable(schema="public", table="testapp_shared_personsource")
     overlay_meta = type(
         "OverlayMeta",
         (OverlayMeta,),
-        {"table_name": "probe_banned", "soft_delete": soft_delete, "get_source": staticmethod(lambda: SourceTable(schema="public", table="testapp_shared_personsource"))},
+        {
+            "table_name": "probe_banned",
+            "soft_delete": soft_delete,
+            "get_source": staticmethod(lambda: source),
+        },
     )
     model = type(
         f"ProbeBanned{_uniqueness_problems.counter}",

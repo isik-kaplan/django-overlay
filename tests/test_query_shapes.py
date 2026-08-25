@@ -355,7 +355,8 @@ def test_a_traversal_finds_every_visible_population(world, model):
         link(world, pk, address.pk)
 
     assert sorted(p.first_name for p in address.people.all()) == world.names
-    assert sorted(model.objects.filter(addresses__city="Springfield").values_list("first_name", flat=True)) == world.names
+    reachable = model.objects.filter(addresses__city="Springfield")
+    assert sorted(reachable.values_list("first_name", flat=True)) == world.names
 
 
 def test_a_hidden_row_cannot_be_referenced_from_either_direction(world, model, db_cursor):
@@ -390,7 +391,10 @@ def test_a_hidden_row_cannot_be_referenced_from_either_direction(world, model, d
 
     with pytest.raises(IntegrityError, match="still references"):
         with transaction.atomic():
-            db_cursor.execute(f"UPDATE {world.flavour.base_table} SET _overlay_deleted = TRUE WHERE id = %s", [world.organic.pk])
+            db_cursor.execute(
+                f"UPDATE {world.flavour.base_table} SET _overlay_deleted = TRUE WHERE id = %s",
+                [world.organic.pk],
+            )
             db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
 
 

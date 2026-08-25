@@ -9,11 +9,10 @@ through it. `reset_to_source()` could get them, by destroying the override.
 """
 
 import pytest
-from django.db import connection, models
+from django.db import models
 
 from django_overlay.sources import SourceTable
-
-from tests.testapp.models import FilteredSourceTest, MetaTest, Person, PersonUuid4, RosterMembership
+from tests.testapp.models import FilteredSourceTest, Person, PersonUuid4, RosterMembership
 from tests.testapp_shared.models import FilteredSourceTestSource, PersonSource, PersonSourceUuid4
 
 

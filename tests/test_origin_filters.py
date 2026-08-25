@@ -23,7 +23,7 @@ import pytest
 from django.db import connection, models
 
 from django_overlay import sql as overlay_sql
-from tests.testapp.models import MetaTest, Person, PersonUuid4
+from tests.testapp.models import Person, PersonUuid4
 from tests.testapp_shared.models import PersonSource, PersonSourceUuid4
 
 
