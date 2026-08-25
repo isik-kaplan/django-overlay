@@ -8,6 +8,7 @@ identical to the unfenced join, including their multiplicity.
 Every comparison is ordered. An unordered LIMIT is free to return a different
 arbitrary subset under a different plan, which says nothing either way.
 """
+
 import time
 
 import pytest
@@ -43,14 +44,10 @@ def test_orm_m2m_fence():
         return qs.order_by("id").values_list("id", flat=True)[:200]
 
     cases = {
-        "selective  phones__number=": lambda: page(
-            BenchPerson.objects.filter(phones__number="+447000000042")),
-        "broad      phones__kind=": lambda: page(
-            BenchPerson.objects.filter(phones__kind="mobile")),
-        "two hops   addresses__city=": lambda: page(
-            BenchPerson.objects.filter(addresses__city="city42")),
-        "narrow     addresses__postcode=": lambda: page(
-            BenchPerson.objects.filter(addresses__postcode="pc42")),
+        "selective  phones__number=": lambda: page(BenchPerson.objects.filter(phones__number="+447000000042")),
+        "broad      phones__kind=": lambda: page(BenchPerson.objects.filter(phones__kind="mobile")),
+        "two hops   addresses__city=": lambda: page(BenchPerson.objects.filter(addresses__city="city42")),
+        "narrow     addresses__postcode=": lambda: page(BenchPerson.objects.filter(addresses__postcode="pc42")),
     }
 
     print(f"  {'query':<32} {'unfenced':>11} {'fenced':>10} {'gain':>9}   identical")
@@ -63,8 +60,10 @@ def test_orm_m2m_fence():
         identical = list(plain_rows) == list(fenced_rows)
         if not identical:
             failures.append((label, plain_rows, fenced_rows))
-        print(f"  {label:<32} {slow:>9.1f}ms {fast:>8.1f}ms {slow / fast:>8.1f}x   "
-              f"{'YES' if identical else 'NO -- BUG'}  ({len(plain_rows)} rows)")
+        print(
+            f"  {label:<32} {slow:>9.1f}ms {fast:>8.1f}ms {slow / fast:>8.1f}x   "
+            f"{'YES' if identical else 'NO -- BUG'}  ({len(plain_rows)} rows)"
+        )
 
     # Multiplicity, checked independently of any LIMIT: the total row count of
     # the whole traversal must be unchanged, duplicates included.
@@ -80,8 +79,7 @@ def test_orm_m2m_fence():
         same = plain_total == fenced_total
         if not same:
             failures.append((label + " count", plain_total, fenced_total))
-        print(f"  {label:<32} {plain_total:>11,} {fenced_total:>10,}   "
-              f"{'YES' if same else 'NO -- BUG'}")
+        print(f"  {label:<32} {plain_total:>11,} {fenced_total:>10,}   {'YES' if same else 'NO -- BUG'}")
 
     print("\n  emitted SQL (selective):")
     print("   ", str(BenchPerson.objects.filter(phones__number="+447000000042").query)[:420])

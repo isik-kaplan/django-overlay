@@ -124,9 +124,7 @@ def multiplication(filters, sample=2000):
     2.5%% of a 2,000-person sample intersected with two broad conditions is
     empty, and an empty sample reports no duplication rather than none found.
     """
-    ids = list(
-        BenchPerson.objects.filter(**filters).values_list("pk", flat=True).distinct()[:sample]
-    )
+    ids = list(BenchPerson.objects.filter(**filters).values_list("pk", flat=True).distinct()[:sample])
     scoped = BenchPerson.objects.filter(pk__in=ids, **filters)
     try:
         joined = scoped.count()
@@ -148,8 +146,12 @@ def test_multi_m2m():
     print("=" * 108)
     print("  (exact, over the whole table — a single grouped anti-join is cheap;")
     print("   it was the *sampling* that used to make this look expensive)")
-    for label, filters in (("addresses__country='US'", BROAD_A), ("phones__kind='mobile'", BROAD_B),
-                           ("city='city42'", SELECTIVE), ("addresses__postcode='pc42'", NARROW)):
+    for label, filters in (
+        ("addresses__country='US'", BROAD_A),
+        ("phones__kind='mobile'", BROAD_B),
+        ("city='city42'", SELECTIVE),
+        ("addresses__postcode='pc42'", NARROW),
+    ):
         try:
             hits = BenchPerson.objects.filter(**filters).values("pk").distinct().count()
         except OperationalError:
@@ -195,6 +197,7 @@ def test_multi_m2m():
         ("two broad + selective", BROAD_A | BROAD_B | SELECTIVE),
         ("two broad + narrow", BROAD_A | BROAD_B | NARROW),
     ):
+
         def build(filters=filters):
             return BenchPerson.objects.filter(**filters).order_by("id")[:200]
 
@@ -205,15 +208,18 @@ def test_multi_m2m():
         if unfenced_rows is not None and fenced_rows is not None:
             assert unfenced_rows == fenced_rows, f"{label}: the fence changed the result"
         timed_out = "  (one side timed out)" if None in (unfenced_rows, fenced_rows) else ""
-        print(f"  {label:<34} unfenced {unfenced:>9.1f}ms   fenced {fenced:>9.1f}ms   "
-              f"x{unfenced / fenced:>6.1f}{timed_out}")
+        print(
+            f"  {label:<34} unfenced {unfenced:>9.1f}ms   fenced {fenced:>9.1f}ms   "
+            f"x{unfenced / fenced:>6.1f}{timed_out}"
+        )
 
     print("\n" + "=" * 108)
     print("DOES DROPPING THE ORDER BY HELP, AS IT DID FOR THE SINGLE BROAD CASE?")
     print("=" * 108)
-    for label, filters in (("two broad m2m", BROAD_A | BROAD_B),
-                           ("two broad + selective", BROAD_A | BROAD_B | SELECTIVE)):
+    for label, filters in (
+        ("two broad m2m", BROAD_A | BROAD_B),
+        ("two broad + selective", BROAD_A | BROAD_B | SELECTIVE),
+    ):
         ordered, _ = timed(lambda f=filters: BenchPerson.objects.filter(**f).order_by("id")[:200])
         unordered, _ = timed(lambda f=filters: BenchPerson.objects.filter(**f)[:200])
-        print(f"  {label:<34} ordered {ordered:>9.1f}ms   unordered {unordered:>9.1f}ms   "
-              f"x{ordered / unordered:>6.1f}")
+        print(f"  {label:<34} ordered {ordered:>9.1f}ms   unordered {unordered:>9.1f}ms   x{ordered / unordered:>6.1f}")

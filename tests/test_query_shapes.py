@@ -336,6 +336,7 @@ def test_bulk_create_lands_in_the_base_table(world, model):
 # out from under a reference. Their table, their DDL, no trigger of ours. That
 # case gets its own test rather than being assumed away.
 
+
 def link(world, person_pk, address_pk):
     """Written straight to the through table rather than through add(), so a
     link to a row the ORM cannot see is at least *attempted* -- which is what

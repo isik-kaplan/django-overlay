@@ -210,9 +210,7 @@ def test_the_primary_key_follows_the_sources_own_id_column():
     class OddlyKeyedPerson:
         @staticmethod
         def get_source():
-            return SourceTable(
-                schema="public", table="testapp_shared_personsource", id_column="vendor_key"
-            )
+            return SourceTable(schema="public", table="testapp_shared_personsource", id_column="vendor_key")
 
         @staticmethod
         def base_table():

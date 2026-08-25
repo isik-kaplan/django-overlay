@@ -43,13 +43,17 @@ def write_meta(root, module, codes):
 
 
 def test_only_mutants_that_lived_are_carried_into_phase_two(tmp_path):
-    write_meta(tmp_path, "sql", {
-        "django_overlay.sql.x_a__mutmut_1": 1,    # killed
-        "django_overlay.sql.x_b__mutmut_1": 3,    # killed: pytest internal error
-        "django_overlay.sql.x_c__mutmut_1": -24,  # SIGXCPU -- hung, not killed
-        "django_overlay.sql.x_d__mutmut_1": 0,    # survived
-        "django_overlay.sql.x_e__mutmut_1": 33,   # no tests -- alive
-    })
+    write_meta(
+        tmp_path,
+        "sql",
+        {
+            "django_overlay.sql.x_a__mutmut_1": 1,  # killed
+            "django_overlay.sql.x_b__mutmut_1": 3,  # killed: pytest internal error
+            "django_overlay.sql.x_c__mutmut_1": -24,  # SIGXCPU -- hung, not killed
+            "django_overlay.sql.x_d__mutmut_1": 0,  # survived
+            "django_overlay.sql.x_e__mutmut_1": 33,  # no tests -- alive
+        },
+    )
     alive, unchecked, _ = confirm_survivors.alive_from_meta(tmp_path / "mutants")
     assert alive == [
         "django_overlay.sql.x_c__mutmut_1",
@@ -112,6 +116,7 @@ def test_unreadable_meta_does_not_stop_the_others(tmp_path):
 
 # --------------------------------------------------------- the verdicts
 
+
 def test_the_full_suite_passing_means_the_mutant_really_survives():
     outcome = confirm_survivors.confirm(
         ["a"], run=lambda name: (0, 31.0, None), say=lambda *_: None, cache={}, hashes={}
@@ -122,8 +127,7 @@ def test_the_full_suite_passing_means_the_mutant_really_survives():
 def test_the_full_suite_failing_kills_a_phase_one_survivor():
     """The whole point: tracing missed the test, the full suite has it."""
     outcome = confirm_survivors.confirm(
-        ["a"], run=lambda name: (1, 12.0, "tests/test_x.py::test_y"),
-        say=lambda *_: None, cache={}, hashes={}
+        ["a"], run=lambda name: (1, 12.0, "tests/test_x.py::test_y"), say=lambda *_: None, cache={}, hashes={}
     )
     assert (outcome.confirmed, outcome.killed, outcome.hung) == ([], ["a"], [])
 
@@ -138,13 +142,13 @@ def test_a_mutant_with_no_verdict_in_time_is_not_a_pass():
 def test_progress_names_each_mutant_as_it_is_settled():
     """A step with no output for an hour is indistinguishable from a hung one."""
     said = []
-    confirm_survivors.confirm(["a", "b"], run=lambda name: (0, 1.0, None),
-                              say=said.append, cache={}, hashes={})
+    confirm_survivors.confirm(["a", "b"], run=lambda name: (0, 1.0, None), say=said.append, cache={}, hashes={})
     assert len(said) == 2
     assert "[2/2]" in said[1] and "b" in said[1]
 
 
 # ------------------------------------------------------------ the exit code
+
 
 @pytest.fixture(autouse=True)
 def off_the_real_tree(tmp_path, monkeypatch):
@@ -180,8 +184,7 @@ def test_a_shard_with_no_survivors_passes(run_in, monkeypatch):
 
 def test_a_confirmed_survivor_fails_the_build(run_in, monkeypatch):
     write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": 0})
-    monkeypatch.setattr(confirm_survivors, "run_full_suite",
-                        lambda name, timeout=0: (0, 1.0, None))
+    monkeypatch.setattr(confirm_survivors, "run_full_suite", lambda name, timeout=0: (0, 1.0, None))
     assert confirm_survivors.main(["--label", "ddl"]) == 1
     report = json.loads((run_in / "mutants" / "mutmut-confirmed.json").read_text())
     assert report["confirmed"] == ["django_overlay.sql.x_a__mutmut_1"]
@@ -191,9 +194,11 @@ def test_a_confirmed_survivor_fails_the_build(run_in, monkeypatch):
 def test_a_survivor_the_full_suite_kills_does_not_fail_the_build(run_in, monkeypatch):
     write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": 0})
     # Clean with no mutant, red with it: a test the tracing missed.
-    monkeypatch.setattr(confirm_survivors, "run_full_suite",
-                        lambda name, timeout=0: (0, 1.0, None) if name == ""
-                        else (1, 1.0, "tests/test_x.py::test_y"))
+    monkeypatch.setattr(
+        confirm_survivors,
+        "run_full_suite",
+        lambda name, timeout=0: (0, 1.0, None) if name == "" else (1, 1.0, "tests/test_x.py::test_y"),
+    )
     assert confirm_survivors.main(["--label", "ddl"]) == 0
     report = json.loads((run_in / "mutants" / "mutmut-confirmed.json").read_text())
     assert report["confirmed"] == []
@@ -207,7 +212,7 @@ def test_a_phase_one_that_tested_nothing_is_a_failure_not_a_pass(run_in):
 
 
 def test_a_shard_with_no_mutants_at_all_is_a_failure(run_in):
-    """"Nothing survived" and "nothing was mutated" are the same empty list.
+    """ "Nothing survived" and "nothing was mutated" are the same empty list.
 
     It happened: the cache-key step failed, the mutation step was skipped,
     mutants/ never existed, and this reported a clean shard.
@@ -267,8 +272,7 @@ def test_refreshing_is_skipped_when_there_is_nothing_to_refresh(tmp_path, monkey
 
 def test_the_baseline_runs_with_no_mutant_active():
     asked = []
-    confirm_survivors.baseline_is_clean(run=lambda name: asked.append(name) or (0, 1.0, None),
-                                        say=lambda *_: None)
+    confirm_survivors.baseline_is_clean(run=lambda name: asked.append(name) or (0, 1.0, None), say=lambda *_: None)
     assert asked == [""], "the baseline has to be the unmutated suite"
 
 
@@ -287,8 +291,7 @@ def test_a_dirty_baseline_stops_phase_two_before_it_confirms_anything(run_in, mo
 
 def test_a_clean_baseline_lets_the_confirmations_run(run_in, monkeypatch):
     write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": 0})
-    monkeypatch.setattr(confirm_survivors, "run_full_suite",
-                        lambda name, timeout=0: (0, 1.0, None))
+    monkeypatch.setattr(confirm_survivors, "run_full_suite", lambda name, timeout=0: (0, 1.0, None))
     assert confirm_survivors.main(["--label", "ddl"]) == 1  # the survivor is real
     report = json.loads((run_in / "mutants" / "mutmut-confirmed.json").read_text())
     assert report["confirmed"] == ["django_overlay.sql.x_a__mutmut_1"]
@@ -297,8 +300,9 @@ def test_a_clean_baseline_lets_the_confirmations_run(run_in, monkeypatch):
 def test_nothing_to_confirm_costs_no_baseline_pass(run_in, monkeypatch):
     """A shard where everything died in phase one should not run the suite at all."""
     write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": 1})
-    monkeypatch.setattr(confirm_survivors, "run_full_suite",
-                        lambda name, timeout=0: pytest.fail("ran the suite for nothing"))
+    monkeypatch.setattr(
+        confirm_survivors, "run_full_suite", lambda name, timeout=0: pytest.fail("ran the suite for nothing")
+    )
     assert confirm_survivors.main(["--label", "ddl"]) == 0
 
 
@@ -310,12 +314,15 @@ def test_nothing_to_confirm_costs_no_baseline_pass(run_in, monkeypatch):
 # killing. A cached survivor is never reused at all -- see reusable().
 
 
-def cached(name="a", killed_by="tests/test_x.py::test_y", function_hash="fn", file_hash="fh",
-           root="mutants"):
-    return {name: {"killed_by": killed_by, "function_hash": function_hash,
-                   "test_file_hash": file_hash,
-                   "conftest_hash": confirm_survivors.conftest_hash(
-                       killed_by.partition("::")[0], root)}}
+def cached(name="a", killed_by="tests/test_x.py::test_y", function_hash="fn", file_hash="fh", root="mutants"):
+    return {
+        name: {
+            "killed_by": killed_by,
+            "function_hash": function_hash,
+            "test_file_hash": file_hash,
+            "conftest_hash": confirm_survivors.conftest_hash(killed_by.partition("::")[0], root),
+        }
+    }
 
 
 @pytest.fixture
@@ -332,14 +339,12 @@ def run_and_count(names, cache, hashes, root, counter):
         counter.append(name)
         return 1, 1.0, "tests/test_x.py::test_y"
 
-    return confirm_survivors.confirm(names, run=run, say=lambda *_: None,
-                                     cache=cache, hashes=hashes, root=str(root))
+    return confirm_survivors.confirm(names, run=run, say=lambda *_: None, cache=cache, hashes=hashes, root=str(root))
 
 
 def test_a_reused_survivor_still_counts_as_surviving(tmp_path, a_test_file):
     """The cache must not launder a survivor into a kill."""
-    entry = {"a": {"killed_by": None, "function_hash": "fn",
-                   "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
+    entry = {"a": {"killed_by": None, "function_hash": "fn", "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
     outcome = run_and_count(["a"], entry, {"a": "fn"}, tmp_path, [])
     assert outcome.confirmed == ["a"] and outcome.killed == []
 
@@ -347,8 +352,11 @@ def test_a_reused_survivor_still_counts_as_surviving(tmp_path, a_test_file):
 def test_an_unchanged_kill_is_not_re_run(tmp_path, a_test_file):
     ran = []
     outcome = run_and_count(
-        ["a"], cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path)),
-        {"a": "fn"}, tmp_path, ran,
+        ["a"],
+        cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path)),
+        {"a": "fn"},
+        tmp_path,
+        ran,
     )
     assert ran == [], "it re-ran a verdict nothing had invalidated"
     assert outcome.killed == ["a"] and outcome.reused == ["a"]
@@ -356,9 +364,13 @@ def test_an_unchanged_kill_is_not_re_run(tmp_path, a_test_file):
 
 def test_a_kill_is_re_run_when_the_mutated_function_changes(tmp_path, a_test_file):
     ran = []
-    run_and_count(["a"], cached(file_hash=confirm_survivors.sha(a_test_file),
-                                root=str(tmp_path)),
-                  {"a": "a different hash"}, tmp_path, ran)
+    run_and_count(
+        ["a"],
+        cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path)),
+        {"a": "a different hash"},
+        tmp_path,
+        ran,
+    )
     assert ran == ["a"]
 
 
@@ -429,10 +441,9 @@ def test_a_kill_with_no_conftest_hash_is_re_checked(tmp_path, a_test_file):
 
 
 def test_a_survivor_is_reused_while_no_test_has_changed(tmp_path, a_test_file):
-    """"Nothing kills it" stays true until some test changes."""
+    """ "Nothing kills it" stays true until some test changes."""
     ran = []
-    entry = {"a": {"killed_by": None, "function_hash": "fn",
-                   "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
+    entry = {"a": {"killed_by": None, "function_hash": "fn", "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
     outcome = run_and_count(["a"], entry, {"a": "fn"}, tmp_path, ran)
     assert ran == []
     assert outcome.reused == ["a"]
@@ -441,8 +452,7 @@ def test_a_survivor_is_reused_while_no_test_has_changed(tmp_path, a_test_file):
 def test_a_survivor_is_re_checked_when_any_test_changes(tmp_path, a_test_file):
     """It is a claim about the whole suite, so the whole suite invalidates it."""
     ran = []
-    entry = {"a": {"killed_by": None, "function_hash": "fn",
-                   "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
+    entry = {"a": {"killed_by": None, "function_hash": "fn", "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
     (tmp_path / "tests" / "test_new.py").write_text("def test_z(): pass\n")
     run_and_count(["a"], entry, {"a": "fn"}, tmp_path, ran)
     assert ran == ["a"]
@@ -450,8 +460,7 @@ def test_a_survivor_is_re_checked_when_any_test_changes(tmp_path, a_test_file):
 
 def test_a_survivor_is_re_checked_when_the_mutated_function_changes(tmp_path, a_test_file):
     ran = []
-    entry = {"a": {"killed_by": None, "function_hash": "fn",
-                   "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
+    entry = {"a": {"killed_by": None, "function_hash": "fn", "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
     run_and_count(["a"], entry, {"a": "changed"}, tmp_path, ran)
     assert ran == ["a"]
 
@@ -459,15 +468,18 @@ def test_a_survivor_is_re_checked_when_the_mutated_function_changes(tmp_path, a_
 def test_a_survivor_with_no_suite_hash_is_re_checked(tmp_path):
     """Entries written before survivors were cacheable must not be trusted."""
     ran = []
-    run_and_count(["a"], {"a": {"killed_by": None, "function_hash": "fn"}},
-                  {"a": "fn"}, tmp_path, ran)
+    run_and_count(["a"], {"a": {"killed_by": None, "function_hash": "fn"}}, {"a": "fn"}, tmp_path, ran)
     assert ran == ["a"]
 
 
 def test_a_kill_nobody_can_attribute_is_not_cached(tmp_path):
     outcome = confirm_survivors.confirm(
-        ["a"], run=lambda name: (1, 1.0, None), say=lambda *_: None,
-        cache={}, hashes={}, root=str(tmp_path),
+        ["a"],
+        run=lambda name: (1, 1.0, None),
+        say=lambda *_: None,
+        cache={},
+        hashes={},
+        root=str(tmp_path),
     )
     assert outcome.killed == ["a"]
     assert outcome.verdicts == {}, "a verdict with no test behind it cannot be pinned to one"
@@ -475,8 +487,7 @@ def test_a_kill_nobody_can_attribute_is_not_cached(tmp_path):
 
 def test_the_killing_test_is_read_out_of_pytest_output():
     output = (
-        "..F\n=== short test summary info ===\n"
-        "FAILED tests/test_soft_delete.py::test_unique_together - TypeError\n"
+        "..F\n=== short test summary info ===\nFAILED tests/test_soft_delete.py::test_unique_together - TypeError\n"
     )
     assert confirm_survivors.killing_test(output) == "tests/test_soft_delete.py::test_unique_together"
 
@@ -494,8 +505,14 @@ def test_the_default_save_stays_relative_to_the_working_directory(tmp_path):
     back to writing the real one, with nothing failing to say so.
     """
     assert not confirm_survivors.CACHE.is_absolute()
-    confirm_survivors.confirm(["a"], run=lambda name: (1, 1.0, "tests/test_x.py::test_y"),
-                              say=lambda *_: None, cache={}, hashes={}, root=str(tmp_path))
+    confirm_survivors.confirm(
+        ["a"],
+        run=lambda name: (1, 1.0, "tests/test_x.py::test_y"),
+        say=lambda *_: None,
+        cache={},
+        hashes={},
+        root=str(tmp_path),
+    )
     assert (tmp_path / "mutants" / "mutmut-confirmed-cache.json").exists(), (
         "confirm() did not save where the working directory pointed"
     )
@@ -516,16 +533,20 @@ def test_the_cache_survives_the_round_trip(run_in, monkeypatch, a_test_file):
     """What one run writes, the next has to be able to reuse."""
     write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": 0})
     meta = run_in / "mutants" / "django_overlay" / "sql.py.meta"
-    meta.write_text(json.dumps({
-        "exit_code_by_key": {"django_overlay.sql.x_a__mutmut_1": 0},
-        "hash_by_function_name": {"x_a": "fn"},
-    }))
+    meta.write_text(
+        json.dumps(
+            {
+                "exit_code_by_key": {"django_overlay.sql.x_a__mutmut_1": 0},
+                "hash_by_function_name": {"x_a": "fn"},
+            }
+        )
+    )
     (run_in / "mutants" / "tests").mkdir(parents=True, exist_ok=True)
     (run_in / "mutants" / "tests" / "test_x.py").write_text("def test_y(): pass\n")
     monkeypatch.setattr(
-        confirm_survivors, "run_full_suite",
-        lambda name, timeout=0: (0, 1.0, None) if name == ""
-        else (1, 1.0, "tests/test_x.py::test_y"),
+        confirm_survivors,
+        "run_full_suite",
+        lambda name, timeout=0: (0, 1.0, None) if name == "" else (1, 1.0, "tests/test_x.py::test_y"),
     )
     assert confirm_survivors.main(["--label", "ddl"]) == 0
 
@@ -544,7 +565,10 @@ def test_each_verdict_is_saved_as_it_is_reached(tmp_path):
     confirm_survivors.confirm(
         ["a", "b", "c"],
         run=lambda name: (1, 1.0, "tests/test_x.py::test_y"),
-        say=lambda *_: None, cache={}, hashes={}, root=str(tmp_path),
+        say=lambda *_: None,
+        cache={},
+        hashes={},
+        root=str(tmp_path),
         save=lambda verdicts: saved.append(dict(verdicts)),
     )
     assert [len(v) for v in saved] == [1, 2, 3], "verdicts were not persisted as they landed"
@@ -553,13 +577,21 @@ def test_each_verdict_is_saved_as_it_is_reached(tmp_path):
 def test_a_reused_verdict_is_saved_too(tmp_path, a_test_file):
     """Otherwise a resumed run drops everything it did not re-run."""
     saved = []
-    entry = {"a": {"killed_by": "tests/test_x.py::test_y", "function_hash": "fn",
-                   "test_file_hash": confirm_survivors.sha(a_test_file),
-                   "conftest_hash": confirm_survivors.conftest_hash(
-                       "tests/test_x.py", str(tmp_path))}}
+    entry = {
+        "a": {
+            "killed_by": "tests/test_x.py::test_y",
+            "function_hash": "fn",
+            "test_file_hash": confirm_survivors.sha(a_test_file),
+            "conftest_hash": confirm_survivors.conftest_hash("tests/test_x.py", str(tmp_path)),
+        }
+    }
     confirm_survivors.confirm(
-        ["a"], run=lambda name: pytest.fail("should have been reused"),
-        say=lambda *_: None, cache=entry, hashes={"a": "fn"}, root=str(tmp_path),
+        ["a"],
+        run=lambda name: pytest.fail("should have been reused"),
+        say=lambda *_: None,
+        cache=entry,
+        hashes={"a": "fn"},
+        root=str(tmp_path),
         save=lambda verdicts: saved.append(dict(verdicts)),
     )
     assert saved and "a" in saved[-1]
@@ -588,8 +620,9 @@ def test_an_exempt_mutant_is_not_re_run(run_in, monkeypatch):
     write_meta(run_in, "cli", {"django_overlay.cli.x_main__mutmut_40": 0})
     path = equivalents(run_in, f'["django_overlay.cli.x_main__mutmut_40"]\nreason = "{GOOD_REASON}"\n')
     monkeypatch.setattr(confirm_survivors, "EQUIVALENTS", path)
-    monkeypatch.setattr(confirm_survivors, "run_full_suite",
-                        lambda name, timeout=0: pytest.fail("ran a mutant no test can kill"))
+    monkeypatch.setattr(
+        confirm_survivors, "run_full_suite", lambda name, timeout=0: pytest.fail("ran a mutant no test can kill")
+    )
     assert confirm_survivors.main(["--label", "cli"]) == 0
     report = json.loads((run_in / "mutants" / "mutmut-confirmed.json").read_text())
     assert report["exempt"] == ["django_overlay.cli.x_main__mutmut_40"]
@@ -624,35 +657,30 @@ def test_no_file_at_all_is_fine(tmp_path):
 def test_an_exemption_for_a_mutant_that_no_longer_exists_fails(run_in):
     """A rewrite that removes the mutant has to force the exemption to be revisited."""
     write_meta(run_in, "cli", {"django_overlay.cli.x_main__mutmut_1": 1})
-    problems = confirm_survivors.stale_exemptions(
-        {"django_overlay.cli.x_main__mutmut_40": GOOD_REASON}
-    )
+    problems = confirm_survivors.stale_exemptions({"django_overlay.cli.x_main__mutmut_40": GOOD_REASON})
     assert problems and "no longer exists" in problems[0]
 
 
 def test_an_exemption_for_a_mutant_that_is_now_killed_fails(run_in):
     """An unnecessary exemption makes the policy look smaller than it is."""
     write_meta(run_in, "cli", {"django_overlay.cli.x_main__mutmut_40": 1})
-    problems = confirm_survivors.stale_exemptions(
-        {"django_overlay.cli.x_main__mutmut_40": GOOD_REASON}
-    )
+    problems = confirm_survivors.stale_exemptions({"django_overlay.cli.x_main__mutmut_40": GOOD_REASON})
     assert problems and "kills it now" in problems[0]
 
 
 def test_an_exemption_is_not_judged_by_a_shard_that_did_not_mutate_it(run_in):
     """Only the shard covering cli.py has anything to say about an exemption in it."""
     write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": 1})
-    assert confirm_survivors.stale_exemptions(
-        {"django_overlay.cli.x_main__mutmut_40": GOOD_REASON}
-    ) == []
+    assert confirm_survivors.stale_exemptions({"django_overlay.cli.x_main__mutmut_40": GOOD_REASON}) == []
 
 
 def test_a_bad_exemptions_file_stops_the_run_before_confirming_anything(run_in, monkeypatch):
     write_meta(run_in, "sql", {"django_overlay.sql.x_a__mutmut_1": 0})
     path = equivalents(run_in, '["a.b.x_c__mutmut_1"]\nreason = "no"\n')
     monkeypatch.setattr(confirm_survivors, "EQUIVALENTS", path)
-    monkeypatch.setattr(confirm_survivors, "run_full_suite",
-                        lambda name, timeout=0: pytest.fail("confirmed against a broken list"))
+    monkeypatch.setattr(
+        confirm_survivors, "run_full_suite", lambda name, timeout=0: pytest.fail("confirmed against a broken list")
+    )
     assert confirm_survivors.main(["--label", "ddl"]) == 1
 
 
@@ -667,13 +695,21 @@ def test_the_checked_in_exemptions_are_all_properly_justified():
 
 # --------------------------------------------------------------- the union
 
+
 def write_report(root, shard, confirmed=(), killed=(), hung=()):
     path = root / f"mutmut-stats-{shard}"
     path.mkdir(parents=True, exist_ok=True)
-    (path / "mutmut-confirmed.json").write_text(json.dumps({
-        "label": shard, "confirmed": list(confirmed),
-        "killed_by_full_suite": list(killed), "hung": list(hung), "unchecked": [],
-    }))
+    (path / "mutmut-confirmed.json").write_text(
+        json.dumps(
+            {
+                "label": shard,
+                "confirmed": list(confirmed),
+                "killed_by_full_suite": list(killed),
+                "hung": list(hung),
+                "unchecked": [],
+            }
+        )
+    )
 
 
 def all_shards():
@@ -683,27 +719,21 @@ def all_shards():
 def test_the_union_passes_only_when_every_shard_is_clean(tmp_path):
     for shard in all_shards():
         write_report(tmp_path, shard, killed=["x"])
-    assert confirm_survivors.main(
-        ["--aggregate", str(tmp_path), "--expect-every-shard"]
-    ) == 0
+    assert confirm_survivors.main(["--aggregate", str(tmp_path), "--expect-every-shard"]) == 0
 
 
 def test_one_survivor_anywhere_fails_the_union(tmp_path):
     for shard in all_shards():
         write_report(tmp_path, shard)
     write_report(tmp_path, all_shards()[0], confirmed=["django_overlay.sql.x_a__mutmut_1"])
-    assert confirm_survivors.main(
-        ["--aggregate", str(tmp_path), "--expect-every-shard"]
-    ) == 1
+    assert confirm_survivors.main(["--aggregate", str(tmp_path), "--expect-every-shard"]) == 1
 
 
 def test_a_shard_that_never_reported_fails_the_union(tmp_path):
     """Five green shards and a missing one must not read as no survivors."""
     for shard in all_shards()[1:]:
         write_report(tmp_path, shard)
-    assert confirm_survivors.main(
-        ["--aggregate", str(tmp_path), "--expect-every-shard"]
-    ) == 1
+    assert confirm_survivors.main(["--aggregate", str(tmp_path), "--expect-every-shard"]) == 1
 
 
 def test_an_unreadable_report_fails_the_union(tmp_path):
@@ -711,18 +741,14 @@ def test_an_unreadable_report_fails_the_union(tmp_path):
         write_report(tmp_path, shard)
     broken = tmp_path / f"mutmut-stats-{all_shards()[0]}" / "mutmut-confirmed.json"
     broken.write_text("{not json")
-    assert confirm_survivors.main(
-        ["--aggregate", str(tmp_path), "--expect-every-shard"]
-    ) == 1
+    assert confirm_survivors.main(["--aggregate", str(tmp_path), "--expect-every-shard"]) == 1
 
 
 def test_a_hung_mutant_fails_the_union_too(tmp_path):
     for shard in all_shards():
         write_report(tmp_path, shard)
     write_report(tmp_path, all_shards()[0], hung=["django_overlay.sql.x_a__mutmut_1"])
-    assert confirm_survivors.main(
-        ["--aggregate", str(tmp_path), "--expect-every-shard"]
-    ) == 1
+    assert confirm_survivors.main(["--aggregate", str(tmp_path), "--expect-every-shard"]) == 1
 
 
 def test_the_names_of_survivors_reach_the_summary(tmp_path):

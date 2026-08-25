@@ -55,23 +55,23 @@ def page(model, scope):
 def run(ctx):
     from tests.testapp.models import BenchPerson, PlainPerson
 
-    for label, operation in (("Resolve: how many people match (no LIMIT)", resolve),
-                             ("Ordered page: the first 200 by id (LIMIT)", page)):
+    for label, operation in (
+        ("Resolve: how many people match (no LIMIT)", resolve),
+        ("Ordered page: the first 200 by id (LIMIT)", page),
+    ):
         section = harness.Section(label, COLUMNS)
         scope = {}
         for depth, (field, value) in enumerate(HOPS, start=1):
             scope = scope | {field: value}
 
             with OFF:
-                unbanned, unbanned_value = ctx.measure(
-                    lambda s=scope, op=operation: op(BenchPerson, s), rounds=2)
-            banned, banned_value = ctx.measure(
-                lambda s=scope, op=operation: op(BenchPerson, s), rounds=2)
-            plain, plain_value = ctx.measure(
-                lambda s=scope, op=operation: op(PlainPerson, s), rounds=2)
+                unbanned, unbanned_value = ctx.measure(lambda s=scope, op=operation: op(BenchPerson, s), rounds=2)
+            banned, banned_value = ctx.measure(lambda s=scope, op=operation: op(BenchPerson, s), rounds=2)
+            plain, plain_value = ctx.measure(lambda s=scope, op=operation: op(PlainPerson, s), rounds=2)
 
-            ctx.compare(f"{label} / {depth} hops (ban on vs off)",
-                        unbanned_value, banned_value, "the ban changed the result")
+            ctx.compare(
+                f"{label} / {depth} hops (ban on vs off)", unbanned_value, banned_value, "the ban changed the result"
+            )
             ctx.compare(f"{label} / {depth} hops (overlay vs plain)", banned_value, plain_value)
 
             section.add(

@@ -90,9 +90,7 @@ class Context:
         """
         if self.out_of_time():
             return harness.Cell(0.0, note="skipped"), None
-        return harness.measure(
-            build, self.cap_ms, rounds=rounds, abandon_after_s=self.measurement_ceiling()
-        )
+        return harness.measure(build, self.cap_ms, rounds=rounds, abandon_after_s=self.measurement_ceiling())
 
     def measurement_ceiling(self):
         """How long one execution may take before it is abandoned.

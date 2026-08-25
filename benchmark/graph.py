@@ -92,13 +92,17 @@ def _recompute():
     # intersects.
     PL_ROWS = scaled(3_000_000)
     for name, size in (
-        ("person", PERSON_VIEW), ("address", ADDRESS_VIEW),
-        ("phone", PHONE_VIEW), ("email", EMAIL_VIEW),
+        ("person", PERSON_VIEW),
+        ("address", ADDRESS_VIEW),
+        ("phone", PHONE_VIEW),
+        ("email", EMAIL_VIEW),
     ):
         base, source, _ = ENTITIES[name]
         ENTITIES[name] = (base, source, size)
     for name, size in (
-        ("person_address", PA_VIEW), ("person_phone", PP_VIEW), ("person_email", PE_VIEW),
+        ("person_address", PA_VIEW),
+        ("person_phone", PP_VIEW),
+        ("person_email", PE_VIEW),
     ):
         base, source, _ = LINKS[name]
         LINKS[name] = (base, source, size)
@@ -143,8 +147,7 @@ TENANT_ONLY = ("bench_label", "bench_person_label", "plain_person_label")
 # the same ones. Listed explicitly rather than `SELECT *` because the view's
 # column order is the select list's, not the table's.
 PLAIN_COLUMNS = {
-    "person": ("id", "first_name", "last_name", "city", "postcode", "status", "score",
-               "born_on", "notes"),
+    "person": ("id", "first_name", "last_name", "city", "postcode", "status", "score", "born_on", "notes"),
     "address": ("id", "line1", "city", "postcode", "country"),
     "phone": ("id", "number", "kind"),
     "email": ("id", "address", "domain", "kind"),
@@ -316,8 +319,7 @@ def _fill_cache():
     sql(f"CREATE SCHEMA {CACHE_SCHEMA}")
     for table in _all_tables():
         sql(f"CREATE TABLE {CACHE_SCHEMA}.{table} AS TABLE public.{table}")  # noqa: S608
-    sql(f"CREATE TABLE {CACHE_SCHEMA}.stamp "
-        f"(scale double precision, share double precision, version integer)")
+    sql(f"CREATE TABLE {CACHE_SCHEMA}.stamp (scale double precision, share double precision, version integer)")
     sql(f"INSERT INTO {CACHE_SCHEMA}.stamp VALUES ({SCALE}, {SHARE}, {CACHE_VERSION})")  # noqa: S608
 
 
@@ -402,8 +404,7 @@ def load(rebuild=False, progress=None):
 
     address_columns = "line1, city, postcode, country"
     address_values = (
-        "g || ' Example Street', 'city' || (g %% 1000), 'pc' || (g %% 9999), "
-        "(ARRAY['GB','US','FR','DE'])[1 + g %% 4]"
+        "g || ' Example Street', 'city' || (g %% 1000), 'pc' || (g %% 9999), (ARRAY['GB','US','FR','DE'])[1 + g %% 4]"
     )
     for table, ids, count in (
         ("testapp_shared_benchaddresssource", u("g"), address_source),
@@ -465,20 +466,37 @@ def load(rebuild=False, progress=None):
 
     person_ref = reference(person_source, person_organic)
     for link, target_column, target_source, target_organic, roles, total in (
-        ("person_address", "address_id", address_source, address_organic,
-         "(ARRAY['home','work','billing'])[1 + g %% 3]", PA_VIEW),
-        ("person_phone", "phone_id", phone_source, phone_organic,
-         "(ARRAY['mobile','home','work'])[1 + g %% 3]", PP_VIEW),
-        ("person_email", "email_id", email_source, email_organic,
-         "(ARRAY['primary','work','other'])[1 + g %% 3]", PE_VIEW),
+        (
+            "person_address",
+            "address_id",
+            address_source,
+            address_organic,
+            "(ARRAY['home','work','billing'])[1 + g %% 3]",
+            PA_VIEW,
+        ),
+        (
+            "person_phone",
+            "phone_id",
+            phone_source,
+            phone_organic,
+            "(ARRAY['mobile','home','work'])[1 + g %% 3]",
+            PP_VIEW,
+        ),
+        (
+            "person_email",
+            "email_id",
+            email_source,
+            email_organic,
+            "(ARRAY['primary','work','other'])[1 + g %% 3]",
+            PE_VIEW,
+        ),
     ):
         base, source, _ = LINKS[link]
         link_source, _, link_organic = split(total, False)
         values = f"{person_ref}, {reference(target_source, target_organic)}, {roles}"
         columns = f"person_id, {target_column}, role"
         sql(
-            f"INSERT INTO {source} (id, {columns}) "
-            f"SELECT {u('g')}, {values} FROM generate_series(1, %s) g",
+            f"INSERT INTO {source} (id, {columns}) SELECT {u('g')}, {values} FROM generate_series(1, %s) g",
             link_source,
         )
         sql(

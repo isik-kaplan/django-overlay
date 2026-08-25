@@ -171,6 +171,4 @@ def test_the_variant_byte_keeps_its_own_random_bits():
     assert any(value[8] & 0x3F != value[9] & 0x3F for value in sample), (
         "byte 8 must carry its own randomness, not a copy of byte 9"
     )
-    assert any(value[8] & 0x01 == 0 for value in sample), (
-        "no bit below the variant may be forced high"
-    )
+    assert any(value[8] & 0x01 == 0 for value in sample), "no bit below the variant may be forced high"

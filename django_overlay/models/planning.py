@@ -102,9 +102,7 @@ def _overlay_view_tables() -> frozenset:
     consulted once per compiled query.
     """
     return frozenset(
-        model._meta.db_table
-        for model in apps.get_models()
-        if getattr(model, "_is_overlay_view_model", False)
+        model._meta.db_table for model in apps.get_models() if getattr(model, "_is_overlay_view_model", False)
     )
 
 

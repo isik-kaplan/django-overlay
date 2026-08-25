@@ -27,9 +27,7 @@ def test_the_help_text_is_what_the_command_advertises():
 
     # argparse wraps to the terminal width, so the text is compared with its
     # whitespace flattened rather than line by line.
-    printed = " ".join(
-        Command().create_parser("manage.py", "show_source_indexes").format_help().split()
-    )
+    printed = " ".join(Command().create_parser("manage.py", "show_source_indexes").format_help().split())
 
     assert "--database DATABASE Database alias to introspect." in printed
     assert "--model MODEL Only this model, as app_label.ModelName." in printed

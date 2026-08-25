@@ -52,23 +52,27 @@ def run(
     names = [suite.NAME for suite in suites]
 
     cold = not graph.cache_is_warm() or rebuild
-    predicted, per_suite, build_estimate = estimates.for_run(
-        names, scale, passes, cap_ms, cold_build=cold
-    )
+    predicted, per_suite, build_estimate = estimates.for_run(names, scale, passes, cap_ms, cold_build=cold)
 
-    banner(say, "  BUDGET", [
-        f"ceiling      {harness.humanise(max_runtime)}",
-        f"estimated    {harness.humanise(predicted)}"
-        + (f"  (including ~{harness.humanise(build_estimate)} to build the graph)" if cold else ""),
-        f"suites       {', '.join(names)}",
-        f"settings     scale {scale}, {passes} pass(es), {cap_ms // 1000}s cap",
-    ])
+    banner(
+        say,
+        "  BUDGET",
+        [
+            f"ceiling      {harness.humanise(max_runtime)}",
+            f"estimated    {harness.humanise(predicted)}"
+            + (f"  (including ~{harness.humanise(build_estimate)} to build the graph)" if cold else ""),
+            f"suites       {', '.join(names)}",
+            f"settings     scale {scale}, {passes} pass(es), {cap_ms // 1000}s cap",
+        ],
+    )
 
     budget = harness.Budget(max_runtime)
 
     seconds, built = graph.load(rebuild=rebuild, progress=say)
-    say(f"\ngraph {'built' if built else 'restored from cache'} in {harness.humanise(seconds)}"
-        f" -- {graph.PERSON_VIEW:,} people")
+    say(
+        f"\ngraph {'built' if built else 'restored from cache'} in {harness.humanise(seconds)}"
+        f" -- {graph.PERSON_VIEW:,} people"
+    )
 
     harness.set_statement_cap(cap_ms)
     env = environment.capture(scale=scale, share=graph.SHARE, cap_ms=cap_ms, passes=passes)
@@ -79,22 +83,26 @@ def run(
     if note:
         say(note)
 
-    ctx = Context(scale=scale, passes=passes, cap_ms=cap_ms, say=say,
-                  deadline=budget.deadline())
+    ctx = Context(scale=scale, passes=passes, cap_ms=cap_ms, say=say, deadline=budget.deadline())
     collected, skipped, truncated = [], [], []
 
     for suite in suites:
         estimate = per_suite.get(suite.NAME, 0)
         if not budget.can_afford(estimate):
             skipped.append(suite.NAME)
-            say(f"\nSKIPPED {suite.NAME} -- needs about {harness.humanise(estimate)}, "
-                f"{harness.humanise(budget.remaining())} left in the budget")
-            collected.append({"name": suite.NAME, "title": suite.TITLE,
-                              "status": "skipped-budget", "seconds": 0, "sections": []})
+            say(
+                f"\nSKIPPED {suite.NAME} -- needs about {harness.humanise(estimate)}, "
+                f"{harness.humanise(budget.remaining())} left in the budget"
+            )
+            collected.append(
+                {"name": suite.NAME, "title": suite.TITLE, "status": "skipped-budget", "seconds": 0, "sections": []}
+            )
             continue
 
-        say(f"\n\n{BANNER}\n  {suite.TITLE}\n  [{suite.NAME}] about {harness.humanise(estimate)}"
-            f", {harness.humanise(budget.remaining())} of budget left\n{BANNER}")
+        say(
+            f"\n\n{BANNER}\n  {suite.TITLE}\n  [{suite.NAME}] about {harness.humanise(estimate)}"
+            f", {harness.humanise(budget.remaining())} of budget left\n{BANNER}"
+        )
 
         # Re-applied per suite rather than once at the start, because a suite
         # can change session state. graph.best_of() used to clear the timeout
@@ -119,11 +127,16 @@ def run(
         cut_short = ctx.out_of_time()
         if cut_short:
             truncated.append(suite.NAME)
-        collected.append({"name": suite.NAME, "title": suite.TITLE,
-                          "status": "truncated-budget" if cut_short else "ok",
-                          "seconds": elapsed, "sections": sections})
-        say(f"\n  [{suite.NAME}] {'CUT SHORT' if cut_short else 'done'} "
-            f"in {harness.humanise(elapsed)}")
+        collected.append(
+            {
+                "name": suite.NAME,
+                "title": suite.TITLE,
+                "status": "truncated-budget" if cut_short else "ok",
+                "seconds": elapsed,
+                "sections": sections,
+            }
+        )
+        say(f"\n  [{suite.NAME}] {'CUT SHORT' if cut_short else 'done'} in {harness.humanise(elapsed)}")
 
     # Cells that were never measured, as opposed to measured as slow. A run
     # carrying any of these is not a result: at scale 1.0 the compose database

@@ -83,9 +83,9 @@ def test_organic_is_rows_that_were_never_the_vendors(mixed):
 def test_those_two_partition_base_only(mixed):
     """`base_only()` is `organic()` plus `overridden()`, which is the claim in
     organic()'s docstring and the reason neither needs its own branch."""
-    assert sorted(
-        names(Person.objects.organic()) + names(Person.objects.overridden())
-    ) == names(Person.objects.base_only())
+    assert sorted(names(Person.objects.organic()) + names(Person.objects.overridden())) == names(
+        Person.objects.base_only()
+    )
 
 
 def test_a_uuid_strategy_needs_no_negation(mixed):

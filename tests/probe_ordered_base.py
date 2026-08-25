@@ -68,9 +68,7 @@ def test_ordered_base():
     load()
     print(f"\n\nloaded in {time.perf_counter() - started:.0f}s   (scale {SCALE})\n")
 
-    base_branch = (
-        f"SELECT id, score FROM {BASE} WHERE NOT _overlay_deleted ORDER BY score DESC LIMIT 20"
-    )
+    base_branch = f"SELECT id, score FROM {BASE} WHERE NOT _overlay_deleted ORDER BY score DESC LIMIT 20"
     source_branch = f"SELECT id, score FROM {SOURCE} ORDER BY score DESC LIMIT 20"
     union = (
         f"SELECT id, score FROM ("
@@ -104,8 +102,7 @@ def test_ordered_base():
     print("\n" + "=" * 100)
     print("STEP 4: covering index -- (score DESC) INCLUDE (id), no heap fetch")
     print("=" * 100)
-    sql(f"CREATE INDEX base_score_cover ON {BASE} (score DESC) INCLUDE (id) "
-        f"WHERE NOT _overlay_deleted")
+    sql(f"CREATE INDEX base_score_cover ON {BASE} (score DESC) INCLUDE (id) WHERE NOT _overlay_deleted")
     sql(f"CREATE INDEX src_score_cover ON {SOURCE} (score DESC) INCLUDE (id)")
     sql(f"ANALYZE {BASE}")
     sql(f"ANALYZE {SOURCE}")
@@ -116,7 +113,7 @@ def test_ordered_base():
     print("\n" + "=" * 100)
     print("indexes now on the base table")
     print("=" * 100)
-    for (name, definition) in rows(
+    for name, definition in rows(
         f"SELECT indexname, indexdef FROM pg_indexes WHERE tablename = '{BASE}' "
         f"AND indexname LIKE 'base_score%' ORDER BY indexname"
     ):

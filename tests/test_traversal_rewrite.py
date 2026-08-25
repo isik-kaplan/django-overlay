@@ -671,10 +671,10 @@ def test_prefetch_related_is_fenced():
     # By title, not by id: under NEGATIVE_ID the ids descend as rows are
     # created, so ordering by id would read backwards and say nothing.
     with OFF:
-        plain = [[m.name for m in r.members.all()]
-                 for r in Roster.objects.prefetch_related("members").order_by("title")]
-    fenced = [[m.name for m in r.members.all()]
-              for r in Roster.objects.prefetch_related("members").order_by("title")]
+        plain = [
+            [m.name for m in r.members.all()] for r in Roster.objects.prefetch_related("members").order_by("title")
+        ]
+    fenced = [[m.name for m in r.members.all()] for r in Roster.objects.prefetch_related("members").order_by("title")]
 
     assert fenced == plain
     assert plain == [["m0"], ["m1"], ["m2"]]
@@ -943,7 +943,5 @@ def test_the_fence_declines_a_through_model_it_cannot_read(graph):
     # Patched on the instance, not the class: Django attaches m2m_field_name
     # per field in contribute_to_class rather than defining it on the type.
     field = Roster._meta.get_field("members")
-    with mock.patch.object(
-        field, "m2m_field_name", side_effect=RuntimeError("unusual through model")
-    ):
+    with mock.patch.object(field, "m2m_field_name", side_effect=RuntimeError("unusual through model")):
         assert "= ANY (ARRAY(SELECT" not in sql_of(Roster.objects.filter(members__name="m"))

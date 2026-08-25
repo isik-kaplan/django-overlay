@@ -45,13 +45,18 @@ def save(label, env, suites, lost=0):
     """
     DIRECTORY.mkdir(parents=True, exist_ok=True)
     path = DIRECTORY / f"{_slug(label)}.json"
-    path.write_text(json.dumps({
-        "label": label,
-        "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "environment": env,
-        "lost": lost,
-        "suites": suites,
-    }, indent=2))
+    path.write_text(
+        json.dumps(
+            {
+                "label": label,
+                "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "environment": env,
+                "lost": lost,
+                "suites": suites,
+            },
+            indent=2,
+        )
+    )
     return path
 
 

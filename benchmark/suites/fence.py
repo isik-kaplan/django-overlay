@@ -86,8 +86,7 @@ def row(ctx, section, label, operation, scope, models):
 
     # The whole argument for the fence is that it is implied by a conjunct
     # already present, so a difference here is the finding, not the timing.
-    ctx.compare(f"{label} (fence on vs off)", unfenced_value, fenced_value,
-                "the fence changed the result")
+    ctx.compare(f"{label} (fence on vs off)", unfenced_value, fenced_value, "the fence changed the result")
     ctx.compare(f"{label} (overlay vs plain)", fenced_value, plain_value)
 
     section.add(
@@ -123,8 +122,7 @@ def form_row(ctx, section, label, scope, models):
     arrayed, arrayed_value = ctx.measure(lambda: scoped(overlay_model, scope, True))
     floor, floor_value = ctx.measure(lambda: scoped(plain_model, scope, False))
 
-    ctx.compare(f"{label} (ARRAY vs plain IN)", plain_in_value, arrayed_value,
-                "the array form changed the result")
+    ctx.compare(f"{label} (ARRAY vs plain IN)", plain_in_value, arrayed_value, "the array form changed the result")
     ctx.compare(f"{label} (overlay vs plain)", arrayed_value, floor_value)
 
     section.add(
@@ -144,7 +142,8 @@ def run(ctx):
         suffix = f" (pass {attempt})" if ctx.passes > 1 else ""
 
         section = harness.Section(
-            f"Resolve a scope, narrow to broad{suffix}", COLUMNS,
+            f"Resolve a scope, narrow to broad{suffix}",
+            COLUMNS,
             note="the fence materialises the scope, so the cost grows with it",
         )
         for label, scope in SCOPES:
@@ -152,7 +151,8 @@ def run(ctx):
         yield section
 
         section = harness.Section(
-            f"The same scopes, as an ordered page{suffix}", COLUMNS,
+            f"The same scopes, as an ordered page{suffix}",
+            COLUMNS,
             note="a LIMIT changes which plan the estimate picks, so it is swept too",
         )
         for label, scope in SCOPES:

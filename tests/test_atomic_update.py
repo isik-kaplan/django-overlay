@@ -374,13 +374,9 @@ def test_the_copy_and_the_update_roll_back_together():
     assert not base_rows.filter(first_name="rollback").exists(), "precondition: source-only row"
 
     with pytest.raises(DatabaseError):
-        Person.objects.using("other").filter(first_name="rollback").update(
-            age=models.F("age") / models.Value(0)
-        )
+        Person.objects.using("other").filter(first_name="rollback").update(age=models.F("age") / models.Value(0))
 
-    assert not base_rows.filter(first_name="rollback").exists(), (
-        "the copy must roll back with the update that failed"
-    )
+    assert not base_rows.filter(first_name="rollback").exists(), "the copy must roll back with the update that failed"
 
 
 @pytest.mark.django_db(databases=["default", "other"], transaction=True)

@@ -103,8 +103,20 @@ def run_full_suite(name, timeout=DEFAULT_TIMEOUT, root="mutants"):
     started = time.monotonic()
     try:
         finished = subprocess.run(
-            [sys.executable, "-m", "pytest", "tests/", "-x", "-q", "--tb=no",
-             "-p", "no:randomly", "-p", "no:random-order", "--rootdir=."],
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/",
+                "-x",
+                "-q",
+                "--tb=no",
+                "-p",
+                "no:randomly",
+                "-p",
+                "no:random-order",
+                "--rootdir=.",
+            ],
             cwd=root,
             env={**os.environ, "MUTANT_UNDER_TEST": name},
             capture_output=True,
@@ -356,9 +368,11 @@ def baseline_is_clean(run=run_full_suite, say=print):
     if code == 0:
         say(f"baseline: the suite passes inside mutants/ ({seconds:.0f}s)")
         return True
-    say(f"baseline: the suite does NOT pass inside mutants/ with no mutant active "
+    say(
+        f"baseline: the suite does NOT pass inside mutants/ with no mutant active "
         f"(exit {code} after {seconds:.0f}s).\nEvery confirmation would report a kill it "
-        "did not measure, so nothing here can be trusted.")
+        "did not measure, so nothing here can be trusted."
+    )
     return False
 
 
@@ -376,13 +390,10 @@ def write_cache(verdicts, path=CACHE):
     exists to break.
     """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(
-        {"version": CACHE_VERSION, "verdicts": verdicts}, indent=2, sort_keys=True
-    ) + "\n")
+    Path(path).write_text(json.dumps({"version": CACHE_VERSION, "verdicts": verdicts}, indent=2, sort_keys=True) + "\n")
 
 
-def confirm(names, run=run_full_suite, say=print, cache=None, hashes=None, root="mutants",
-            save=write_cache):
+def confirm(names, run=run_full_suite, say=print, cache=None, hashes=None, root="mutants", save=write_cache):
     """Settle each survivor, reusing the kills that are still answerable."""
     cache = read_cache() if cache is None else cache
     hashes = function_hashes(root) if hashes is None else hashes
@@ -467,8 +478,7 @@ def find_reports(directory):
 
 def render(rows):
     """One line per shard, then the names that matter."""
-    lines = [f"{'shard':<12} {'survived':>8} {'killed here':>12} {'hung':>6} "
-             f"{'unchecked':>10} {'exempt':>7}"]
+    lines = [f"{'shard':<12} {'survived':>8} {'killed here':>12} {'hung':>6} {'unchecked':>10} {'exempt':>7}"]
     lines.append("-" * len(lines[0]))
     for label, payload in rows:
         if "unreadable" in payload:
@@ -514,15 +524,15 @@ def emit(rendered, summary, heading):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", default="local", help="the shard being confirmed")
-    parser.add_argument("--aggregate", default=None,
-                        help="a directory of downloaded per-shard reports; union mode")
-    parser.add_argument("--expect-every-shard", action="store_true",
-                        help="in union mode, fail unless every shard reported")
+    parser.add_argument("--aggregate", default=None, help="a directory of downloaded per-shard reports; union mode")
+    parser.add_argument(
+        "--expect-every-shard", action="store_true", help="in union mode, fail unless every shard reported"
+    )
     parser.add_argument("--summary", default=None, help="append the table here")
-    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
-                        help="seconds one confirmation may take")
-    parser.add_argument("--names", nargs="*", default=None,
-                        help="confirm these mutants instead of the survivors on disk")
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="seconds one confirmation may take")
+    parser.add_argument(
+        "--names", nargs="*", default=None, help="confirm these mutants instead of the survivors on disk"
+    )
     options = parser.parse_args(argv)
 
     if options.aggregate:
@@ -531,11 +541,13 @@ def main(argv=None):
         if options.expect_every_shard:
             absent = sorted(expected_shards() - {label for label, _ in rows})
             if absent:
-                problems.append("no phase-two report from shard(s): " + ", ".join(absent)
-                                + " -- the union is incomplete, so it cannot be a pass")
+                problems.append(
+                    "no phase-two report from shard(s): "
+                    + ", ".join(absent)
+                    + " -- the union is incomplete, so it cannot be a pass"
+                )
         emit(render(rows) if rows else "(no reports)", options.summary, "Mutation — survivors")
-        alive = sum(len(payload.get("confirmed", [])) + len(payload.get("hung", []))
-                    for _, payload in rows)
+        alive = sum(len(payload.get("confirmed", [])) + len(payload.get("hung", [])) for _, payload in rows)
         unreadable = [label for label, payload in rows if "unreadable" in payload]
         if unreadable:
             problems.append("unreadable report(s) from: " + ", ".join(unreadable))
@@ -543,9 +555,11 @@ def main(argv=None):
             print("\n" + "\n".join(problems))
             return 1
         if alive:
-            print(f"\n{alive} mutant(s) survive the whole suite. Either add a test that kills "
-                  "one,\nor -- if it is genuinely equivalent -- put `# pragma: no mutate` on the "
-                  "line\nwith a comment saying why.")
+            print(
+                f"\n{alive} mutant(s) survive the whole suite. Either add a test that kills "
+                "one,\nor -- if it is genuinely equivalent -- put `# pragma: no mutate` on the "
+                "line\nwith a comment saying why."
+            )
             return 1
         print("\nno surviving mutants")
         return 0
@@ -560,9 +574,11 @@ def main(argv=None):
     # mutation step was skipped, mutants/ did not exist, and this reported a
     # clean shard. The same green-out-of-nothing this file exists to prevent.
     if not total:
-        print(f"{options.label}: no mutants found under mutants/ at all. `mutmut run` did not "
-              "get as far as\ngenerating them, so there is nothing here to confirm and nothing "
-              "to pass.")
+        print(
+            f"{options.label}: no mutants found under mutants/ at all. `mutmut run` did not "
+            "get as far as\ngenerating them, so there is nothing here to confirm and nothing "
+            "to pass."
+        )
         return 1
     # Read through the module attribute rather than the default, which binds
     # at definition time and cannot be pointed elsewhere.
@@ -590,17 +606,20 @@ def main(argv=None):
         if not baseline_is_clean(run=runner):
             return 1
     outcome = confirm(names, run=runner)
-    payload = write_report(REPORT, options.label, outcome.confirmed, outcome.killed,
-                           outcome.hung, unchecked, exempt)
+    payload = write_report(REPORT, options.label, outcome.confirmed, outcome.killed, outcome.hung, unchecked, exempt)
     write_cache(outcome.verdicts)
     if outcome.reused:
-        print(f"{len(outcome.reused)} of {len(names)} verdict(s) came from the cache, "
-              "each still pinned to the test that produced it")
+        print(
+            f"{len(outcome.reused)} of {len(names)} verdict(s) came from the cache, "
+            "each still pinned to the test that produced it"
+        )
     emit(render([(options.label, payload)]), options.summary, f"Mutation — {options.label}")
 
     if unchecked:
-        print(f"\n{len(unchecked)} mutant(s) have no phase-one verdict at all -- `mutmut run` "
-              "did not\nfinish. Nothing here can be trusted until it does.")
+        print(
+            f"\n{len(unchecked)} mutant(s) have no phase-one verdict at all -- `mutmut run` "
+            "did not\nfinish. Nothing here can be trusted until it does."
+        )
         return 1
     if outcome.confirmed or outcome.hung:
         return 1

@@ -64,6 +64,7 @@ def load_benchmark():
 
 def _version():
     from importlib.metadata import PackageNotFoundError, version
+
     try:
         # pragma: no mutate on the next line -- importlib.metadata normalises
         # distribution names per PEP 503, so "DJANGO-OVERLAY" resolves to this
@@ -103,14 +104,17 @@ def main(argv=None):
         import click
 
         try:
-            return benchmark(
-                args=rest,
-                # Otherwise click names itself after argv[0] and its usage line
-                # reads `django-overlay [OPTIONS]`, which is not a command
-                # anyone can type.
-                prog_name="django-overlay benchmark",
-                standalone_mode=_CLICK_STANDALONE_MODE,
-            ) or 0
+            return (
+                benchmark(
+                    args=rest,
+                    # Otherwise click names itself after argv[0] and its usage line
+                    # reads `django-overlay [OPTIONS]`, which is not a command
+                    # anyone can type.
+                    prog_name="django-overlay benchmark",
+                    standalone_mode=_CLICK_STANDALONE_MODE,
+                )
+                or 0
+            )
         except click.ClickException as error:
             error.show()
             return error.exit_code

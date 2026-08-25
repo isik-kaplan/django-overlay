@@ -225,14 +225,18 @@ def test_the_boot_failure_message_is_assembled_exactly():
     from django_overlay import apps as overlay_apps
     from django_overlay import checks as overlay_checks
 
-    with mock.patch.object(overlay_checks, "check_no_plain_fk_to_overlay_models",
-                           return_value=[Error("first thing", hint="do this", id="django_overlay.E001")]), \
-         mock.patch.object(overlay_checks, "check_overlay_uniqueness",
-                           return_value=[Error("second thing", id="django_overlay.E003")]):
+    with (
+        mock.patch.object(
+            overlay_checks,
+            "check_no_plain_fk_to_overlay_models",
+            return_value=[Error("first thing", hint="do this", id="django_overlay.E001")],
+        ),
+        mock.patch.object(
+            overlay_checks, "check_overlay_uniqueness", return_value=[Error("second thing", id="django_overlay.E003")]
+        ),
+    ):
         with pytest.raises(ImproperlyConfigured) as raised:
-            overlay_apps.DjangoOverlayConfig.ready(
-                apps.get_app_config("django_overlay")
-            )
+            overlay_apps.DjangoOverlayConfig.ready(apps.get_app_config("django_overlay"))
 
     assert str(raised.value) == (
         "django_overlay found misconfigured overlay models:\n"

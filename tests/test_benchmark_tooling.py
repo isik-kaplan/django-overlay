@@ -29,15 +29,23 @@ from benchmark.cli import parse_duration
 # ------------------------------------------------------------- durations
 
 
-@pytest.mark.parametrize(("text", "seconds"), [
-    ("1h", 3600), ("45m", 2700), ("600s", 600), ("600", 600), ("1.5h", 5400),
-])
+@pytest.mark.parametrize(
+    ("text", "seconds"),
+    [
+        ("1h", 3600),
+        ("45m", 2700),
+        ("600s", 600),
+        ("600", 600),
+        ("1.5h", 5400),
+    ],
+)
 def test_durations_are_read_the_way_they_are_written(text, seconds):
     assert parse_duration(text) == seconds
 
 
 def test_an_unreadable_duration_is_rejected():
     from click import BadParameter
+
     with pytest.raises(BadParameter):
         parse_duration("soon")
 
@@ -77,9 +85,7 @@ def test_a_move_past_the_noise_floor_is_shown_with_its_direction():
 def test_crossing_the_cap_is_described_rather_than_quantified():
     assert results._delta_text(cell(30_000, capped=True), harness.Cell(400)) == "(was capped)"
     assert results._delta_text(cell(400), harness.Cell(30_000, capped=True)) == "(now capped)"
-    assert results._delta_text(
-        cell(30_000, capped=True), harness.Cell(30_000, capped=True)
-    ) == ""
+    assert results._delta_text(cell(30_000, capped=True), harness.Cell(30_000, capped=True)) == ""
 
 
 def test_deltas_are_only_offered_for_rows_the_baseline_also_has():
@@ -88,13 +94,17 @@ def test_deltas_are_only_offered_for_rows_the_baseline_also_has():
     section.add("existing", {"overlay": harness.Cell(200)})
     section.add("brand new", {"overlay": harness.Cell(200)})
     baseline = {
-        "suites": [{
-            "name": "demo",
-            "sections": [{
-                "title": "S",
-                "rows": [{"label": "existing", "cells": {"overlay": cell(100)}}],
-            }],
-        }],
+        "suites": [
+            {
+                "name": "demo",
+                "sections": [
+                    {
+                        "title": "S",
+                        "rows": [{"label": "existing", "cells": {"overlay": cell(100)}}],
+                    }
+                ],
+            }
+        ],
     }
     deltas = results.deltas_for(baseline, "demo", section)
     assert deltas == {("existing", "overlay"): "(+100%)"}
@@ -105,21 +115,29 @@ def test_deltas_are_only_offered_for_rows_the_baseline_also_has():
 
 def an_environment(**overrides):
     base = {
-        "postgres_major": "17", "work_mem": "4MB", "shared_buffers": "128MB",
-        "max_parallel_workers_per_gather": "2", "scale": 1.0, "share": 0.4,
-        "cap_ms": 30_000, "cores": 14,
+        "postgres_major": "17",
+        "work_mem": "4MB",
+        "shared_buffers": "128MB",
+        "max_parallel_workers_per_gather": "2",
+        "scale": 1.0,
+        "share": 0.4,
+        "cap_ms": 30_000,
+        "cores": 14,
     }
     return base | overrides
 
 
-@pytest.mark.parametrize("difference", [
-    {"postgres_major": "16"},
-    {"work_mem": "16MB"},
-    {"shared_buffers": "1GB"},
-    {"scale": 0.3},
-    {"cap_ms": 10_000},
-    {"cores": 2},
-])
+@pytest.mark.parametrize(
+    "difference",
+    [
+        {"postgres_major": "16"},
+        {"work_mem": "16MB"},
+        {"shared_buffers": "1GB"},
+        {"scale": 0.3},
+        {"cap_ms": 10_000},
+        {"cores": 2},
+    ],
+)
 def test_runs_from_different_machines_are_not_comparable(difference):
     assert not environment.comparable(an_environment(), an_environment(**difference))
 
@@ -162,6 +180,7 @@ def test_the_curves_differ_enough_per_suite_to_need_measuring_separately():
     the larger size, and aggregation's already read the whole table at both.
     Any single rule fitted to one of them is badly wrong about the other.
     """
+
     def growth(name):
         return estimates.for_suite(name, 1.0) / estimates.for_suite(name, 0.05)
 
@@ -224,9 +243,7 @@ def test_no_gain_is_claimed_against_a_skipped_cell():
 
 def test_no_delta_is_offered_against_a_skipped_cell():
     assert results._delta_text(cell(100), harness.Cell(0.0, note="skipped")) == ""
-    assert results._delta_text(
-        {"ms": 0.0, "capped": False, "note": "skipped"}, harness.Cell(100)
-    ) == ""
+    assert results._delta_text({"ms": 0.0, "capped": False, "note": "skipped"}, harness.Cell(100)) == ""
 
 
 def test_a_context_past_its_deadline_skips_instead_of_measuring():
@@ -236,8 +253,7 @@ def test_a_context_past_its_deadline_skips_instead_of_measuring():
     from benchmark.suites import Context
 
     ran = []
-    ctx = Context(scale=1.0, passes=1, cap_ms=10_000,
-                  deadline=time.monotonic() - 1)
+    ctx = Context(scale=1.0, passes=1, cap_ms=10_000, deadline=time.monotonic() - 1)
     measured, value = ctx.measure(lambda: ran.append(1))
     assert ran == [], "the build should not have been called at all"
     assert measured.note == "skipped"
@@ -249,8 +265,7 @@ def test_a_context_inside_its_deadline_measures_normally():
 
     from benchmark.suites import Context
 
-    ctx = Context(scale=1.0, passes=1, cap_ms=10_000,
-                  deadline=time.monotonic() + 60)
+    ctx = Context(scale=1.0, passes=1, cap_ms=10_000, deadline=time.monotonic() + 60)
     measured, value = ctx.measure(lambda: 42, rounds=1)
     assert measured.measured
     assert value == 42
@@ -279,9 +294,7 @@ def test_a_measurement_that_overruns_its_ceiling_is_abandoned():
             pass
 
     started = time.monotonic()
-    measured, value = harness.measure(
-        never_returns, 10_000, rounds=1, abandon_after_s=0.2
-    )
+    measured, value = harness.measure(never_returns, 10_000, rounds=1, abandon_after_s=0.2)
     assert measured.note == "gave up"
     assert value is None
     assert time.monotonic() - started < 5, "the ceiling did not interrupt anything"
@@ -298,9 +311,7 @@ def test_an_abandoned_cell_is_not_a_capped_one():
 def test_the_ceiling_is_lifted_once_the_measurement_finishes():
     """A timer left armed would fire in the middle of the next measurement."""
     harness.measure(lambda: 1, 10_000, rounds=1, abandon_after_s=0.3)
-    slow_but_fine = harness.measure(
-        lambda: time.sleep(0.5), 10_000, rounds=1, abandon_after_s=5
-    )
+    slow_but_fine = harness.measure(lambda: time.sleep(0.5), 10_000, rounds=1, abandon_after_s=5)
     assert slow_but_fine[0].measured
 
 
@@ -317,8 +328,7 @@ def test_the_ceiling_never_outlasts_the_run_budget():
     roomy = Context(scale=1.0, passes=1, cap_ms=10_000, deadline=time.monotonic() + 3600)
     assert roomy.measurement_ceiling() == 60.0
 
-    nearly_done = Context(scale=1.0, passes=1, cap_ms=10_000,
-                          deadline=time.monotonic() + 5)
+    nearly_done = Context(scale=1.0, passes=1, cap_ms=10_000, deadline=time.monotonic() + 5)
     assert nearly_done.measurement_ceiling() <= 5
 
     unbounded = Context(scale=1.0, passes=1, cap_ms=10_000)
@@ -499,7 +509,8 @@ def _tri_state_flags():
     from benchmark.cli import benchmark as command
 
     return {
-        parameter.name: parameter for parameter in command.params
+        parameter.name: parameter
+        for parameter in command.params
         if getattr(parameter, "is_bool_flag", False) and parameter.default is None
     }
 
@@ -516,9 +527,7 @@ def test_each_flag_is_spelled_the_way_the_table_spells_it():
         parameter = flags[switches.option_name(switch)]
         assert f"--{switch.flag}" in parameter.opts
         assert f"--no-{switch.flag}" in parameter.secondary_opts
-        assert parameter.help == switch.help, (
-            f"{switch.flag} explains itself differently in the CLI and the table"
-        )
+        assert parameter.help == switch.help, f"{switch.flag} explains itself differently in the CLI and the table"
 
 
 def test_an_unset_switch_reads_as_on():
@@ -546,15 +555,11 @@ def test_a_bool_is_returned_not_the_string_that_carried_it():
 
 
 def test_nothing_given_leaves_every_switch_on():
-    assert switches.resolve({}) == {
-        switches.option_name(s): True for s in switches.SWITCHES
-    }
+    assert switches.resolve({}) == {switches.option_name(s): True for s in switches.SWITCHES}
 
 
 def test_no_optimisations_turns_all_four_off():
-    assert switches.resolve({}, all_off=True) == {
-        switches.option_name(s): False for s in switches.SWITCHES
-    }
+    assert switches.resolve({}, all_off=True) == {switches.option_name(s): False for s in switches.SWITCHES}
 
 
 def test_one_switch_can_be_lifted_back_out_of_no_optimisations():
@@ -586,14 +591,13 @@ def test_applying_writes_the_names_settings_reads():
 def test_the_off_switches_are_named_the_way_they_were_typed():
     """`force-hash-joins`, not `force_hash_joins`. It goes into a message
     telling somebody which flag produced the numbers they are looking at."""
-    assert switches.describe({"force_hash_joins": False, "rewrite_traversals": True}) == [
-        "force-hash-joins"
-    ]
+    assert switches.describe({"force_hash_joins": False, "rewrite_traversals": True}) == ["force-hash-joins"]
 
 
 def test_the_record_is_read_from_settings_not_from_the_environment():
     """What the library obeyed, not what the CLI asked for. The gap between
     those two is exactly the plumbing bug worth catching."""
+
     class Settings:
         DJANGO_OVERLAY_FORCE_HASH_JOINS = False
 
@@ -617,12 +621,12 @@ def test_two_arms_of_the_same_run_are_still_comparable():
 def test_a_switch_difference_is_named_in_the_note():
     """A +21950% column from a flag looks exactly like one from a regression."""
     baseline = {
-        "label": "all-on", "saved_at": "now",
+        "label": "all-on",
+        "saved_at": "now",
         "environment": an_environment(switches={"rewrite_traversals": True}),
     }
-    note = results.comparison_note(
-        baseline, an_environment(switches={"rewrite_traversals": False}))
-    assert note.startswith("delta column")   # the runner tests this prefix
+    note = results.comparison_note(baseline, an_environment(switches={"rewrite_traversals": False}))
+    assert note.startswith("delta column")  # the runner tests this prefix
     # Named the way it was typed, matching the summary line.
     assert "rewrite-traversals on -> off" in note
     assert "not a code change" in note
@@ -630,24 +634,24 @@ def test_a_switch_difference_is_named_in_the_note():
 
 def test_matching_arms_add_nothing_to_the_note():
     baseline = {
-        "label": "all-on", "saved_at": "now",
+        "label": "all-on",
+        "saved_at": "now",
         "environment": an_environment(switches={"rewrite_traversals": True}),
     }
-    note = results.comparison_note(
-        baseline, an_environment(switches={"rewrite_traversals": True}))
+    note = results.comparison_note(baseline, an_environment(switches={"rewrite_traversals": True}))
     assert "optimisation change" not in note
 
 
 def test_a_run_saved_before_switches_existed_reads_as_all_on():
     """Absent means on everywhere else; a saved run with no switches key must
     not report four differences against a fresh all-on run."""
-    assert environment.switch_differences(
-        an_environment(), an_environment(switches=switches.resolve({}))) == []
+    assert environment.switch_differences(an_environment(), an_environment(switches=switches.resolve({}))) == []
 
 
 def test_the_summary_line_says_which_optimisations_were_off():
     env = an_environment(
-        postgres_version="17.2", passes=2,
+        postgres_version="17.2",
+        passes=2,
         switches={"force_hash_joins": False, "rewrite_traversals": True},
     )
     line = environment.summarise(env)
@@ -655,8 +659,7 @@ def test_the_summary_line_says_which_optimisations_were_off():
 
 
 def test_the_summary_line_stays_quiet_when_nothing_is_off():
-    env = an_environment(postgres_version="17.2", passes=2,
-                         switches=switches.resolve({}))
+    env = an_environment(postgres_version="17.2", passes=2, switches=switches.resolve({}))
     assert "OFF" not in environment.summarise(env)
 
 
@@ -678,8 +681,7 @@ def test_both_arms_of_an_ab_get_different_default_labels():
 def test_a_single_switch_off_is_named_in_the_label():
     from benchmark.cli import _default_label
 
-    label = _default_label(
-        {"git_sha": "abc1234", "switches": switches.resolve({"force_hash_joins": False})})
+    label = _default_label({"git_sha": "abc1234", "switches": switches.resolve({"force_hash_joins": False})})
     assert label == "abc1234-no-force-hash-joins"
 
 
@@ -730,7 +732,11 @@ def what_the_library_saw(*flags, want_settings_module=False):
     root = pathlib.Path(__file__).resolve().parent.parent
     finished = subprocess.run(
         [sys.executable, "-c", PROBE, *flags],
-        cwd=root, capture_output=True, text=True, timeout=180, check=False,
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
     )
     assert finished.returncode == 0, finished.stdout + finished.stderr
     lines = finished.stdout.splitlines()
@@ -742,24 +748,31 @@ def what_the_library_saw(*flags, want_settings_module=False):
 
 def test_by_default_the_library_has_every_optimisation_on():
     assert what_the_library_saw() == {
-        "rewrite_traversals": True, "redirect_select_related": True,
-        "force_hash_joins": True, "array_subquery_in": True,
+        "rewrite_traversals": True,
+        "redirect_select_related": True,
+        "force_hash_joins": True,
+        "array_subquery_in": True,
     }
 
 
 def test_no_optimisations_reaches_all_four_gates_in_the_library():
     assert what_the_library_saw("--no-optimisations") == {
-        "rewrite_traversals": False, "redirect_select_related": False,
-        "force_hash_joins": False, "array_subquery_in": False,
+        "rewrite_traversals": False,
+        "redirect_select_related": False,
+        "force_hash_joins": False,
+        "array_subquery_in": False,
     }
 
 
-@pytest.mark.parametrize("flag", [
-    "--no-rewrite-traversals",
-    "--no-redirect-select-related",
-    "--no-force-hash-joins",
-    "--no-array-subquery-in",
-])
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--no-rewrite-traversals",
+        "--no-redirect-select-related",
+        "--no-force-hash-joins",
+        "--no-array-subquery-in",
+    ],
+)
 def test_each_flag_turns_off_its_own_gate_and_no_other(flag):
     """One flag reaching the wrong setting is the mistake a table of names
     invites, and it produces a plausible number rather than a failure."""
@@ -838,10 +851,16 @@ def test_a_run_saved_before_the_count_existed_is_treated_as_clean(tmp_path, monk
     usable -- otherwise adding this guard would silently discard every existing
     baseline on disk."""
     monkeypatch.setattr(results, "DIRECTORY", tmp_path)
-    (tmp_path / "old.json").write_text(json.dumps({
-        "label": "old", "saved_at": "2026-01-01",
-        "environment": an_environment(), "suites": [],
-    }))
+    (tmp_path / "old.json").write_text(
+        json.dumps(
+            {
+                "label": "old",
+                "saved_at": "2026-01-01",
+                "environment": an_environment(),
+                "suites": [],
+            }
+        )
+    )
 
     assert results.latest()["label"] == "old"
 
@@ -855,16 +874,26 @@ def test_the_lost_note_is_one_string_in_one_place():
 
 def a_saved_shape(*notes):
     """A run in the shape section_to_data produces, one cell per note."""
-    return [{
-        "name": "s", "sections": [{
-            "title": "t", "columns": ["overlay"], "note": "",
-            "rows": [
-                {"label": f"row{index}", "cells": {"overlay": {
-                    "ms": 0.0, "capped": False, "note": note}}, "extras": {}}
-                for index, note in enumerate(notes)
+    return [
+        {
+            "name": "s",
+            "sections": [
+                {
+                    "title": "t",
+                    "columns": ["overlay"],
+                    "note": "",
+                    "rows": [
+                        {
+                            "label": f"row{index}",
+                            "cells": {"overlay": {"ms": 0.0, "capped": False, "note": note}},
+                            "extras": {},
+                        }
+                        for index, note in enumerate(notes)
+                    ],
+                }
             ],
-        }],
-    }]
+        }
+    ]
 
 
 def test_unmeasured_cells_are_counted_and_measured_ones_are_not():
@@ -883,7 +912,9 @@ def test_the_count_matches_what_a_real_section_serialises_to():
     """Counted off section_to_data's output, so the two cannot drift: the keys
     here are the keys it writes, not the keys this test hopes it writes."""
     section = harness.Section(
-        title="t", columns=["overlay"], note="",
+        title="t",
+        columns=["overlay"],
+        note="",
         rows=[harness.Row(label="r", cells={"overlay": harness.Cell(0.0, note=harness.LOST_NOTE)})],
     )
     run = [{"name": "s", "sections": [harness.section_to_data(section)]}]

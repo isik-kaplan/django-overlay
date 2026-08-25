@@ -64,10 +64,7 @@ SCORE_BUCKETS = {
     "score_600_799": Q(score__gte=600, score__lt=800),
     "score_800_plus": Q(score__gte=800),
 }
-STATUS_BUCKETS = {
-    f"status_{status}": Q(status=status)
-    for status in ("active", "lapsed", "pending", "closed")
-}
+STATUS_BUCKETS = {f"status_{status}": Q(status=status) for status in ("active", "lapsed", "pending", "closed")}
 DECADE_BUCKETS = {
     f"born_{decade}s": Q(born_on__gte=date(decade, 1, 1), born_on__lt=date(decade + 10, 1, 1))
     for decade in (1950, 1960, 1970, 1980, 1990, 2000, 2010)
@@ -206,20 +203,18 @@ def _which_form_compiles_to_an_array(models):
     `overlay_fenced_in` is unreachable there.
     """
     section = harness.Section(
-        "Which scoping form compiles to `= ANY (ARRAY(...))`?", ("form", "compiles to"),
+        "Which scoping form compiles to `= ANY (ARRAY(...))`?",
+        ("form", "compiles to"),
     )
     for model in models:
         for lookup in ("in", "overlay_fenced_in"):
             inner = model.objects.filter(city="city42").values("pk")
             try:
-                statement, _ = model.objects.filter(
-                    **{f"pk__{lookup}": inner}
-                ).query.sql_with_params()
+                statement, _ = model.objects.filter(**{f"pk__{lookup}": inner}).query.sql_with_params()
             except FieldError as error:
                 verdict = f"unreachable ({type(error).__name__})"
             else:
-                verdict = ("ARRAY initplan" if "= ANY (ARRAY" in statement
-                           else "plain IN semi-join")
+                verdict = "ARRAY initplan" if "= ANY (ARRAY" in statement else "plain IN semi-join"
             section.add(model.__name__, form=f"pk__{lookup}", **{"compiles to": verdict})
     return section
 
@@ -242,13 +237,11 @@ def run(ctx):
         agreed = {}
         for shape_label, shape in SHAPES:
             overlay_only = shape_label in OVERLAY_ONLY
-            overlay, overlay_result = ctx.measure(
-                lambda f=shape, s=scope: f(BenchPerson, s), rounds=2)
+            overlay, overlay_result = ctx.measure(lambda f=shape, s=scope: f(BenchPerson, s), rounds=2)
             if overlay_only:
                 plain, plain_result = None, None
             else:
-                plain, plain_result = ctx.measure(
-                    lambda f=shape, s=scope: f(PlainPerson, s), rounds=2)
+                plain, plain_result = ctx.measure(lambda f=shape, s=scope: f(PlainPerson, s), rounds=2)
 
             notes = []
             sides = [("overlay", overlay_result)]
@@ -279,7 +272,8 @@ def run(ctx):
                     ratio = f"x{overlay.ms / plain.ms:.1f}"
 
             section.add(
-                shape_label, cells,
+                shape_label,
+                cells,
                 plain="-" if overlay_only else None,
                 ratio="-" if overlay_only else ratio,
                 people="" if reference is None else f"{reference['total']:,}",
