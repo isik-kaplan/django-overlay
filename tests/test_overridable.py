@@ -19,12 +19,11 @@ failure mode available here — hence a hard error rather than a warning.
 """
 
 import pytest
-
-from django_overlay.sources import SourceTable
 from django.db import NotSupportedError, connection, transaction
 from django.db.models import Q
 
 from django_overlay.exceptions import OverlayConfigurationError
+from django_overlay.sources import SourceTable
 from django_overlay.sql import anti_join_kind
 from tests.testapp.models import AuditEntry, Member, Person, Roster, RosterMembership
 from tests.testapp_shared.models import (

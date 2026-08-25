@@ -10,9 +10,9 @@ from django.db import IntegrityError, connection, models, transaction
 from django.test.utils import isolate_apps
 
 from django_overlay import checks
-from django_overlay.sources import SourceTable
 from django_overlay.fields import OverlayForeignKey
 from django_overlay.models import OverlayMeta, OverlayModel
+from django_overlay.sources import SourceTable
 from django_overlay.strategies import Strategy
 from tests.testapp.models import Person, PersonNote, Vendor, VendorThing
 from tests.testapp_shared.models import PersonSource
