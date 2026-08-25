@@ -180,17 +180,21 @@ survivor is always worth reading — and each one's `old` string must match the
 source exactly once, so a refactor that moves the code reports STALE rather
 than silently testing nothing.
 
-In CI it is one job per region, for the same reason the mutation run is one job
-per subsystem: it is a serial loop paying a suite pass per mutation, and as a
-single job it was the longest thing in the mutation workflow — 660s to 905s
-across four runs, ahead of every mutation shard. Measured serially and locally
-the regions cost: metaclass 196s, sql 163s, uniqueness 41s, operations 32s,
-sources 3s. Note that `sql` has the most mutations (17 of 43) and is not the
-dearest, because `-x` means a killed mutation only costs as much as the suite
-needs to reach the test that objects. The region list in
-`.github/workflows/mutation.yml` is asserted against the probe in both
-directions by `tests/test_mutation_shards.py`, so a new region cannot end up
-running in no job.
+In CI it is a single job. It was one job per region for a while, because it
+was the longest thing in the mutation workflow — 660s to 905s across four
+runs, ahead of every mutation shard. It is not any more: six of its entries
+turned out to be mutations mutmut could already make, and deleting those took
+the whole probe to 650s, against `mutate (models)` at 924s warm and 3353s
+cold. A job that is never the critical path buys nothing by being split, and
+this one has no cache to warm, so 650s is what it costs every run.
+
+Measured serially and locally the regions cost: sql 163s, uniqueness 41s,
+operations 32s, metaclass ~30s, sources 3s. Note that `sql` has the most
+mutations (17 of 37) and that this is not why it is dearest — `-x` means a
+killed mutation costs only as much as the suite needs to reach the test that
+objects, so a region caught late is dearer per mutation than one caught early.
+Split it again if it ever approaches `mutate`'s longest shard; `main()` still
+takes region names on argv.
 
 A mutation that provably *cannot* be killed is marked `"equivalent"` in the
 list with a comment saying why, and the harness then asserts it survives — so

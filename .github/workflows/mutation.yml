@@ -68,37 +68,23 @@ jobs:
   # refactor that moves the code reports STALE instead of quietly testing
   # nothing.
   #
-  # Sharded by region, for the same reason `mutate` is sharded by subsystem:
-  # the probe is a serial loop that runs the whole suite once per mutation, and
-  # as one job it was the longest thing in this workflow -- 660s, 758s, 804s
-  # and 905s on four consecutive runs, ahead of every mutation shard, including
-  # the 633s `models`. The critical path had quietly moved here after
-  # django_overlay/models/ was split.
+  # One job, not a matrix over regions. It was sharded five ways when it was
+  # the longest thing in this workflow at 796s, and it is not any more: six of
+  # its entries turned out to be mutations mutmut could already make, and
+  # deleting them took the whole probe to 650s -- less than `mutate (models)`
+  # at 924s warm, and a fifth of it at 3353s cold. A job that is never the
+  # critical path buys nothing by being split, and this one has no cache to
+  # warm, so 650s is simply what it costs every time.
   #
-  # Five regions cut that to the longest one. Measured serially, locally:
-  # metaclass 196s, sql 163s, uniqueness 41s, operations 32s, sources 3s, for
-  # 435s in total. Note which is longest -- `sql` has the most mutations (17 of
-  # 43) and `metaclass` (13) still takes longer, because the cost is a suite
-  # pass per mutation and `-x` makes a kill cost only as much as the suite
-  # needs to reach the test that objects. So the region list should not be
-  # rebalanced by counting mutations; it is subjects, like the shard map.
+  # Sharding it again is the right move if it ever approaches `mutate`'s
+  # longest shard. main() still takes region names on argv for that, and for
+  # running one region by hand:
   #
-  # The list must match the regions in tests/probe_unreachable_mutants.py;
-  # tests/test_mutation_shards.py asserts it does, in both directions, in the
-  # ordinary test run. Without that a region added to MUTANTS would run in no
-  # job and still report nothing wrong -- the same silent hole the shard map
-  # is guarded against.
+  #     python tests/probe_unreachable_mutants.py sql operations
   unreachable:
     needs: gate
     if: needs.gate.outputs.maintainer == 'true'
-    strategy:
-      # Every region reports, for the reason the `mutate` matrix says.
-      fail-fast: false
-      matrix:
-        region: [sql, metaclass, operations, uniqueness, sources]
     runs-on: ubuntu-22.04
-    # Unchanged, and now a much looser backstop: it covered all 43 mutations
-    # and now covers at most 17.
     timeout-minutes: 60
 
     services:
@@ -138,7 +124,7 @@ jobs:
         run: uv sync
 
       - name: Mutation-test the code mutmut can't reach
-        run: uv run python tests/probe_unreachable_mutants.py ${{ matrix.region }}
+        run: uv run python tests/probe_unreachable_mutants.py
 
   # One job per subsystem. Each mutates a different slice of django_overlay/
   # and runs the *whole* suite, so a shard's verdicts are what a single job
