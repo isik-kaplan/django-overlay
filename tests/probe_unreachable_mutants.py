@@ -1,14 +1,34 @@
-"""Mutation testing for the code mutmut can't reach.
+"""Mutation testing for the mutations mutmut cannot make.
 
-mutmut forks a pre-warmed parent and only sets MUTANT_UNDER_TEST in the child,
-so anything whose effect happens at *import* time — the metaclass,
-`uniqueness`'s narrowing, every migration operation — has already run against
-the original code by the time a mutant is chosen. Those mutants are reported as
-survived no matter how good the tests are, which makes mutmut's verdict
-worthless there.
+Two different reasons land a mutation here, and they are worth keeping apart
+because only one of them is about reachability.
+
+*It cannot be observed.* mutmut forks a pre-warmed parent and only sets
+MUTANT_UNDER_TEST in the child, so anything whose effect happens at *import*
+time — `uniqueness`'s narrowing, every migration operation, the metaclass as
+seen through a model declared at module scope — has already run against the
+original code by the time a mutant is chosen. mutmut reports those as survived
+no matter how good the tests are.
+
+That half shrinks whenever a test stops asserting on an import-time model and
+declares its own inside the test body instead. Under isolate_apps the metaclass
+runs with the mutant active and the mutation becomes ordinary work for the
+mutation run, so the entry here should be deleted rather than kept. Three were
+retired that way; check before adding a fourth.
+
+*It cannot be generated.* mutmut mutates expressions: it negates a condition,
+replaces an argument with None, drops an argument. It never deletes a
+statement. So `self._copy_matched_rows_to_the_base_table()` -> `pass` has no
+mutmut equivalent, and no amount of rewriting the tests will produce one.
+Verified rather than assumed: of the 26 mutants mutmut generates for _update
+and the 13 for update, none drops that call. Those entries are permanent.
+
+An entry whose mutation mutmut *does* generate is doing nothing, whichever
+reason it was filed under. A killed mutation here costs a full suite pass to
+re-prove what a shard already covers.
 
 This does the same job the crude way: edit the source, run the suite, put it
-back. Slower per mutant, but it reaches everything, and the mutations are
+back. Slower per mutation, but it reaches everything, and the mutations are
 chosen for meaning rather than generated, so a survivor here is always worth
 reading.
 
@@ -186,13 +206,13 @@ MUTANTS = [
         "        if not any(isinstance(v, models.Manager) for v in rest_items.values()):",
         "        if True:",
     ),
-    (
-        "metaclass",
-        "self-referencing updates go back through the view",
-        "django_overlay/models/queryset.py",
-        "        if not any(_reads_own_columns(value, self.model) for value in kwargs.values()):",
-        "        if True:",
-    ),
+    # The two below are here for the second reason in the module docstring, not
+    # the first: nothing about them is import-time. `update` and `_update` run
+    # during the test like any other method, and the tests that catch these call
+    # Person.objects.filter(...).update(...) at runtime. They stay because
+    # deleting a statement is not a mutation mutmut can generate -- checked
+    # against its own output, 0 of 39 mutants across the two functions drop the
+    # call. Do not "fix" these by rewriting a test; there is nothing to reach.
     (
         "metaclass",
         "the base-table update stops materialising matched rows first",
@@ -204,26 +224,12 @@ MUTANTS = [
     ),
     (
         "metaclass",
-        "save() stops routing a self-referencing expression around the view",
-        "django_overlay/models/queryset.py",
-        "        if not any(_reads_own_columns(value, self.model) for _, _, value in values):",
-        "        if True:",
-    ),
-    (
-        "metaclass",
         "save()'s routed path stops materialising matched rows first",
         "django_overlay/models/queryset.py",
         """            self._copy_matched_rows_to_the_base_table()
             matched = base_manager.using(self.db).filter(pk__in=self.values("pk"))""",
         """            pass
             matched = base_manager.using(self.db).filter(pk__in=self.values("pk"))""",
-    ),
-    (
-        "metaclass",
-        "save() reports the row count instead of the values it was asked for",
-        "django_overlay/models/queryset.py",
-        "            if not returning_fields:",
-        "            if True:",
     ),
     # ---- SQL templates: only ever rendered from a migration
     (
