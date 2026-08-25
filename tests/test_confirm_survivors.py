@@ -284,9 +284,12 @@ def test_nothing_to_confirm_costs_no_baseline_pass(run_in, monkeypatch):
 # killing. A cached survivor is never reused at all -- see reusable().
 
 
-def cached(name="a", killed_by="tests/test_x.py::test_y", function_hash="fn", file_hash="fh"):
+def cached(name="a", killed_by="tests/test_x.py::test_y", function_hash="fn", file_hash="fh",
+           root="mutants"):
     return {name: {"killed_by": killed_by, "function_hash": function_hash,
-                   "test_file_hash": file_hash}}
+                   "test_file_hash": file_hash,
+                   "conftest_hash": confirm_survivors.conftest_hash(
+                       killed_by.partition("::")[0], root)}}
 
 
 @pytest.fixture
@@ -318,7 +321,7 @@ def test_a_reused_survivor_still_counts_as_surviving(tmp_path, a_test_file):
 def test_an_unchanged_kill_is_not_re_run(tmp_path, a_test_file):
     ran = []
     outcome = run_and_count(
-        ["a"], cached(file_hash=confirm_survivors.sha(a_test_file)),
+        ["a"], cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path)),
         {"a": "fn"}, tmp_path, ran,
     )
     assert ran == [], "it re-ran a verdict nothing had invalidated"
@@ -327,7 +330,8 @@ def test_an_unchanged_kill_is_not_re_run(tmp_path, a_test_file):
 
 def test_a_kill_is_re_run_when_the_mutated_function_changes(tmp_path, a_test_file):
     ran = []
-    run_and_count(["a"], cached(file_hash=confirm_survivors.sha(a_test_file)),
+    run_and_count(["a"], cached(file_hash=confirm_survivors.sha(a_test_file),
+                                root=str(tmp_path)),
                   {"a": "a different hash"}, tmp_path, ran)
     assert ran == ["a"]
 
@@ -335,7 +339,7 @@ def test_a_kill_is_re_run_when_the_mutated_function_changes(tmp_path, a_test_fil
 def test_a_kill_is_re_run_when_the_test_that_killed_it_changes(tmp_path, a_test_file):
     """Weaken the test and the verdict it produced stops being evidence."""
     ran = []
-    stale = cached(file_hash=confirm_survivors.sha(a_test_file))
+    stale = cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path))
     a_test_file.write_text("def test_y(): assert True  # weakened\n")
     run_and_count(["a"], stale, {"a": "fn"}, tmp_path, ran)
     assert ran == ["a"]
@@ -343,8 +347,57 @@ def test_a_kill_is_re_run_when_the_test_that_killed_it_changes(tmp_path, a_test_
 
 def test_a_kill_is_re_run_when_the_test_that_killed_it_is_deleted(tmp_path, a_test_file):
     ran = []
-    stale = cached(file_hash=confirm_survivors.sha(a_test_file))
+    stale = cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path))
     a_test_file.unlink()
+    run_and_count(["a"], stale, {"a": "fn"}, tmp_path, ran)
+    assert ran == ["a"]
+
+
+def test_a_kill_is_re_run_when_a_conftest_it_loads_changes(tmp_path, a_test_file):
+    """The killing test file can be untouched and the kill still be stale.
+
+    Weaken a fixture the test leans on and it stops failing without a byte of
+    its own file changing -- so the test file alone is not enough of a pin.
+    """
+    ran = []
+    conftest = tmp_path / "tests" / "conftest.py"
+    conftest.write_text("import pytest\n\n@pytest.fixture\ndef row(): return 1\n")
+    stale = cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path))
+    conftest.write_text("import pytest\n\n@pytest.fixture\ndef row(): return 2\n")
+    run_and_count(["a"], stale, {"a": "fn"}, tmp_path, ran)
+    assert ran == ["a"], "a kill outlived a change to the fixtures behind it"
+
+
+def test_a_kill_is_re_run_when_a_conftest_appears(tmp_path, a_test_file):
+    """Adding one is a change too: an absent conftest and a new one differ."""
+    ran = []
+    stale = cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path))
+    (tmp_path / "conftest.py").write_text("collect_ignore = ['tests/test_x.py']\n")
+    run_and_count(["a"], stale, {"a": "fn"}, tmp_path, ran)
+    assert ran == ["a"]
+
+
+def test_a_kill_survives_a_conftest_its_invocation_never_loads(tmp_path, a_test_file):
+    """tests/test_tenants/ runs separately, so its conftest cannot un-kill this.
+
+    The pin follows pytest's own rule -- rootdir down to the test's directory --
+    rather than hashing every conftest in the tree, or the cheap half of phase
+    two would be thrown away by an edit that cannot change its answer.
+    """
+    ran = []
+    entry = cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path))
+    elsewhere = tmp_path / "tests" / "test_tenants" / "conftest.py"
+    elsewhere.parent.mkdir(parents=True, exist_ok=True)
+    elsewhere.write_text("# not on this test's path\n")
+    run_and_count(["a"], entry, {"a": "fn"}, tmp_path, ran)
+    assert ran == [], "an unrelated conftest invalidated a kill"
+
+
+def test_a_kill_with_no_conftest_hash_is_re_checked(tmp_path, a_test_file):
+    """Entries written before the conftests were part of the pin are not evidence."""
+    ran = []
+    stale = cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path))
+    del stale["a"]["conftest_hash"]
     run_and_count(["a"], stale, {"a": "fn"}, tmp_path, ran)
     assert ran == ["a"]
 
@@ -459,7 +512,9 @@ def test_a_reused_verdict_is_saved_too(tmp_path, a_test_file):
     """Otherwise a resumed run drops everything it did not re-run."""
     saved = []
     entry = {"a": {"killed_by": "tests/test_x.py::test_y", "function_hash": "fn",
-                   "test_file_hash": confirm_survivors.sha(a_test_file)}}
+                   "test_file_hash": confirm_survivors.sha(a_test_file),
+                   "conftest_hash": confirm_survivors.conftest_hash(
+                       "tests/test_x.py", str(tmp_path))}}
     confirm_survivors.confirm(
         ["a"], run=lambda name: pytest.fail("should have been reused"),
         say=lambda *_: None, cache=entry, hashes={"a": "fn"}, root=str(tmp_path),

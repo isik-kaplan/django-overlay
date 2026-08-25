@@ -40,7 +40,15 @@ REPORT = Path("mutants/mutmut-confirmed.json")
 # Lives inside mutants/ so the workflow's existing cache carries it between
 # runs, the same way phase one's verdicts travel.
 CACHE = Path("mutants/mutmut-confirmed-cache.json")
-CACHE_VERSION = 1
+# Bump this whenever a change here alters how a verdict is reached or what it is
+# pinned to. Nothing else will: the workflow's cache key covers the mutmut
+# config and the lockfile, and deliberately not this file -- hashing a file that
+# is mostly commentary would discard a whole shard's phase-one tree over an
+# edited docstring, which is the trade mutation_cache_key.py exists to refuse.
+# So the verdicts this file wrote before the change survive the change, and the
+# only thing that can throw them out is this number. Bumping it costs one phase
+# two; not bumping it keeps the wrong verdicts the change was made to stop.
+CACHE_VERSION = 2
 EQUIVALENTS = Path(__file__).resolve().parent.parent / "mutation-equivalents.toml"
 # Long enough that "equivalent" or "n/a" does not pass for an explanation.
 SHORTEST_USEFUL_REASON = 40
@@ -152,6 +160,37 @@ def function_hash_for(mutant_name, hashes):
     return hashes.get(mangled.rpartition(".")[2])
 
 
+def conftest_hash(test_file, root="mutants"):
+    """One hash over the conftests pytest would load for `test_file`.
+
+    A kill is pinned to the test that produced it, and that test's own file is
+    not the whole of what produced it. Change a fixture it depends on and it can
+    stop failing without a byte of it being touched -- and then the cached kill
+    reports a mutant as dead by a test that no longer kills it, which is the
+    false green the rest of this file exists to refuse.
+
+    Scoped to the conftests that actually apply -- the rootdir down to the
+    test's own directory, which is pytest's own rule -- rather than every
+    conftest in the tree. Otherwise an edit to tests/test_tenants/conftest.py
+    would invalidate kills from the main invocation, which never loads it.
+
+    Survivors need no equivalent: suite_hash() already covers every .py under
+    tests/, conftests included.
+    """
+    base = Path(root)
+    directories = [base]
+    for part in Path(test_file).parent.parts:
+        directories.append(directories[-1] / part)
+    digest = hashlib.sha256()
+    for directory in directories:
+        path = directory / "conftest.py"
+        digest.update(str(path.relative_to(base)).encode())
+        # An absent conftest is not the same fact as an empty one, and adding
+        # one is a change that can un-kill a test, so the two must not collide.
+        digest.update(path.read_bytes() if path.is_file() else b"\0absent")
+    return digest.hexdigest()[:16]
+
+
 def suite_hash(root="mutants"):
     """One hash over every test file, which is what a survivor verdict rests on.
 
@@ -184,9 +223,11 @@ def reusable(entry, mutant_name, hashes, root="mutants"):
     depends on what the verdict claimed, and the two are not symmetrical.
 
     A *kill* is "this test objected", so it is pinned to that one test: stored
-    with the node id, reusable while the file holding it is unchanged. Letting
-    it go stale would report a mutant as dead by a test that no longer exists,
-    which is the false green this whole workstream keeps producing.
+    with the node id, reusable while the file holding it and the conftests it
+    loads are unchanged. Letting it go stale would report a mutant as dead by a
+    test that no longer exists, which is the false green this whole workstream
+    keeps producing. The conftests are in the pin because the test file alone
+    was not enough -- a fixture edit could un-kill the test without touching it.
 
     A *survivor* is "nothing objected", which is a claim about the entire
     suite, so the entire suite is what invalidates it. Coarser on purpose --
@@ -203,7 +244,9 @@ def reusable(entry, mutant_name, hashes, root="mutants"):
     if not entry.get("killed_by"):
         return entry.get("suite_hash") == suite_hash(root)
     test_file = entry["killed_by"].partition("::")[0]
-    return entry.get("test_file_hash") == sha(Path(root) / test_file)
+    if entry.get("test_file_hash") != sha(Path(root) / test_file):
+        return False
+    return entry.get("conftest_hash") == conftest_hash(test_file, root)
 
 
 def read_equivalents(path=EQUIVALENTS):
@@ -384,10 +427,12 @@ def confirm(names, run=run_full_suite, say=print, cache=None, hashes=None, root=
             # A kill nobody can attribute is not cached: the whole guarantee is
             # that the verdict outlives only the test that produced it.
             if killed_by:
+                test_file = killed_by.partition("::")[0]
                 verdicts[name] = {
                     "killed_by": killed_by,
                     "function_hash": function_hash_for(name, hashes),
-                    "test_file_hash": sha(Path(root) / killed_by.partition("::")[0]),
+                    "test_file_hash": sha(Path(root) / test_file),
+                    "conftest_hash": conftest_hash(test_file, root),
                 }
         save(verdicts)
     return Outcome(confirmed, killed, hung, reused, verdicts)
