@@ -156,9 +156,7 @@ class OverlayQuerySet(models.QuerySet):
 
     def _filter_origin(self, value):
         return self.filter(
-            models.expressions.RawSQL(
-                f"{self._origin_column()} = %s", (value,), output_field=models.BooleanField()
-            )
+            models.expressions.RawSQL(f"{self._origin_column()} = %s", (value,), output_field=models.BooleanField())
         )
 
     def _shadow_predicate(self):
@@ -219,9 +217,7 @@ class OverlayQuerySet(models.QuerySet):
             # in for outlives the select_related() it replaced.
             clone = super().select_related(None)
             clone._prefetch_related_lookups = tuple(
-                lookup
-                for lookup in clone._prefetch_related_lookups
-                if lookup not in self._overlay_redirected
+                lookup for lookup in clone._prefetch_related_lookups if lookup not in self._overlay_redirected
             )
             clone._overlay_redirected = ()
             return clone
@@ -275,8 +271,7 @@ class OverlayQuerySet(models.QuerySet):
         if self._overlay_redirected and chunk_size is None:
             self._refuse_after_redirect(
                 "iterator() without chunk_size",
-                "Pass a chunk_size, or drop the select_related() and let the prefetch happen "
-                "on the whole queryset.",
+                "Pass a chunk_size, or drop the select_related() and let the prefetch happen on the whole queryset.",
             )
         return super().iterator(chunk_size=chunk_size)
 
@@ -286,9 +281,7 @@ class OverlayQuerySet(models.QuerySet):
         clone = super()._values(*fields, **expressions)
         if self._overlay_redirected:
             clone._prefetch_related_lookups = tuple(
-                lookup
-                for lookup in clone._prefetch_related_lookups
-                if lookup not in self._overlay_redirected
+                lookup for lookup in clone._prefetch_related_lookups if lookup not in self._overlay_redirected
             )
             clone._overlay_redirected = ()
         return clone

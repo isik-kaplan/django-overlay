@@ -105,10 +105,8 @@ def test_narrow_m2m_stall():
         overlay_ms, overlay_people = timed(lambda s=scope: resolve(BenchPerson, s))
         plain_ms, plain_people = timed(lambda s=scope: resolve(PlainPerson, s))
         truth[label] = (overlay_people, plain_people)
-        overlay_cell = f"{'>' + str(CAP_MS // 1000) + 's':>10}" if overlay_people is None \
-            else f"{overlay_ms:>8.0f}ms"
-        print(f"  {label:<32} {'yes' if fenced else 'NO':>7} {rows:>12,} {node:<22} "
-              f"{overlay_cell} {plain_ms:>7.0f}ms")
+        overlay_cell = f"{'>' + str(CAP_MS // 1000) + 's':>10}" if overlay_people is None else f"{overlay_ms:>8.0f}ms"
+        print(f"  {label:<32} {'yes' if fenced else 'NO':>7} {rows:>12,} {node:<22} {overlay_cell} {plain_ms:>7.0f}ms")
 
     print("\n" + "=" * 108)
     print("HOW MANY ROWS ARE REALLY THERE (plain table, ground truth)")

@@ -70,10 +70,10 @@ def summarise(model, scope):
 def run(ctx):
     from tests.testapp.models import BenchPerson, PlainPerson
 
-    for operation_label, operation in (("Resolve the matching ids", resolve),
-                                       ("Summarise over that scope", summarise)):
+    for operation_label, operation in (("Resolve the matching ids", resolve), ("Summarise over that scope", summarise)):
         section = harness.Section(
-            f"{operation_label} (each ANDed with phones__kind='mobile')", COLUMNS,
+            f"{operation_label} (each ANDed with phones__kind='mobile')",
+            COLUMNS,
             note="a capped cell missed the bar; it is not a broken measurement",
         )
 
@@ -84,18 +84,21 @@ def run(ctx):
         for label, condition in SELECTIVITIES:
             scope = condition | PHONES
             if overlay_capped:
-                plain, plain_people = ctx.measure(
-                    lambda s=scope, op=operation: op(PlainPerson, s), rounds=2)
-                section.add(label, {"plain": plain}, overlay="not run", ratio="",
-                            people=f"skipped: broader than the first cap "
-                                   f"({plain_people:,} plain)" if plain_people else "skipped")
+                plain, plain_people = ctx.measure(lambda s=scope, op=operation: op(PlainPerson, s), rounds=2)
+                section.add(
+                    label,
+                    {"plain": plain},
+                    overlay="not run",
+                    ratio="",
+                    people=f"skipped: broader than the first cap ({plain_people:,} plain)"
+                    if plain_people
+                    else "skipped",
+                )
                 continue
 
-            overlay, people = ctx.measure(
-                lambda s=scope, op=operation: op(BenchPerson, s), rounds=2)
+            overlay, people = ctx.measure(lambda s=scope, op=operation: op(BenchPerson, s), rounds=2)
             overlay_capped = people is None
-            plain, plain_people = ctx.measure(
-                lambda s=scope, op=operation: op(PlainPerson, s), rounds=2)
+            plain, plain_people = ctx.measure(lambda s=scope, op=operation: op(PlainPerson, s), rounds=2)
 
             ctx.compare(f"{operation_label} / {label}", people, plain_people)
 
@@ -103,7 +106,8 @@ def run(ctx):
             if not overlay.capped and not plain.capped and plain.ms:
                 ratio = f"x{overlay.ms / plain.ms:.1f}"
             section.add(
-                label, {"overlay": overlay, "plain": plain},
+                label,
+                {"overlay": overlay, "plain": plain},
                 ratio=ratio,
                 people="MISSED THE BAR" if people is None else f"{people:,}",
             )

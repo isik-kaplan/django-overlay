@@ -24,7 +24,10 @@ def available():
     if shutil.which("docker") is None:
         return False
     result = subprocess.run(
-        ["docker", "info"], capture_output=True, text=True, check=False,
+        ["docker", "info"],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return result.returncode == 0
 
@@ -32,7 +35,11 @@ def available():
 def _compose(*args, env=None, capture=True):
     command = ["docker", "compose", "-f", str(COMPOSE_FILE), "-p", PROJECT, *args]
     return subprocess.run(
-        command, capture_output=capture, text=True, check=False, env=env,
+        command,
+        capture_output=capture,
+        text=True,
+        check=False,
+        env=env,
     )
 
 
@@ -46,8 +53,7 @@ def _environment(postgres_version, work_mem, shared_buffers, host_port):
     }
 
 
-def up(postgres_version=17, work_mem="4MB", shared_buffers="128MB",
-       host_port=55432, say=print, timeout=120):
+def up(postgres_version=17, work_mem="4MB", shared_buffers="128MB", host_port=55432, say=print, timeout=120):
     """Start the container and block until it answers. Returns a database URL."""
     if not available():
         raise DockerUnavailable(
@@ -56,8 +62,10 @@ def up(postgres_version=17, work_mem="4MB", shared_buffers="128MB",
         )
 
     env = _environment(postgres_version, work_mem, shared_buffers, host_port)
-    say(f"starting postgres {postgres_version} on port {host_port} "
-        f"(work_mem {work_mem}, shared_buffers {shared_buffers})")
+    say(
+        f"starting postgres {postgres_version} on port {host_port} "
+        f"(work_mem {work_mem}, shared_buffers {shared_buffers})"
+    )
     result = _compose("up", "-d", env=env)
     if result.returncode != 0:
         raise DockerUnavailable(f"docker compose up failed:\n{result.stderr.strip()}")
@@ -65,8 +73,14 @@ def up(postgres_version=17, work_mem="4MB", shared_buffers="128MB",
     deadline = time.time() + timeout
     while time.time() < deadline:
         check = _compose(
-            "exec", "-T", "postgres",
-            "pg_isready", "-U", "postgres", "-d", "django_overlay_bench",
+            "exec",
+            "-T",
+            "postgres",
+            "pg_isready",
+            "-U",
+            "postgres",
+            "-d",
+            "django_overlay_bench",
             env=env,
         )
         if check.returncode == 0:

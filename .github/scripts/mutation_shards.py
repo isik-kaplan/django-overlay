@@ -165,9 +165,7 @@ def select(shard, pyproject=PYPROJECT):
     previous call left behind so this is idempotent.
     """
     if shard not in SHARDS:
-        raise SystemExit(
-            f"unknown shard {shard!r} -- known shards: {', '.join(sorted(SHARDS))}"
-        )
+        raise SystemExit(f"unknown shard {shard!r} -- known shards: {', '.join(sorted(SHARDS))}")
 
     kept, _ = _without_generated_block(pyproject)
     try:
@@ -193,9 +191,7 @@ def main(argv):
             sys.stdout.write(f"{shard:<10}{len(paths)} file(s)\n")
         return 0
     select(argv[0])
-    sys.stdout.write(
-        f"mutation shard {argv[0]!r}: {len(SHARDS[argv[0]])} file(s) will be mutated\n"
-    )
+    sys.stdout.write(f"mutation shard {argv[0]!r}: {len(SHARDS[argv[0]])} file(s) will be mutated\n")
     return 0
 
 

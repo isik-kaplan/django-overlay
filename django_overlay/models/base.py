@@ -65,9 +65,7 @@ class OverlayModelBase(models.base.ModelBase):
         if overlay_meta is None or not issubclass(overlay_meta, OverlayMeta):
             raise OverlayConfigurationError(f"{name}.OverlayMeta must subclass django_overlay.models.OverlayMeta.")
         if "get_source" not in overlay_meta.__dict__:
-            raise OverlayConfigurationError(
-                f"{name}.OverlayMeta must implement get_source() returning a SourceTable."
-            )
+            raise OverlayConfigurationError(f"{name}.OverlayMeta must implement get_source() returning a SourceTable.")
         if overlay_meta.get_source() is None:
             # An overlay model with no source is a view over one table, three
             # INSTEAD OF triggers routing writes straight back to it, and a

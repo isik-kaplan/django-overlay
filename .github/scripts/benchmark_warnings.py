@@ -36,7 +36,7 @@ def budget_block(lines):
         if line.strip() != "BUDGET":
             continue
         block = []
-        for following in lines[index + 1:]:
+        for following in lines[index + 1 :]:
             if following.startswith("="):
                 break
             if following.strip():
@@ -59,14 +59,19 @@ def main(path):
     lost = [line.strip() for line in lines if line.lstrip().startswith("LOST CONNECTION ")]
 
     if skipped:
-        annotate("warning", "benchmark suites were skipped for budget: "
-                            + "; ".join(item.replace("SKIPPED ", "") for item in skipped))
+        annotate(
+            "warning",
+            "benchmark suites were skipped for budget: " + "; ".join(item.replace("SKIPPED ", "") for item in skipped),
+        )
     if disagreements:
-        annotate("warning", f"{len(disagreements)} row(s) where the overlay and the plain "
-                            f"mirror returned different answers")
+        annotate(
+            "warning", f"{len(disagreements)} row(s) where the overlay and the plain mirror returned different answers"
+        )
     if lost:
-        annotate("warning", f"the harness lost its connection {len(lost)} time(s) -- "
-                            f"those cells are not measurements: {lost[0]}")
+        annotate(
+            "warning",
+            f"the harness lost its connection {len(lost)} time(s) -- those cells are not measurements: {lost[0]}",
+        )
     if budget:
         annotate("notice", "benchmark budget -- " + "; ".join(budget))
 

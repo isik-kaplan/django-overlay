@@ -1069,9 +1069,7 @@ class BenchPerson(OverlayModel):
     born_on = models.DateField(null=True)
     notes = models.TextField(blank=True, default="")
 
-    addresses = OverlayManyToManyField(
-        "BenchAddress", through="BenchPersonAddress", related_name="people"
-    )
+    addresses = OverlayManyToManyField("BenchAddress", through="BenchPersonAddress", related_name="people")
     phones = OverlayManyToManyField("BenchPhone", through="BenchPersonPhone", related_name="people")
     emails = OverlayManyToManyField("BenchEmail", through="BenchPersonEmail", related_name="people")
     # Plain, not Overlay: BenchLabel is an ordinary table, so the auto-created

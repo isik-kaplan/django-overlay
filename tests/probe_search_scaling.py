@@ -163,8 +163,10 @@ def stored_tsvector_comparison():
             f"ORDER BY r DESC LIMIT {limit}"
         )
 
-    print(f"\n  {'token':>8} {'matches':>10} | {'view expr':>11} {'view stored':>12} {'gain':>7}"
-          f" | {'plain expr':>11} {'plain stored':>13} {'gain':>7}")
+    print(
+        f"\n  {'token':>8} {'matches':>10} | {'view expr':>11} {'view stored':>12} {'gain':>7}"
+        f" | {'plain expr':>11} {'plain stored':>13} {'gain':>7}"
+    )
     print("  " + "-" * 96)
     for divisor in DIVISORS:
         token = f"m{divisor}"
@@ -177,9 +179,11 @@ def stored_tsvector_comparison():
         view_stored = best_of(stored(TSV_VIEW, token))
         plain_expr = best_of(ranked(PLAIN, token))
         plain_stored = best_of(stored(PLAIN, token))
-        print(f"  {token:>8} {matches:>10,} | {view_expr:>9.1f}ms {view_stored:>10.1f}ms "
-              f"{view_expr / view_stored:>6.1f}x | {plain_expr:>9.1f}ms {plain_stored:>11.1f}ms "
-              f"{plain_expr / plain_stored:>6.1f}x")
+        print(
+            f"  {token:>8} {matches:>10,} | {view_expr:>9.1f}ms {view_stored:>10.1f}ms "
+            f"{view_expr / view_stored:>6.1f}x | {plain_expr:>9.1f}ms {plain_stored:>11.1f}ms "
+            f"{plain_expr / plain_stored:>6.1f}x"
+        )
 
     sql(f"DROP VIEW IF EXISTS {TSV_VIEW}")
     for table in (SOURCE, BASE, PLAIN):
@@ -202,8 +206,7 @@ def test_search_scaling():
     print("=" * 104)
     print("RANKED TOP-20: cost against match count")
     print("=" * 104)
-    print(f"  {'token':>8} {'matches':>10} {'% of view':>10} {'overlay':>11} {'plain':>11} "
-          f"{'ratio':>8}   {'plan':>12}")
+    print(f"  {'token':>8} {'matches':>10} {'% of view':>10} {'overlay':>11} {'plain':>11} {'ratio':>8}   {'plan':>12}")
     print("  " + "-" * 100)
 
     curve = []
@@ -219,8 +222,10 @@ def test_search_scaling():
         idx, seq = scans(plan(ranked(VIEW, token)))
         ratio = overlay_ms / plain_ms if plain_ms else float("nan")
         share = 100.0 * matches / total
-        print(f"  {token:>8} {matches:>10,} {share:>9.2f}% {overlay_ms:>9.1f}ms "
-              f"{plain_ms:>9.1f}ms {ratio:>7.2f}x   idx={idx} seq={seq}")
+        print(
+            f"  {token:>8} {matches:>10,} {share:>9.2f}% {overlay_ms:>9.1f}ms "
+            f"{plain_ms:>9.1f}ms {ratio:>7.2f}x   idx={idx} seq={seq}"
+        )
         curve.append((token, matches, overlay_ms, plain_ms))
 
     print("\n" + "=" * 104)
@@ -230,8 +235,10 @@ def test_search_scaling():
     print("  " + "-" * 60)
     for token, matches, overlay_ms, _ in curve:
         bare_ms = best_of(unranked(VIEW, token))
-        print(f"  {token:>8} {matches:>10,} {overlay_ms:>9.1f}ms {bare_ms:>9.1f}ms "
-              f"{overlay_ms / bare_ms if bare_ms else float('nan'):>11.1f}x")
+        print(
+            f"  {token:>8} {matches:>10,} {overlay_ms:>9.1f}ms {bare_ms:>9.1f}ms "
+            f"{overlay_ms / bare_ms if bare_ms else float('nan'):>11.1f}x"
+        )
 
     print("\n" + "=" * 104)
     print("LIMIT-INDEPENDENCE: does asking for fewer rows cost less?")
@@ -251,8 +258,10 @@ def test_search_scaling():
     for token, matches, overlay_ms, plain_ms in curve:
         if matches < 100:
             continue
-        print(f"  {token:>8} {matches:>10,} matches   overlay {1000 * overlay_ms / matches:>7.3f} ms/1k"
-              f"   plain {1000 * plain_ms / matches:>7.3f} ms/1k")
+        print(
+            f"  {token:>8} {matches:>10,} matches   overlay {1000 * overlay_ms / matches:>7.3f} ms/1k"
+            f"   plain {1000 * plain_ms / matches:>7.3f} ms/1k"
+        )
 
     print("\n" + "=" * 104)
     print("SCOPED SEARCH: a broad term plus a selective filter")
@@ -269,11 +278,8 @@ def test_search_scaling():
             f"FROM {VIEW} WHERE {TSV} @@ to_tsquery('simple', '{token}') "
             f"AND city = 'city42' ORDER BY r DESC LIMIT 20"
         )
-        tighter = scoped.replace(
-            "ORDER BY", "AND status = 'active' ORDER BY"
-        )
-        print(f"  {token:>8} {overlay_ms:>9.1f}ms {best_of(scoped):>9.1f}ms "
-              f"{best_of(tighter):>12.1f}ms")
+        tighter = scoped.replace("ORDER BY", "AND status = 'active' ORDER BY")
+        print(f"  {token:>8} {overlay_ms:>9.1f}ms {best_of(scoped):>9.1f}ms {best_of(tighter):>12.1f}ms")
 
     print("\n" + "=" * 104)
     print("STORED TSVECTOR: is ranking paying to recompute to_tsvector per row?")

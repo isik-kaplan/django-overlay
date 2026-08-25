@@ -53,8 +53,10 @@ SETTINGS = (
     ("enable_nestloop = off", ["SET enable_nestloop = off"]),
     ("nestloop + memoize off", ["SET enable_nestloop = off", "SET enable_memoize = off"]),
     ("join_collapse_limit = 1", ["SET join_collapse_limit = 1", "SET from_collapse_limit = 1"]),
-    ("nestloop off + collapse 1",
-     ["SET enable_nestloop = off", "SET join_collapse_limit = 1", "SET from_collapse_limit = 1"]),
+    (
+        "nestloop off + collapse 1",
+        ["SET enable_nestloop = off", "SET join_collapse_limit = 1", "SET from_collapse_limit = 1"],
+    ),
 )
 
 RESET = (
@@ -110,10 +112,7 @@ def fence_the_view():
     with connection.cursor() as cursor:
         cursor.execute("SELECT pg_get_viewdef('bench_person_view', true)")
         definition = cursor.fetchone()[0].rstrip().rstrip(";")
-        cursor.execute(
-            f"CREATE OR REPLACE VIEW bench_person_view AS "
-            f"SELECT * FROM ({definition}) AS fenced OFFSET 0"
-        )
+        cursor.execute(f"CREATE OR REPLACE VIEW bench_person_view AS SELECT * FROM ({definition}) AS fenced OFFSET 0")
 
 
 def test_plan_forcing():
@@ -121,8 +120,7 @@ def test_plan_forcing():
     cap(CAP_MS)
 
     truth = PlainPerson.objects.filter(**SCOPE).values("pk").distinct().count()
-    print(f"\n\n  the answer is {truth:,} people "
-          f"(plain tables, {timed(lambda: resolve(PlainPerson))[0]:.0f}ms)")
+    print(f"\n\n  the answer is {truth:,} people (plain tables, {timed(lambda: resolve(PlainPerson))[0]:.0f}ms)")
 
     print("\n" + "=" * 100)
     print("FORCING THE PLAN, WITHOUT TOUCHING THE ESTIMATE")

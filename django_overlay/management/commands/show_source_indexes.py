@@ -41,11 +41,7 @@ class Command(BaseCommand):
             candidates = [django_apps.get_model(app_label, model_name)]
         else:
             candidates = django_apps.get_models()
-        return [
-            model
-            for model in candidates
-            if getattr(model, "_is_overlay_view_model", False)
-        ]
+        return [model for model in candidates if getattr(model, "_is_overlay_view_model", False)]
 
     def _report(self, cursor, model, tenant_schema: str, missing_only: bool) -> None:
         source = model.get_source()

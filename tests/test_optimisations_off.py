@@ -68,8 +68,10 @@ def _combinations():
     for states in itertools.product((True, False), repeat=len(SWITCHES)):
         settings = dict(zip(SWITCHES, states, strict=True))
         off = [name for name, on in settings.items() if not on]
-        label = "everything-on" if not off else "-".join(
-            name.removeprefix("DJANGO_OVERLAY_").lower().replace("_", "-") for name in off
+        label = (
+            "everything-on"
+            if not off
+            else "-".join(name.removeprefix("DJANGO_OVERLAY_").lower().replace("_", "-") for name in off)
         )
         yield pytest.param(settings, id=label)
 
@@ -88,31 +90,63 @@ def graph():
     other = WideRegion.objects.create(name="region8", country="US")
 
     vendor_source = WideCustomerSource.objects.create(
-        first_name="v", last_name="vendor", email="v@x", age=40, city="city42",
-        postcode="pc1", status="active", score=10, registered_on="2020-01-01",
-        notes="", region_id=region.id,
+        first_name="v",
+        last_name="vendor",
+        email="v@x",
+        age=40,
+        city="city42",
+        postcode="pc1",
+        status="active",
+        score=10,
+        registered_on="2020-01-01",
+        notes="",
+        region_id=region.id,
     )
     vendor = WideCustomer.objects.get(pk=-vendor_source.id)
     organic = WideCustomer.objects.create(
-        first_name="o", last_name="organic", email="o@x", age=41, city="city42",
-        postcode="pc2", status="lapsed", score=None, registered_on="2020-01-02",
+        first_name="o",
+        last_name="organic",
+        email="o@x",
+        age=41,
+        city="city42",
+        postcode="pc2",
+        status="lapsed",
+        score=None,
+        registered_on="2020-01-02",
         region=other,
     )
     # region=None: the far side of the two-hop traversal is null here, which is
     # where an inner join and a semi-join over the same predicate diverge.
     elsewhere = WideCustomer.objects.create(
-        first_name="e", last_name="elsewhere", email="e@x", age=42, city="city99",
-        postcode="pc3", status="active", score=30, registered_on="2020-01-03",
+        first_name="e",
+        last_name="elsewhere",
+        email="e@x",
+        age=42,
+        city="city99",
+        postcode="pc3",
+        status="active",
+        score=30,
+        registered_on="2020-01-03",
         region=None,
     )
 
     product = WideProduct.objects.create(
-        sku="SKU1", name="p", category="cat7", price_cents=100, weight_grams=1, supplier="s",
+        sku="SKU1",
+        name="p",
+        category="cat7",
+        price_cents=100,
+        weight_grams=1,
+        supplier="s",
     )
     for label, customer in (("vendor", vendor), ("organic", organic), ("elsewhere", elsewhere)):
         WideOrder.objects.create(
-            reference=f"REF-{label}", status="new", total_cents=100,
-            placed_on="2021-01-01", channel="web", currency="GBP", customer=customer,
+            reference=f"REF-{label}",
+            status="new",
+            total_cents=100,
+            placed_on="2021-01-01",
+            channel="web",
+            currency="GBP",
+            customer=customer,
         )
     # The m2m side: both ends and the through model are overlay views, so
     # `roster.members` is a three-view traversal. One membership is the vendor's
@@ -128,13 +162,21 @@ def graph():
     tenant_member = Member.objects.create(name="m")
 
     RosterMembershipSource.objects.create(
-        roster_id=roster.pk, member_id=vendor_member.pk, role="member",
+        roster_id=roster.pk,
+        member_id=vendor_member.pk,
+        role="member",
     )
     RosterMembership.objects.create(roster=roster, member=tenant_member)
     RosterMembership.objects.create(roster=tenant_roster, member=tenant_member)
 
-    return {"vendor": vendor, "organic": organic, "elsewhere": elsewhere,
-            "region": region, "product": product, "roster": roster}
+    return {
+        "vendor": vendor,
+        "organic": organic,
+        "elsewhere": elsewhere,
+        "region": region,
+        "product": product,
+        "roster": roster,
+    }
 
 
 def _shapes(graph):
@@ -150,35 +192,32 @@ def _shapes(graph):
             WideOrder.objects.filter(customer__city="city42").values_list("reference", flat=True)
         ),
         "fk two hops": lambda: sorted(
-            WideOrder.objects.filter(customer__region__country="GB")
-            .values_list("reference", flat=True)
+            WideOrder.objects.filter(customer__region__country="GB").values_list("reference", flat=True)
         ),
         "fk two hops, far side null": lambda: sorted(
-            WideOrder.objects.filter(customer__region__isnull=True)
-            .values_list("reference", flat=True)
+            WideOrder.objects.filter(customer__region__isnull=True).values_list("reference", flat=True)
         ),
         "excluded traversal": lambda: sorted(
             WideOrder.objects.exclude(customer__city="city42").values_list("reference", flat=True)
         ),
         "ordered page": lambda: list(
             WideOrder.objects.filter(customer__city="city42")
-            .order_by("reference").values_list("reference", flat=True)[:2]
+            .order_by("reference")
+            .values_list("reference", flat=True)[:2]
         ),
         "count over a traversal": lambda: WideOrder.objects.filter(customer__city="city42").count(),
         "subquery in": lambda: sorted(
-            WideOrder.objects.filter(
-                customer__in=WideCustomer.objects.filter(city="city42")
-            ).values_list("reference", flat=True)
+            WideOrder.objects.filter(customer__in=WideCustomer.objects.filter(city="city42")).values_list(
+                "reference", flat=True
+            )
         ),
         # A literal list has no subquery to fence, so this is the branch the
         # array rewrite must decline -- and declining is what the crash was on.
         "literal list in": lambda: sorted(
-            WideOrder.objects.filter(customer__in=both_cities)
-            .values_list("reference", flat=True)
+            WideOrder.objects.filter(customer__in=both_cities).values_list("reference", flat=True)
         ),
         "select_related across the view": lambda: sorted(
-            f"{order.reference}:{order.customer.city}"
-            for order in WideOrder.objects.select_related("customer")
+            f"{order.reference}:{order.customer.city}" for order in WideOrder.objects.select_related("customer")
         ),
         # Multiplicity, not just membership: two matching members means the
         # roster appears twice, and a rewrite that turned the join into a
@@ -189,9 +228,7 @@ def _shapes(graph):
         "m2m reverse": lambda: sorted(
             Member.objects.filter(rosters__title="vendor-roster").values_list("name", flat=True)
         ),
-        "related manager": lambda: sorted(
-            graph["roster"].members.all().values_list("name", flat=True)
-        ),
+        "related manager": lambda: sorted(graph["roster"].members.all().values_list("name", flat=True)),
     }
 
 
@@ -220,13 +257,11 @@ def test_every_configuration_returns_the_same_rows(graph, configuration):
                 disagreed.append(f"{name}: {actual!r} != {expected[name]!r}")
 
     off = [name for name, on in configuration.items() if not on] or ["nothing"]
-    assert not crashed, (
-        f"with {', '.join(off)} off, {len(crashed)} shape(s) could not run at all:\n  "
-        + "\n  ".join(crashed)
+    assert not crashed, f"with {', '.join(off)} off, {len(crashed)} shape(s) could not run at all:\n  " + "\n  ".join(
+        crashed
     )
     assert not disagreed, (
-        f"with {', '.join(off)} off, {len(disagreed)} shape(s) returned different rows:\n  "
-        + "\n  ".join(disagreed)
+        f"with {', '.join(off)} off, {len(disagreed)} shape(s) returned different rows:\n  " + "\n  ".join(disagreed)
     )
 
 
@@ -242,8 +277,6 @@ def test_there_is_a_case_with_every_switch_off():
     """The arm `--no-optimisations` runs, and the one that had no test at all."""
     ids = {param.id for param in _combinations()}
     assert "everything-on" in ids
-    everything_off = "-".join(
-        name.removeprefix("DJANGO_OVERLAY_").lower().replace("_", "-") for name in SWITCHES
-    )
+    everything_off = "-".join(name.removeprefix("DJANGO_OVERLAY_").lower().replace("_", "-") for name in SWITCHES)
     assert everything_off in ids
     assert len(ids) == 2 ** len(SWITCHES)

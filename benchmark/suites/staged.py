@@ -116,25 +116,23 @@ def run(ctx):
         # because it dropped a condition would otherwise look like a win.
         truth = None
         for label, strategy in STRATEGIES:
-            overlay, overlay_people = ctx.measure(
-                lambda s=strategy, c=conditions: s(BenchPerson, c), rounds=2)
-            plain, plain_people = ctx.measure(
-                lambda s=strategy, c=conditions: s(PlainPerson, c), rounds=2)
+            overlay, overlay_people = ctx.measure(lambda s=strategy, c=conditions: s(BenchPerson, c), rounds=2)
+            plain, plain_people = ctx.measure(lambda s=strategy, c=conditions: s(PlainPerson, c), rounds=2)
             if truth is None:
                 truth = plain_people
 
             for side, people in (("overlay", overlay_people), ("plain", plain_people)):
                 if people is not None and truth is not None and people != truth:
                     ctx.disagreements.append(
-                        f"{case_label} / {label}: {side} found {people:,} people, "
-                        f"expected {truth:,}"
+                        f"{case_label} / {label}: {side} found {people:,} people, expected {truth:,}"
                     )
 
             ratio = ""
             if not overlay.capped and not plain.capped and plain.ms:
                 ratio = f"x{overlay.ms / plain.ms:.1f}"
             section.add(
-                label, {"overlay": overlay, "plain": plain},
+                label,
+                {"overlay": overlay, "plain": plain},
                 ratio=ratio,
                 people="did not finish" if overlay_people is None else f"{overlay_people:,}",
             )

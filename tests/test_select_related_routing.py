@@ -85,10 +85,14 @@ def test_the_related_object_costs_no_further_query(membership):
 
 def test_rows_are_identical_either_way(membership):
     with OFF:
-        joined = [(m.pk, m.roster.title, m.member.name) for m in
-                  RosterMembership.objects.select_related("roster", "member").order_by("pk")]
-    routed = [(m.pk, m.roster.title, m.member.name) for m in
-              RosterMembership.objects.select_related("roster", "member").order_by("pk")]
+        joined = [
+            (m.pk, m.roster.title, m.member.name)
+            for m in RosterMembership.objects.select_related("roster", "member").order_by("pk")
+        ]
+    routed = [
+        (m.pk, m.roster.title, m.member.name)
+        for m in RosterMembership.objects.select_related("roster", "member").order_by("pk")
+    ]
 
     assert routed == joined
 
@@ -108,8 +112,9 @@ def test_a_plain_target_still_joins():
     """WideRegion is an ordinary table. Its statistics rescue the estimate,
     there is no appendrel, and a join is the right plan."""
     region = WideRegion.objects.create(name="region7", country="GB")
-    WideCustomer.objects.create(first_name="f", last_name="l", email="e", city="c",
-                                postcode="p", status="active", score=1, region=region)
+    WideCustomer.objects.create(
+        first_name="f", last_name="l", email="e", city="c", postcode="p", status="active", score=1, region=region
+    )
 
     rows, count = queries_for(lambda: WideCustomer.objects.select_related("region"))
 
@@ -126,9 +131,7 @@ def test_a_bare_select_related_splits_by_target(membership):
 
 
 def test_select_related_none_still_clears(membership):
-    rows, count = queries_for(
-        lambda: RosterMembership.objects.select_related("roster").select_related(None)
-    )
+    rows, count = queries_for(lambda: RosterMembership.objects.select_related("roster").select_related(None))
 
     assert count == 1
 
@@ -145,9 +148,7 @@ def test_the_setting_turns_it_off(membership):
 def test_values_drops_the_prefetch_rather_than_failing(membership):
     """Django ignores select_related() under values() anyway, so dropping the
     prefetch is what "unchanged" means here."""
-    rows, count = queries_for(
-        lambda: RosterMembership.objects.select_related("roster").values("id", "roster_id")
-    )
+    rows, count = queries_for(lambda: RosterMembership.objects.select_related("roster").values("id", "roster_id"))
 
     assert count == 1
     assert rows and set(rows[0]) == {"id", "roster_id"}
@@ -243,8 +244,7 @@ def test_the_iterator_refusal_says_what_to_pass_instead(membership):
 
     assert str(raised.value) == refusal(
         "iterator() without chunk_size",
-        "Pass a chunk_size, or drop the select_related() and let the prefetch happen "
-        "on the whole queryset.",
+        "Pass a chunk_size, or drop the select_related() and let the prefetch happen on the whole queryset.",
     )
 
 
@@ -326,9 +326,7 @@ def test_the_query_wrappers_forward_keyword_arguments(membership):
     query = RosterMembership.objects.all().query.clone()
 
     by_keyword = query.get_aggregation("default", aggregate_exprs={"n": Count("*")})
-    by_position = RosterMembership.objects.all().query.clone().get_aggregation(
-        "default", {"n": Count("*")}
-    )
+    by_position = RosterMembership.objects.all().query.clone().get_aggregation("default", {"n": Count("*")})
 
     assert set(by_keyword) == {"n"}, "the keyword form has to reach super()"
     assert set(by_position) == {"n"}, "and so does the positional one"

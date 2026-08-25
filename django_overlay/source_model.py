@@ -128,6 +128,7 @@ def build_source_model(view_model):
 
     attrs["save"] = _refuse
     attrs["delete"] = _refuse
+
     class Meta:
         # A private registry: nothing here is a real installed model, so two
         # models never claim one db_table and W035 never fires.

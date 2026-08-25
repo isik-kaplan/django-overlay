@@ -166,9 +166,7 @@ def test_a_multi_column_index_is_listed_with_its_columns_joined():
     observable.
     """
     with connection.cursor() as cursor:
-        cursor.execute(
-            "CREATE INDEX tmp_multi ON testapp_shared_widecustomersource (city, email)"
-        )
+        cursor.execute("CREATE INDEX tmp_multi ON testapp_shared_widecustomersource (city, email)")
         try:
             warnings = run_check()
         finally:
@@ -201,8 +199,7 @@ def test_the_primary_key_index_is_ignored_even_when_only_one_side_has_one():
     """
     with connection.cursor() as cursor:
         cursor.execute(
-            "ALTER TABLE testapp_shared_widecustomersource "
-            "DROP CONSTRAINT testapp_shared_widecustomersource_pkey"
+            "ALTER TABLE testapp_shared_widecustomersource DROP CONSTRAINT testapp_shared_widecustomersource_pkey"
         )
         try:
             assert run_check() == [], "the primary key should not be compared at all"
@@ -340,12 +337,8 @@ def test_several_uncovered_columns_are_listed_one_per_line():
         try:
             warnings = run_relations_check()
         finally:
-            cursor.execute(
-                "CREATE INDEX rms_roster_id_idx ON testapp_shared_rostermembershipsource (roster_id)"
-            )
-            cursor.execute(
-                "CREATE INDEX rms_member_id_idx ON testapp_shared_rostermembershipsource (member_id)"
-            )
+            cursor.execute("CREATE INDEX rms_roster_id_idx ON testapp_shared_rostermembershipsource (roster_id)")
+            cursor.execute("CREATE INDEX rms_member_id_idx ON testapp_shared_rostermembershipsource (member_id)")
 
     assert [w.id for w in warnings] == ["django_overlay.W002"]
     assert (
@@ -390,9 +383,7 @@ def test_a_one_to_one_column_is_described_as_one_to_one():
         )
 
     needed = _columns_needing_a_source_index(model)
-    assert needed["desk_id"] == (
-        "desk is a one-to-one, so joins and reverse lookups read the source"
-    )
+    assert needed["desk_id"] == ("desk is a one-to-one, so joins and reverse lookups read the source")
 
 
 def test_every_model_is_visited_even_after_one_is_skipped():
@@ -406,11 +397,11 @@ def test_every_model_is_visited_even_after_one_is_skipped():
     from django_overlay import checks
 
     visited = []
-    with mock.patch.object(checks, "_overlay_models_with_a_source", return_value=["skipped", "seen"]), \
-         mock.patch.object(checks, "_comparable_tables", side_effect=[None, ("public", "t", "s")]):
-        checks._for_each_comparable_model(
-            ("default",), lambda cursor, model, *tables: visited.append(model) or None
-        )
+    with (
+        mock.patch.object(checks, "_overlay_models_with_a_source", return_value=["skipped", "seen"]),
+        mock.patch.object(checks, "_comparable_tables", side_effect=[None, ("public", "t", "s")]),
+    ):
+        checks._for_each_comparable_model(("default",), lambda cursor, model, *tables: visited.append(model) or None)
 
     assert visited == ["seen"], "the loop stopped at the skipped model instead of continuing"
 

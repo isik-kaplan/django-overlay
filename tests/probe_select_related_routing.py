@@ -1,4 +1,5 @@
 """select_related() routing, measured on the production-shaped graph."""
+
 import time
 
 import pytest
@@ -33,8 +34,9 @@ def test_routing():
 
     cases = {
         "select_related('person')": lambda: BenchPersonPhone.objects.select_related("person").order_by("id")[:100],
-        "select_related('person','phone')":
-            lambda: BenchPersonPhone.objects.select_related("person", "phone").order_by("id")[:100],
+        "select_related('person','phone')": lambda: BenchPersonPhone.objects.select_related("person", "phone").order_by(
+            "id"
+        )[:100],
         "select_related() bare": lambda: BenchPersonPhone.objects.select_related().order_by("id")[:100],
     }
 
@@ -45,8 +47,10 @@ def test_routing():
             slow, joined_rows, joined_q = timed(build)
         fast, routed_rows, routed_q = timed(build)
         same = [r.pk for r in joined_rows] == [r.pk for r in routed_rows]
-        print(f"  {label:<36} {slow:>9.1f}ms {fast:>8.1f}ms {slow / fast:>8.1f}x  "
-              f"{joined_q}->{routed_q:<6}  {'YES' if same else 'NO -- BUG'}")
+        print(
+            f"  {label:<36} {slow:>9.1f}ms {fast:>8.1f}ms {slow / fast:>8.1f}x  "
+            f"{joined_q}->{routed_q:<6}  {'YES' if same else 'NO -- BUG'}"
+        )
         assert same
 
         # and the related objects must be populated, not lazy-loaded

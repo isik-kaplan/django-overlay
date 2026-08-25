@@ -172,9 +172,7 @@ def test_the_refusal_names_the_model_it_refused():
     with pytest.raises(OverlayConfigurationError) as exc_info:
         UniqueTestNoSource.objects.select_for_update()
 
-    assert str(exc_info.value).startswith(
-        "select_for_update() isn't supported on UniqueTestNoSource — "
-    )
+    assert str(exc_info.value).startswith("select_for_update() isn't supported on UniqueTestNoSource — ")
 
 
 def test_djangos_own_internal_lock_gets_its_arguments_forwarded():

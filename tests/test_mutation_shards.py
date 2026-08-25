@@ -40,9 +40,7 @@ shards = load_shards()
 
 
 def every_source_file():
-    return {
-        str(path.relative_to(ROOT)) for path in PACKAGE.rglob("*.py")
-    }
+    return {str(path.relative_to(ROOT)) for path in PACKAGE.rglob("*.py")}
 
 
 def assigned_files():
@@ -53,10 +51,7 @@ def test_every_module_belongs_to_exactly_one_shard():
     assigned = assigned_files()
     covered = set(assigned) | set(shards.NOT_SHARDED)
     missing = sorted(every_source_file() - covered)
-    assert not missing, (
-        "these modules are in no mutation shard, so no job mutates them: "
-        + ", ".join(missing)
-    )
+    assert not missing, "these modules are in no mutation shard, so no job mutates them: " + ", ".join(missing)
 
 
 def test_no_module_is_mutated_by_two_shards():
@@ -87,9 +82,7 @@ def test_the_excluded_module_is_the_one_pyproject_excludes():
     """do_not_mutate and the exempt list are two statements of one fact."""
     config = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["mutmut"]
     for path in config.get("do_not_mutate", []):
-        assert path in shards.NOT_SHARDED, (
-            f"{path} is do_not_mutate in pyproject.toml but not exempt in the shard map"
-        )
+        assert path in shards.NOT_SHARDED, f"{path} is do_not_mutate in pyproject.toml but not exempt in the shard map"
         assert path not in assigned_files(), f"{path} is do_not_mutate but assigned to a shard"
 
 
@@ -220,8 +213,7 @@ def test_the_workflow_dispatches_no_region_the_probe_has_dropped():
     """
     extra = workflow_matrix("region") - probe_regions()
     assert not extra, (
-        f"mutation.yml dispatches region(s) {sorted(extra)} that "
-        "probe_unreachable_mutants.py has no mutations for"
+        f"mutation.yml dispatches region(s) {sorted(extra)} that probe_unreachable_mutants.py has no mutations for"
     )
 
 
@@ -256,18 +248,16 @@ def a_tree(tmp_path, *, meta_for, only_mutate=None, real=()):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("")
     pyproject = tmp_path / "pyproject.toml"
-    scope = "" if only_mutate is None else "only_mutate = [\n" + "".join(
-        f'    "{path}",\n' for path in only_mutate
-    ) + "]\n"
+    scope = (
+        "" if only_mutate is None else "only_mutate = [\n" + "".join(f'    "{path}",\n' for path in only_mutate) + "]\n"
+    )
     pyproject.write_text("[tool.mutmut]\n" + scope)
     return tree, pyproject
 
 
 def test_a_tree_matching_its_shard_is_accepted(tmp_path, monkeypatch):
     check = load_check_mutants()
-    tree, pyproject = a_tree(
-        tmp_path, meta_for=["pkg/a.py"], only_mutate=["pkg/a.py"], real=["pkg/a.py"]
-    )
+    tree, pyproject = a_tree(tmp_path, meta_for=["pkg/a.py"], only_mutate=["pkg/a.py"], real=["pkg/a.py"])
     monkeypatch.chdir(tmp_path)
     assert check.tree_problems(tree, pyproject) == []
 
@@ -336,9 +326,7 @@ def test_the_key_does_not_depend_on_whether_a_shard_is_selected(tmp_path):
     shards.select("models", selected)
 
     lock = ROOT / "uv.lock"
-    assert key.fingerprint(unselected, lock, shard="models") == key.fingerprint(
-        selected, lock, shard="models"
-    )
+    assert key.fingerprint(unselected, lock, shard="models") == key.fingerprint(selected, lock, shard="models")
 
 
 def test_an_unknown_shard_has_no_key():

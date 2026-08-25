@@ -167,8 +167,7 @@ def only(operations, kind, **attributes):
     matched = [
         operation
         for operation in operations
-        if isinstance(operation, kind)
-        and all(getattr(operation, name) == value for name, value in attributes.items())
+        if isinstance(operation, kind) and all(getattr(operation, name) == value for name, value in attributes.items())
     ]
     assert len(matched) == 1, f"expected exactly one {kind.__name__}{attributes}, got {len(matched)}"
     assert matched[0].app_label == "testapp", f"{kind.__name__} was given app_label {matched[0].app_label!r}"

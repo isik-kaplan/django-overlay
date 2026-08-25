@@ -51,7 +51,10 @@ def _git_sha():
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5, check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - no git
         return "unknown"
@@ -103,8 +106,7 @@ def switch_differences(left, right):
         # switches existed must not report four differences against a fresh one.
         was, now = bool(before.get(name, True)), bool(after.get(name, True))
         if was != now:
-            changed.append(f"{flags.get(name, name)} {'on' if was else 'off'} "
-                           f"-> {'on' if now else 'off'}")
+            changed.append(f"{flags.get(name, name)} {'on' if was else 'off'} -> {'on' if now else 'off'}")
     return changed
 
 

@@ -114,8 +114,8 @@ def leaf_by_leaf(model, scope):
 # forcing the ban down to one view costs a narrow query 18ms -> 57ms. A broad
 # four-view query cannot show that, so measuring only the broad one would have
 # confirmed the threshold against the wrong risk.
-FOUR_VIEW_BROAD = {"person__phones__kind": "mobile"}      # 736,662 links
-FOUR_VIEW_NARROW = {"person__phones__number": "+447000000042"}   # 45 links
+FOUR_VIEW_BROAD = {"person__phones__kind": "mobile"}  # 736,662 links
+FOUR_VIEW_NARROW = {"person__phones__number": "+447000000042"}  # 45 links
 
 
 def four_views(model, scope):
@@ -131,6 +131,7 @@ def assert_setting_is_clean(ctx):
     visible way.
     """
     from django.db import connection
+
     with connection.cursor() as cursor:
         cursor.execute("SHOW enable_nestloop")
         if cursor.fetchone()[0] != "on":
@@ -146,8 +147,7 @@ def row(ctx, section, label, operation, scope, hops, models):
     banned, banned_value = ctx.measure(lambda: operation(overlay_model, scope))
     plain, plain_value = ctx.measure(lambda: operation(plain_model, scope))
 
-    ctx.compare(f"{label} (ban on vs off)", unbanned_value, banned_value,
-                "the ban changed the result")
+    ctx.compare(f"{label} (ban on vs off)", unbanned_value, banned_value, "the ban changed the result")
     ctx.compare(f"{label} (overlay vs plain)", banned_value, plain_value)
 
     section.add(
@@ -187,7 +187,8 @@ def run(ctx):
         yield section
 
         section = harness.Section(
-            f"Exactly four views -- the only shape 4 and 5 disagree on{suffix}", COLUMNS,
+            f"Exactly four views -- the only shape 4 and 5 disagree on{suffix}",
+            COLUMNS,
             note="from the through model outwards; an m2m hop counts 3 or 5, never 4",
         )
         row(ctx, section, "four views, narrow", four_views, FOUR_VIEW_NARROW, 1, through_models)
@@ -195,7 +196,8 @@ def run(ctx):
         yield section
 
         section = harness.Section(
-            f"One hop -- banned only when there is a LIMIT{suffix}", COLUMNS,
+            f"One hop -- banned only when there is a LIMIT{suffix}",
+            COLUMNS,
             note="the limited threshold is 2, the unlimited one 4",
         )
         row(ctx, section, "one hop, narrow", resolve, NARROW, 1, models)
@@ -212,9 +214,10 @@ def run(ctx):
         yield section
 
     section = harness.Section(
-        "What the exclusions would cost if banned anyway (threshold forced to 1)", COLUMNS,
+        "What the exclusions would cost if banned anyway (threshold forced to 1)",
+        COLUMNS,
         note="at 1,000,000 rows banning these was free, which argued for one threshold; "
-             "the hash the ban forces is built over a larger relation as scale grows",
+        "the hash the ban forces is built over a larger relation as scale grows",
     )
     with threshold(1):
         row(ctx, section, "one hop, narrow", resolve, NARROW, 1, models)

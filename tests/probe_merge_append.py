@@ -38,12 +38,13 @@ BASE = "widecustomer_u7"
 SOURCE = "testapp_shared_widecustomeru7source"
 
 QUERIES = {
-    "ORDER BY score DESC LIMIT 20":
-        "SELECT id, score FROM shape_{} ORDER BY score DESC LIMIT 20",
-    "ORDER BY score DESC LIMIT 20 OFFSET 5000":
-        "SELECT id, score FROM shape_{} ORDER BY score DESC LIMIT 20 OFFSET 5000",
-    "WHERE city=.. ORDER BY score DESC LIMIT 20":
-        "SELECT id, score FROM shape_{} WHERE city = 'city42' ORDER BY score DESC LIMIT 20",
+    "ORDER BY score DESC LIMIT 20": "SELECT id, score FROM shape_{} ORDER BY score DESC LIMIT 20",
+    "ORDER BY score DESC LIMIT 20 OFFSET 5000": (
+        "SELECT id, score FROM shape_{} ORDER BY score DESC LIMIT 20 OFFSET 5000"
+    ),
+    "WHERE city=.. ORDER BY score DESC LIMIT 20": (
+        "SELECT id, score FROM shape_{} WHERE city = 'city42' ORDER BY score DESC LIMIT 20"
+    ),
 }
 
 
@@ -56,8 +57,7 @@ def measure(title):
         for name in SHAPES:
             statement = template.format(name)
             lines = plan(statement)
-            print(f"      {name:>12} {best_of(statement):>9.1f}ms {shape_of(lines):>18} "
-                  f"{rows_read(lines):>14,}")
+            print(f"      {name:>12} {best_of(statement):>9.1f}ms {shape_of(lines):>18} {rows_read(lines):>14,}")
 
 
 def test_merge_append():
@@ -72,7 +72,7 @@ def test_merge_append():
     print("\n" + "=" * 104)
     print("existing indexes on the base table")
     print("=" * 104)
-    for (name, definition) in rows(
+    for name, definition in rows(
         f"SELECT indexname, indexdef FROM pg_indexes WHERE tablename = '{BASE}' ORDER BY indexname"
     ):
         print(f"  {name:<48} {definition.split(' USING ')[-1][:80]}")
@@ -104,8 +104,7 @@ def test_merge_append():
         ("LIMIT 200", "SELECT id, score FROM shape_none ORDER BY score DESC LIMIT 200"),
         ("LIMIT 2000", "SELECT id, score FROM shape_none ORDER BY score DESC LIMIT 2000"),
         ("LIMIT 20 OFFSET 100", "SELECT id, score FROM shape_none ORDER BY score DESC LIMIT 20 OFFSET 100"),
-        ("LIMIT 20 OFFSET 100000",
-         "SELECT id, score FROM shape_none ORDER BY score DESC LIMIT 20 OFFSET 100000"),
+        ("LIMIT 20 OFFSET 100000", "SELECT id, score FROM shape_none ORDER BY score DESC LIMIT 20 OFFSET 100000"),
     ):
         print(f"    {label:<44} {best_of(statement):>9.1f}ms")
 

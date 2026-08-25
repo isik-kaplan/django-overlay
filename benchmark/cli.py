@@ -33,46 +33,81 @@ def parse_duration(value):
 
 def _suite_names():
     from benchmark.suites import SUITE_NAMES
+
     return SUITE_NAMES
 
 
 @click.command(context_settings={"max_content_width": 100})
-@click.option("--scale", type=float, default=0.3, show_default=True,
-              help="1.0 is 1,000,000 people. Runtime grows faster than linearly.")
-@click.option("--share", type=float, default=None,
-              help="Fraction of each view held by the tenant's base table (default 0.4).")
-@click.option("--suite", "suites", multiple=True,
-              help="Run only these suites. Repeatable. Default is all of them.")
+@click.option(
+    "--scale",
+    type=float,
+    default=0.3,
+    show_default=True,
+    help="1.0 is 1,000,000 people. Runtime grows faster than linearly.",
+)
+@click.option(
+    "--share", type=float, default=None, help="Fraction of each view held by the tenant's base table (default 0.4)."
+)
+@click.option("--suite", "suites", multiple=True, help="Run only these suites. Repeatable. Default is all of them.")
 @click.option("--smoke", is_flag=True, help="The two cheapest suites, for a quick check.")
 @click.option("--list-suites", is_flag=True, help="Print the suite names and exit.")
-@click.option("--passes", type=int, default=2, show_default=True,
-              help="Repeat each suite. Two tells signal from drift; CI uses one.")
-@click.option("--cap", "cap_seconds", type=int, default=30, show_default=True,
-              help="Statement timeout. A query past it is reported as capped, not waited on.")
-@click.option("--max-runtime", default="1h", show_default=True,
-              help="Hard ceiling. Suites that will not fit are skipped and said so.")
-@click.option("--database-url", default=None,
-              help="Run against this Postgres instead of docker compose.")
-@click.option("--postgres-version", default="17", show_default=True,
-              help="Image tag for the compose database. 16 is what CI uses.")
-@click.option("--work-mem", default="4MB", show_default=True,
-              help="work_mem for the compose database. Decides whether a hash join spills.")
-@click.option("--shared-buffers", default="128MB", show_default=True,
-              help="shared_buffers for the compose database.")
-@click.option("--port", type=int, default=55432, show_default=True,
-              help="Host port for the compose database.")
+@click.option(
+    "--passes",
+    type=int,
+    default=2,
+    show_default=True,
+    help="Repeat each suite. Two tells signal from drift; CI uses one.",
+)
+@click.option(
+    "--cap",
+    "cap_seconds",
+    type=int,
+    default=30,
+    show_default=True,
+    help="Statement timeout. A query past it is reported as capped, not waited on.",
+)
+@click.option(
+    "--max-runtime",
+    default="1h",
+    show_default=True,
+    help="Hard ceiling. Suites that will not fit are skipped and said so.",
+)
+@click.option("--database-url", default=None, help="Run against this Postgres instead of docker compose.")
+@click.option(
+    "--postgres-version",
+    default="17",
+    show_default=True,
+    help="Image tag for the compose database. 16 is what CI uses.",
+)
+@click.option(
+    "--work-mem",
+    default="4MB",
+    show_default=True,
+    help="work_mem for the compose database. Decides whether a hash join spills.",
+)
+@click.option("--shared-buffers", default="128MB", show_default=True, help="shared_buffers for the compose database.")
+@click.option("--port", type=int, default=55432, show_default=True, help="Host port for the compose database.")
 @click.option("--rebuild", is_flag=True, help="Regenerate the graph even if the cache matches.")
-@click.option("--keep-up/--down", default=True, show_default=True,
-              help="Leave the compose database running afterwards.")
-@click.option("--format", "output_format",
-              type=click.Choice(["table", "markdown", "json"]), default="table",
-              show_default=True, help="table for a terminal, markdown for a CI summary.")
-@click.option("--output", type=click.Path(dir_okay=False, writable=True), default=None,
-              help="Write the chosen format here as well as to the terminal.")
+@click.option(
+    "--keep-up/--down", default=True, show_default=True, help="Leave the compose database running afterwards."
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "markdown", "json"]),
+    default="table",
+    show_default=True,
+    help="table for a terminal, markdown for a CI summary.",
+)
+@click.option(
+    "--output",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    help="Write the chosen format here as well as to the terminal.",
+)
 @click.option("--save-results", is_flag=True, help="Save this run as a baseline for later runs.")
 @click.option("--label", default=None, help="Name for the saved run. Defaults to the git sha.")
-@click.option("--compare-to", default=None,
-              help="Compare against this saved label instead of the most recent.")
+@click.option("--compare-to", default=None, help="Compare against this saved label instead of the most recent.")
 @click.option("--no-compare", is_flag=True, help="Do not add a delta column.")
 @click.option("--clear-results", is_flag=True, help="Delete every saved run and exit.")
 @click.option("--interactive", is_flag=True, help="Ask for the settings instead of taking flags.")
@@ -84,18 +119,34 @@ def _suite_names():
 # settings.py and the environment record read them from; a test asserts the
 # two spellings agree, because a flag the table does not know about moves
 # nothing.
-@click.option("--no-optimisations", "all_off", is_flag=True,
-              help="Turn every query optimisation off. The other arm of the A/B.")
-@click.option("--rewrite-traversals/--no-rewrite-traversals", default=None,
-              help="Rewrite a filter that traverses between two overlay views into a subquery.")
-@click.option("--redirect-select-related/--no-redirect-select-related", default=None,
-              help="Route select_related() across views through prefetch_related() instead.")
-@click.option("--force-hash-joins/--no-force-hash-joins", default=None,
-              help="Ban nested loops for a query joining several overlay views.")
-@click.option("--array-subquery-in/--no-array-subquery-in", default=None,
-              help="Fence a foreign key's __in subquery as `lhs = ANY (ARRAY(subquery))`.")
-@click.option("--m2m-fence/--no-m2m-fence", default=None,
-              help="Add the redundant fence to an m2m traversal between two overlay views.")
+@click.option(
+    "--no-optimisations", "all_off", is_flag=True, help="Turn every query optimisation off. The other arm of the A/B."
+)
+@click.option(
+    "--rewrite-traversals/--no-rewrite-traversals",
+    default=None,
+    help="Rewrite a filter that traverses between two overlay views into a subquery.",
+)
+@click.option(
+    "--redirect-select-related/--no-redirect-select-related",
+    default=None,
+    help="Route select_related() across views through prefetch_related() instead.",
+)
+@click.option(
+    "--force-hash-joins/--no-force-hash-joins",
+    default=None,
+    help="Ban nested loops for a query joining several overlay views.",
+)
+@click.option(
+    "--array-subquery-in/--no-array-subquery-in",
+    default=None,
+    help="Fence a foreign key's __in subquery as `lhs = ANY (ARRAY(subquery))`.",
+)
+@click.option(
+    "--m2m-fence/--no-m2m-fence",
+    default=None,
+    help="Add the redundant fence to an m2m traversal between two overlay views.",
+)
 @click.option("--yes", is_flag=True, help="Do not prompt before a long run.")
 def benchmark(**options):
     """Measure django-overlay against plain tables holding identical rows."""
@@ -127,6 +178,7 @@ def benchmark(**options):
     suites = list(options["suites"])
     if options["smoke"]:
         from benchmark.suites import SMOKE
+
         suites = list(SMOKE)
     unknown = [name for name in suites if name not in _suite_names()]
     if unknown:
@@ -144,14 +196,18 @@ def benchmark(**options):
     # The graph is assumed cold here because we cannot see the database yet,
     # which makes this the pessimistic figure. The runner prints the real one.
     predicted, _, build = estimates.for_run(names, scale, passes, cap_ms, cold_build=True)
-    click.echo(f"about {_humanise(predicted)} at worst "
-               f"(up to {_humanise(build)} of that building the graph, if it is not cached)")
+    click.echo(
+        f"about {_humanise(predicted)} at worst "
+        f"(up to {_humanise(build)} of that building the graph, if it is not cached)"
+    )
     if predicted > max_runtime:
-        click.echo(click.style(
-            f"WARNING: that is past the {_humanise(max_runtime)} ceiling. Suites that do not "
-            f"fit will be skipped. Raise it with --max-runtime, or lower --scale.",
-            fg="yellow",
-        ))
+        click.echo(
+            click.style(
+                f"WARNING: that is past the {_humanise(max_runtime)} ceiling. Suites that do not "
+                f"fit will be skipped. Raise it with --max-runtime, or lower --scale.",
+                fg="yellow",
+            )
+        )
         if not options["yes"] and not click.confirm("Run anyway?", default=True):
             return
 
@@ -159,6 +215,7 @@ def benchmark(**options):
     started_docker = False
     if not database_url:
         from benchmark import docker
+
         try:
             database_url = docker.up(
                 postgres_version=options["postgres_version"],
@@ -184,8 +241,15 @@ def benchmark(**options):
             raise click.BadParameter(f"no saved run labelled {options['compare_to']!r}")
 
     outcome = runner.run(
-        names, scale=scale, passes=passes, cap_ms=cap_ms, max_runtime=max_runtime,
-        say=click.echo, baseline=baseline, rebuild=options["rebuild"], share=options["share"],
+        names,
+        scale=scale,
+        passes=passes,
+        cap_ms=cap_ms,
+        max_runtime=max_runtime,
+        say=click.echo,
+        baseline=baseline,
+        rebuild=options["rebuild"],
+        share=options["share"],
     )
 
     _write_output(outcome, options, cap_ms)
@@ -196,19 +260,25 @@ def benchmark(**options):
         # the comparison would be against itself. The arm goes in the name.
         label = options["label"] or _default_label(outcome["environment"])
         path = results.save(
-            label, outcome["environment"], outcome["suites"], lost=outcome.get("lost", 0),
+            label,
+            outcome["environment"],
+            outcome["suites"],
+            lost=outcome.get("lost", 0),
         )
         click.echo(f"\nsaved as {path}")
         if outcome.get("lost"):
-            click.echo(click.style(
-                f"{outcome['lost']} cell(s) were never measured, so this run will not be "
-                f"picked up as a baseline automatically. Compare against it deliberately "
-                f"with --compare-to {label}.",
-                fg="yellow",
-            ))
+            click.echo(
+                click.style(
+                    f"{outcome['lost']} cell(s) were never measured, so this run will not be "
+                    f"picked up as a baseline automatically. Compare against it deliberately "
+                    f"with --compare-to {label}.",
+                    fg="yellow",
+                )
+            )
 
     if started_docker and not options["keep_up"]:
         from benchmark import docker
+
         docker.down(postgres_version=options["postgres_version"], say=click.echo)
 
     if outcome["disagreements"]:
@@ -222,6 +292,7 @@ def _default_label(env):
     all-off arm is the common one, so it gets a name of its own.
     """
     from benchmark import switches
+
     off = switches.describe(env.get("switches") or {})
     if not off:
         return env["git_sha"]
@@ -233,6 +304,7 @@ def _default_label(env):
 def _print_suites():
     from benchmark import estimates
     from benchmark.suites import SMOKE, all_suites
+
     click.echo(f"{'suite':<14} {'~1.0':>7}  title")
     for suite in all_suites():
         estimate = estimates.for_suite(suite.NAME, 1.0) or 0
@@ -244,23 +316,19 @@ def _print_suites():
 def _ask(options):
     """The same settings, prompted for in order."""
     options = dict(options)
-    options["scale"] = click.prompt(
-        "Scale (1.0 = 1,000,000 people)", type=float, default=options["scale"])
-    options["passes"] = click.prompt(
-        "Passes over each suite", type=int, default=options["passes"])
-    options["cap_seconds"] = click.prompt(
-        "Statement cap in seconds", type=int, default=options["cap_seconds"])
-    options["max_runtime"] = click.prompt(
-        "Ceiling for the whole run", default=options["max_runtime"])
+    options["scale"] = click.prompt("Scale (1.0 = 1,000,000 people)", type=float, default=options["scale"])
+    options["passes"] = click.prompt("Passes over each suite", type=int, default=options["passes"])
+    options["cap_seconds"] = click.prompt("Statement cap in seconds", type=int, default=options["cap_seconds"])
+    options["max_runtime"] = click.prompt("Ceiling for the whole run", default=options["max_runtime"])
 
     if click.confirm("Run every suite?", default=not options["suites"]):
         options["suites"] = ()
     else:
-        chosen = click.prompt("Which suites (comma separated)",
-                              default=",".join(_suite_names()))
+        chosen = click.prompt("Which suites (comma separated)", default=",".join(_suite_names()))
         options["suites"] = tuple(name.strip() for name in chosen.split(",") if name.strip())
 
     from benchmark import docker
+
     if docker.available():
         if not click.confirm("Use the docker compose database?", default=True):
             options["database_url"] = click.prompt("Postgres URL")
@@ -274,14 +342,14 @@ def _ask(options):
     # is not a kindness. The individual flags stay available for the case the
     # combinations are the point.
     from benchmark import switches
+
     if not click.confirm("Leave every query optimisation on?", default=not options["all_off"]):
         options["all_off"] = True
         for switch in switches.SWITCHES:
             name = switches.option_name(switch)
             options[name] = click.confirm(f"  keep {switch.flag}?", default=False)
 
-    options["save_results"] = click.confirm(
-        "Save this run as a baseline?", default=options["save_results"])
+    options["save_results"] = click.confirm("Save this run as a baseline?", default=options["save_results"])
     # `yes` is deliberately left alone. Somebody who just typed a scale into a
     # prompt is exactly the person the over-budget confirmation is for.
     return options
@@ -296,17 +364,18 @@ def _apply_switches(options):
     saying which arm it was is worse than no measurement at all.
     """
     from benchmark import switches
+
     chosen = switches.resolve(options, all_off=options["all_off"])
     switches.apply(chosen)
     off = switches.describe(chosen)
     if off:
-        click.echo(click.style(
-            f"optimisations OFF for this run: {', '.join(off)}", fg="yellow", bold=True))
+        click.echo(click.style(f"optimisations OFF for this run: {', '.join(off)}", fg="yellow", bold=True))
 
 
 def _configure_django(database_url=None):
     """Bring the app registry up. Touches no database."""
     import django
+
     if database_url:
         os.environ["OVERLAY_BENCH_DATABASE_URL"] = database_url
     # Set, not setdefault. benchmark/settings.py is not a default anybody would
@@ -326,11 +395,13 @@ def _configure_django(database_url=None):
 def _setup_django(database_url):
     _configure_django(database_url)
     from django.core.management import call_command
+
     call_command("migrate", verbosity=0, interactive=False)
 
 
 def _repository_root():
     from pathlib import Path
+
     return Path(__file__).resolve().parent.parent
 
 
@@ -347,8 +418,7 @@ def _write_output(outcome, options, cap_ms):
         text = json.dumps(outcome, indent=2, default=str)
     else:
         blocks = [
-            f"## Benchmark: scale {options['scale']}, "
-            f"{options['passes']} pass(es), {cap_ms // 1000}s cap",
+            f"## Benchmark: scale {options['scale']}, {options['passes']} pass(es), {cap_ms // 1000}s cap",
             "",
             f"Ran in {_humanise(outcome['seconds'])} against a "
             f"{_humanise(parse_duration(options['max_runtime']))} ceiling.",
@@ -400,6 +470,7 @@ def _markdown_from_data(section, cap_ms):
 
 def _humanise(seconds):
     from benchmark.harness import humanise
+
     return humanise(seconds)
 
 

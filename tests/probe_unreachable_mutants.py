@@ -286,7 +286,7 @@ MUTANTS = [
         "sql",
         "the FK trigger accepts a masked source row as a target",
         "django_overlay/sql_templates/triggers/constraint_trigger.sql.j2",
-        '{% if t.masked_by %} AND NOT EXISTS (SELECT 1 FROM {{ t.masked_by.schema | qi }}.{{ t.masked_by.table | qi }} WHERE {{ t.masked_by.table | qi }}.{{ t.masked_by.id_column | qi }} = NEW.{{ column | qi }} AND {{ t.masked_by.table | qi }}._overlay_deleted){% endif %}',
+        "{% if t.masked_by %} AND NOT EXISTS (SELECT 1 FROM {{ t.masked_by.schema | qi }}.{{ t.masked_by.table | qi }} WHERE {{ t.masked_by.table | qi }}.{{ t.masked_by.id_column | qi }} = NEW.{{ column | qi }} AND {{ t.masked_by.table | qi }}._overlay_deleted){% endif %}",
         "",
     ),
     (
@@ -424,10 +424,12 @@ def main(regions) -> int:
 
     recovered = restore_in_flight()
     if recovered:
-        print(f"put {recovered} back first -- a previous run was killed with its "
-              f"mutation still applied, and reading that as the original would have "
-              f"reported it STALE and measured every other mutation in the file "
-              f"against broken source")
+        print(
+            f"put {recovered} back first -- a previous run was killed with its "
+            f"mutation still applied, and reading that as the original would have "
+            f"reported it STALE and measured every other mutation in the file "
+            f"against broken source"
+        )
 
     unexpected = []
     for mutant in selected:

@@ -163,18 +163,19 @@ def _abandoned():
     """
     before = _connection_state()
     connection.close()
-    print(f"ABANDONED a measurement; connection was {before}, "
-          f"now {_connection_state()}", file=sys.stderr)
+    print(f"ABANDONED a measurement; connection was {before}, now {_connection_state()}", file=sys.stderr)
     return Cell(0.0, note="gave up")
 
 
 # The SQLSTATEs that mean "a cap did its job". Everything else arriving as an
 # OperationalError means the connection itself is in trouble, and the two must
 # not share a cell: see _cap_or_lost.
-CAP_SQLSTATES = frozenset({
-    "57014",  # query_canceled -- statement_timeout
-    "55P03",  # lock_not_available -- lock_timeout
-})
+CAP_SQLSTATES = frozenset(
+    {
+        "57014",  # query_canceled -- statement_timeout
+        "55P03",  # lock_not_available -- lock_timeout
+    }
+)
 
 
 def _sqlstate(error):
@@ -397,8 +398,7 @@ def section_to_data(section):
             {
                 "label": row.label,
                 "cells": {
-                    name: {"ms": cell.ms, "capped": cell.capped, "note": cell.note}
-                    for name, cell in row.cells.items()
+                    name: {"ms": cell.ms, "capped": cell.capped, "note": cell.note} for name, cell in row.cells.items()
                 },
                 "extras": {name: str(value) for name, value in row.extras.items()},
             }

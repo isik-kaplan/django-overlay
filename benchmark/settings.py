@@ -35,7 +35,9 @@ def _from_url(url):
 
 _url = os.environ.get("OVERLAY_BENCH_DATABASE_URL")
 DATABASES = {
-    "default": _from_url(_url) if _url else {
+    "default": _from_url(_url)
+    if _url
+    else {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.environ.get("POSTGRES_DB", "django_overlay_bench"),
         "USER": os.environ.get("POSTGRES_USER", "postgres"),

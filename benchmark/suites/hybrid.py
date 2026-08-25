@@ -100,7 +100,8 @@ def run(ctx):
         if not overlay.capped and not plain.capped and plain.ms:
             ratio = f"x{overlay.ms / plain.ms:.1f}"
         section.add(
-            label, {"overlay": overlay, "plain": plain},
+            label,
+            {"overlay": overlay, "plain": plain},
             fenced="yes" if fenced(BenchPerson, conditions) else "no",
             **{"est rows": f"{estimate(BenchPerson, conditions):,}"},
             ratio=ratio,

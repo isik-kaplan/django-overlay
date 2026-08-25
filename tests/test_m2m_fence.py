@@ -71,9 +71,7 @@ def test_build_filter_forwards_what_it_was_given_down_every_branch():
         return [
             (args, kwargs)
             for args, kwargs in calls
-            if args == (False, False)
-            and kwargs.get("can_reuse") is reuse
-            and kwargs.get("check_filterable") is False
+            if args == (False, False) and kwargs.get("can_reuse") is reuse and kwargs.get("check_filterable") is False
         ]
 
     # The rewritten branch: a cross-view traversal becomes `fk__in=<subquery>`.
@@ -111,11 +109,14 @@ def test_the_fence_refuses_under_any_negation(branch_negated, current_negated):
     """
     query = Roster.objects.filter(members__name="m").query
 
-    assert query._m2m_fence(
-        ("members__name", "m"),
-        branch_negated=branch_negated,
-        current_negated=current_negated,
-    ) is None
+    assert (
+        query._m2m_fence(
+            ("members__name", "m"),
+            branch_negated=branch_negated,
+            current_negated=current_negated,
+        )
+        is None
+    )
 
 
 def test_the_fence_is_built_when_nothing_is_negated():
@@ -123,9 +124,7 @@ def test_the_fence_is_built_when_nothing_is_negated():
     returns None unconditionally."""
     query = Roster.objects.filter(members__name="m").query
 
-    fence = query._m2m_fence(
-        ("members__name", "m"), branch_negated=False, current_negated=False
-    )
+    fence = query._m2m_fence(("members__name", "m"), branch_negated=False, current_negated=False)
 
     assert fence is not None
     path, value = fence
@@ -301,9 +300,7 @@ def test_split_exclude_forwards_its_keyword_arguments():
     query = Roster.objects.filter(members__name="m").query.clone()
 
     with mock.patch.object(DjangoQuery, "split_exclude", return_value="delegated") as base:
-        result = query.split_exclude(
-            ("members__name", "m"), can_reuse=set(), names_with_path=[]
-        )
+        result = query.split_exclude(("members__name", "m"), can_reuse=set(), names_with_path=[])
 
     assert result == "delegated"
     assert base.call_args.kwargs == {"can_reuse": set(), "names_with_path": []}

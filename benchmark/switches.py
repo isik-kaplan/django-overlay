@@ -135,10 +135,7 @@ def configured(source=None):
     """
     if source is None:
         from django.conf import settings as source
-    return {
-        option_name(switch): bool(getattr(source, switch.setting, True))
-        for switch in SWITCHES
-    }
+    return {option_name(switch): bool(getattr(source, switch.setting, True)) for switch in SWITCHES}
 
 
 def describe(values):

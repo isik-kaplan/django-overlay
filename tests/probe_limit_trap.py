@@ -67,8 +67,7 @@ def walk(node, depth=0, out=None):
     estimated, actual = node.get("Plan Rows", 0), node.get("Actual Rows", 0)
     ratio = estimated / actual if actual else float("inf")
     out.append(
-        f"    {'  ' * depth}{node['Node Type']:<28} "
-        f"est {estimated:>9,}  actual {actual:>9,}  off by {ratio:>8.1f}x"
+        f"    {'  ' * depth}{node['Node Type']:<28} est {estimated:>9,}  actual {actual:>9,}  off by {ratio:>8.1f}x"
     )
     for child in node.get("Plans", [])[:3]:
         walk(child, depth + 1, out)
@@ -80,16 +79,17 @@ def test_limit_trap():
     base = BROAD_A | BROAD_B | SELECTIVE
 
     shapes = (
-        ("two broad only, ORDER BY id LIMIT 200",
-         BenchPerson.objects.filter(**(BROAD_A | BROAD_B)).order_by("id")[:200]),
-        ("+ 2.5% scope, ORDER BY id LIMIT 200   <- the slow one",
-         BenchPerson.objects.filter(**base).order_by("id")[:200]),
-        ("+ 2.5% scope, .distinct()",
-         BenchPerson.objects.filter(**base).distinct().order_by("id")[:200]),
-        ("+ 2.5% scope, no LIMIT",
-         BenchPerson.objects.filter(**base).order_by("id")),
-        ("+ 2.5% scope, no ORDER BY",
-         BenchPerson.objects.filter(**base)[:200]),
+        (
+            "two broad only, ORDER BY id LIMIT 200",
+            BenchPerson.objects.filter(**(BROAD_A | BROAD_B)).order_by("id")[:200],
+        ),
+        (
+            "+ 2.5% scope, ORDER BY id LIMIT 200   <- the slow one",
+            BenchPerson.objects.filter(**base).order_by("id")[:200],
+        ),
+        ("+ 2.5% scope, .distinct()", BenchPerson.objects.filter(**base).distinct().order_by("id")[:200]),
+        ("+ 2.5% scope, no LIMIT", BenchPerson.objects.filter(**base).order_by("id")),
+        ("+ 2.5% scope, no ORDER BY", BenchPerson.objects.filter(**base)[:200]),
     )
 
     print("\n\n" + "=" * 100)

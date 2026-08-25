@@ -104,9 +104,7 @@ def test_a_non_bool_setting_is_refused():
         with pytest.raises(ImproperlyConfigured) as raised:
             list(BenchPerson.objects.filter(**TWO_HOPS))
 
-    assert str(raised.value) == (
-        "settings.DJANGO_OVERLAY_FORCE_HASH_JOINS must be a bool, got 'yes please'."
-    )
+    assert str(raised.value) == ("settings.DJANGO_OVERLAY_FORCE_HASH_JOINS must be a bool, got 'yes please'.")
 
 
 def test_the_session_setting_is_restored():
@@ -357,9 +355,7 @@ def test_an_annotated_subquery_is_found_whichever_form_it_takes():
     an annotated scope over overlay views did not count towards the ban.
     """
     exists = Roster.objects.annotate(e=Exists(Member.objects.filter(name=OuterRef("title"))))
-    subquery = Roster.objects.annotate(
-        n=Subquery(Member.objects.filter(name=OuterRef("title")).values("id")[:1])
-    )
+    subquery = Roster.objects.annotate(n=Subquery(Member.objects.filter(name=OuterRef("title")).values("id")[:1]))
     assert models_of(exists.query) == ["Member"]
     assert models_of(subquery.query) == ["Member"]
     assert _overlay_views_joined(exists.query) == _overlay_views_joined(subquery.query) == 2
@@ -418,6 +414,7 @@ def test_lowering_the_threshold_from_outside_is_honoured():
     silently stopped doing anything -- it kept passing, and reported the ban as
     costing nothing, because both arms of the comparison were the unbanned one.
     """
+
     # A fresh queryset per call: `statements()` evaluates it, and an evaluated
     # queryset answers the next call from its own cache without issuing SQL --
     # which looks exactly like "the ban did not fire".

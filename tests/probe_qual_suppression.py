@@ -58,8 +58,10 @@ def merge_append(lines):
 
 def show(label, statement):
     lines = plan(statement)
-    print(f"  {label:<46} {best_of(statement):>8.1f}ms   {access(lines):>18}   "
-          f"sort={sorted_(lines):<4} mergeappend={merge_append(lines)}")
+    print(
+        f"  {label:<46} {best_of(statement):>8.1f}ms   {access(lines):>18}   "
+        f"sort={sorted_(lines):<4} mergeappend={merge_append(lines)}"
+    )
     return lines
 
 
@@ -98,11 +100,9 @@ def test_qual_suppression():
     print("=" * 104)
     for label, statement in (
         ("unfiltered, LIMIT 20", UNFILTERED),
-        ("unfiltered, LIMIT 20 OFFSET 100000",
-         UNFILTERED.replace("LIMIT 20", "LIMIT 20 OFFSET 100000")),
+        ("unfiltered, LIMIT 20 OFFSET 100000", UNFILTERED.replace("LIMIT 20", "LIMIT 20 OFFSET 100000")),
         ("equality qual, LIMIT 20", equality),
-        ("equality qual, LIMIT 20 OFFSET 100000",
-         equality.replace("LIMIT 20", "LIMIT 20 OFFSET 100000")),
+        ("equality qual, LIMIT 20 OFFSET 100000", equality.replace("LIMIT 20", "LIMIT 20 OFFSET 100000")),
     ):
         print(f"  {label:<46} {best_of(statement):>8.1f}ms")
 

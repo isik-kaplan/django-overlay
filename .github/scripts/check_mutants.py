@@ -47,10 +47,7 @@ def mutated_files(tree=DEFAULT_TREE):
     which is the whole problem this answers.
     """
     tree = Path(tree)
-    return {
-        str(path.relative_to(tree))[: -len(".meta")]
-        for path in tree.rglob("*.py.meta")
-    }
+    return {str(path.relative_to(tree))[: -len(".meta")] for path in tree.rglob("*.py.meta")}
 
 
 def scoped_files(pyproject=DEFAULT_PYPROJECT):
@@ -194,25 +191,29 @@ def table(rows):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("paths", nargs="*", default=None,
-                        help="stats files, or directories to search for them")
-    parser.add_argument("--label", default=None,
-                        help="name for a single file's row (the shard being run)")
-    parser.add_argument("--summary", default=None,
-                        help="also append the table here (GITHUB_STEP_SUMMARY)")
-    parser.add_argument("--expect-every-shard", action="store_true",
-                        help="fail unless every shard in mutation_shards.py reported")
-    parser.add_argument("--phase-one", action="store_true",
-                        help="do not fail on mutants left alive; confirm_survivors.py settles "
-                             "those. The false-green guards still apply.")
-    parser.add_argument("--tree", default=DEFAULT_TREE,
-                        help="the mutants/ tree to check the results belong to the code")
+    parser.add_argument("paths", nargs="*", default=None, help="stats files, or directories to search for them")
+    parser.add_argument("--label", default=None, help="name for a single file's row (the shard being run)")
+    parser.add_argument("--summary", default=None, help="also append the table here (GITHUB_STEP_SUMMARY)")
+    parser.add_argument(
+        "--expect-every-shard", action="store_true", help="fail unless every shard in mutation_shards.py reported"
+    )
+    parser.add_argument(
+        "--phase-one",
+        action="store_true",
+        help="do not fail on mutants left alive; confirm_survivors.py settles "
+        "those. The false-green guards still apply.",
+    )
+    parser.add_argument(
+        "--tree", default=DEFAULT_TREE, help="the mutants/ tree to check the results belong to the code"
+    )
     options = parser.parse_args(argv)
 
     found = find_stats(options.paths or [DEFAULT_STATS])
     if not found:
-        print(f"no mutmut-cicd-stats.json found under {options.paths or [DEFAULT_STATS]} — "
-              "did `mutmut run` and `mutmut export-cicd-stats` both run?")
+        print(
+            f"no mutmut-cicd-stats.json found under {options.paths or [DEFAULT_STATS]} — "
+            "did `mutmut run` and `mutmut export-cicd-stats` both run?"
+        )
         return 1
 
     # Before reading a single number: are these results for this code, and for
@@ -246,8 +247,7 @@ def main(argv=None):
         absent = sorted(expected_shards() - {label for label, _ in rows})
         if absent:
             problems.append(
-                "no results from shard(s): " + ", ".join(absent)
-                + " -- the union is incomplete, so it cannot be a pass"
+                "no results from shard(s): " + ", ".join(absent) + " -- the union is incomplete, so it cannot be a pass"
             )
 
     rendered = table(rows) if rows else "(no results)"

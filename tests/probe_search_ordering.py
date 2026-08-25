@@ -96,8 +96,10 @@ def test_ordering_strategies():
     print("=" * 108)
     print("RELEVANCE ORDER vs INDEX ORDER, same filter, same LIMIT 20")
     print("=" * 108)
-    print(f"  {'token':>9} {'matches':>10} {'% view':>8} | {'ORDER BY ts_rank':>18} "
-          f"| {'ORDER BY score':>16} {'plan':>16} | {'speedup':>9}")
+    print(
+        f"  {'token':>9} {'matches':>10} {'% view':>8} | {'ORDER BY ts_rank':>18} "
+        f"| {'ORDER BY score':>16} {'plan':>16} | {'speedup':>9}"
+    )
     print("  " + "-" * 104)
 
     for divisor in DIVISORS:
@@ -111,8 +113,10 @@ def test_ordering_strategies():
         index_ms = best_of(by_index(VIEW, token))
         shape = ordering_shape(plan(by_index(VIEW, token)))
         share = 100.0 * matches / total
-        print(f"  {token:>9} {matches:>10,} {share:>7.2f}% | {rank_ms:>16.1f}ms "
-              f"| {index_ms:>14.1f}ms {shape:>16} | {rank_ms / index_ms:>8.1f}x")
+        print(
+            f"  {token:>9} {matches:>10,} {share:>7.2f}% | {rank_ms:>16.1f}ms "
+            f"| {index_ms:>14.1f}ms {shape:>16} | {rank_ms / index_ms:>8.1f}x"
+        )
 
     print("\n" + "=" * 108)
     print("PURE INDEX ORDER: no text filter at all, just ordered pagination")
@@ -121,15 +125,15 @@ def test_ordering_strategies():
     print("  'browse by rank' screen would use.")
     for label, statement in (
         ("ORDER BY score DESC LIMIT 20", f"SELECT id, score FROM {VIEW} ORDER BY score DESC LIMIT 20"),
-        ("ORDER BY score DESC LIMIT 20 OFFSET 10000",
-         f"SELECT id, score FROM {VIEW} ORDER BY score DESC LIMIT 20 OFFSET 10000"),
-        ("equality + ordered", f"SELECT id, score FROM {VIEW} WHERE city = 'city42' "
-                               f"ORDER BY score DESC LIMIT 20"),
+        (
+            "ORDER BY score DESC LIMIT 20 OFFSET 10000",
+            f"SELECT id, score FROM {VIEW} ORDER BY score DESC LIMIT 20 OFFSET 10000",
+        ),
+        ("equality + ordered", f"SELECT id, score FROM {VIEW} WHERE city = 'city42' ORDER BY score DESC LIMIT 20"),
     ):
         lines = plan(statement)
         idx, seq = scans(lines)
-        print(f"  {label:<44} {best_of(statement):>9.1f}ms   {ordering_shape(lines):>16}   "
-              f"idx={idx} seq={seq}")
+        print(f"  {label:<44} {best_of(statement):>9.1f}ms   {ordering_shape(lines):>16}   idx={idx} seq={seq}")
 
     print("\n" + "=" * 108)
     print("full plan: broad term, index-ordered")

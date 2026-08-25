@@ -97,15 +97,14 @@ def run(ctx):
 
     for case_label, leaves in CASES:
         section = harness.Section(
-            f"{case_label}: " + " AND ".join(next(iter(leaf)) for leaf in leaves), COLUMNS,
+            f"{case_label}: " + " AND ".join(next(iter(leaf)) for leaf in leaves),
+            COLUMNS,
         )
         truth = None
         for label, strategy, has_plain in STRATEGIES:
-            overlay, overlay_people = ctx.measure(
-                lambda s=strategy, ls=leaves: s(BenchPerson, ls), rounds=2)
+            overlay, overlay_people = ctx.measure(lambda s=strategy, ls=leaves: s(BenchPerson, ls), rounds=2)
             if has_plain:
-                plain, plain_people = ctx.measure(
-                    lambda s=strategy, ls=leaves: s(PlainPerson, ls), rounds=2)
+                plain, plain_people = ctx.measure(lambda s=strategy, ls=leaves: s(PlainPerson, ls), rounds=2)
             else:
                 # `overlay_fenced_in` resolves only through OverlayQuery, by
                 # design -- a plain model has no way to express this row.
@@ -115,8 +114,7 @@ def run(ctx):
 
             if overlay_people is not None and truth is not None and overlay_people != truth:
                 ctx.disagreements.append(
-                    f"{case_label} / {label}: overlay found {overlay_people:,} people, "
-                    f"expected {truth:,}"
+                    f"{case_label} / {label}: overlay found {overlay_people:,} people, expected {truth:,}"
                 )
 
             cells = {"overlay": overlay}
@@ -127,7 +125,8 @@ def run(ctx):
                 if not overlay.capped and not plain.capped and plain.ms:
                     ratio = f"x{overlay.ms / plain.ms:.1f}"
             section.add(
-                label, cells,
+                label,
+                cells,
                 plain=None if has_plain else "-",
                 ratio=ratio,
                 people="did not finish" if overlay_people is None else f"{overlay_people:,}",

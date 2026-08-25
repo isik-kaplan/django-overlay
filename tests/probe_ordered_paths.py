@@ -61,11 +61,7 @@ SHAPES = {
         f"SELECT {COLUMNS} FROM {SOURCE} s "
         f"WHERE NOT EXISTS (SELECT 1 FROM {BASE} b WHERE b.id = s.id AND b._overlay_deleted)"
     ),
-    "none": (
-        f"SELECT {COLUMNS} FROM {BASE} WHERE NOT _overlay_deleted "
-        f"UNION ALL "
-        f"SELECT {COLUMNS} FROM {SOURCE} s"
-    ),
+    "none": (f"SELECT {COLUMNS} FROM {BASE} WHERE NOT _overlay_deleted UNION ALL SELECT {COLUMNS} FROM {SOURCE} s"),
 }
 
 
@@ -110,10 +106,12 @@ def test_ordered_paths():
 
     queries = {
         "ORDER BY score DESC LIMIT 20": "SELECT id, score FROM shape_{} ORDER BY score DESC LIMIT 20",
-        "ORDER BY score DESC LIMIT 20 OFFSET 5000":
-            "SELECT id, score FROM shape_{} ORDER BY score DESC LIMIT 20 OFFSET 5000",
-        "WHERE city=.. ORDER BY score DESC LIMIT 20":
-            "SELECT id, score FROM shape_{} WHERE city = 'city42' ORDER BY score DESC LIMIT 20",
+        "ORDER BY score DESC LIMIT 20 OFFSET 5000": (
+            "SELECT id, score FROM shape_{} ORDER BY score DESC LIMIT 20 OFFSET 5000"
+        ),
+        "WHERE city=.. ORDER BY score DESC LIMIT 20": (
+            "SELECT id, score FROM shape_{} WHERE city = 'city42' ORDER BY score DESC LIMIT 20"
+        ),
     }
 
     print("=" * 104)
@@ -126,8 +124,7 @@ def test_ordered_paths():
         for name in SHAPES:
             statement = template.format(name)
             lines = plan(statement)
-            print(f"    {name:>12} {best_of(statement):>9.1f}ms {shape_of(lines):>18} "
-                  f"{rows_read(lines):>14,}")
+            print(f"    {name:>12} {best_of(statement):>9.1f}ms {shape_of(lines):>18} {rows_read(lines):>14,}")
 
     print("\n" + "=" * 104)
     print("DIAGNOSTIC: does an ordered plan even exist? (enable_sort = off)")
@@ -143,8 +140,9 @@ def test_ordered_paths():
         try:
             lines = plan(statement)
             forced_ms = best_of(statement)
-            print(f"    {name:>12} {default_ms:>9.1f}ms {forced_ms:>9.1f}ms {shape_of(lines):>18} "
-                  f"{rows_read(lines):>14,}")
+            print(
+                f"    {name:>12} {default_ms:>9.1f}ms {forced_ms:>9.1f}ms {shape_of(lines):>18} {rows_read(lines):>14,}"
+            )
         finally:
             sql("SET enable_sort = on")
 
