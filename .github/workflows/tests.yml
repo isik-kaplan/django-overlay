@@ -21,20 +21,23 @@ jobs:
   # workflows, each with its own maintainer gate and its own concurrency rules,
   # because a four-hour job and a five-minute matrix want opposite answers to
   # "should a new push cancel this?".
-  # Nothing ran ruff on CI until now, and the configuration is why it went
-  # unnoticed for so long: `fix = true` in pyproject.toml means a bare
-  # `ruff check` edits the files and then reports what it could not fix, so a
-  # person running it locally sees their tree quietly corrected and a clean
-  # exit. Twelve violations reached master that way -- six unsorted imports,
-  # three unused imports and three long lines.
+  # Nothing linted on CI until now, and two separate things hid that.
   #
-  # Hence --no-fix, and it is the whole point of this job. Without it CI would
-  # rewrite files it is about to throw away and pass on nine of the twelve,
-  # which is a lint job that reports a subset of the truth.
+  # `fix = true` in pyproject.toml means a bare `ruff check` edits the files and
+  # then reports only what it could not fix, so running it locally shows a tree
+  # quietly corrected and a clean-looking exit. And .pre-commit-config.yaml has
+  # been in the repository since the first commit, but installing it writes to
+  # .git/hooks/, which is not tracked -- so it was configured, committed, and
+  # inert in every checkout that never ran `pre-commit install`.
   #
-  # Its own job rather than a step in `test`: it needs no database and no
-  # matrix, it finishes in seconds, and a red lint result should not be mixed
-  # in with which Python version failed.
+  # This runs the same hooks the config already declared, so CI and a developer
+  # with the hook installed cannot disagree. --all-files because CI has no
+  # staged set to work from, and --show-diff-on-failure so a red run shows the
+  # edit the hook wanted rather than only naming the rule.
+  #
+  # It is its own job rather than a step in `test`: no database, no matrix,
+  # seconds to run, and a lint failure should not be reported as which Python
+  # version broke.
   lint:
     runs-on: ubuntu-22.04
     steps:
@@ -48,8 +51,17 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Ruff
-        run: uv run ruff check --no-fix .
+      # Each hook builds its own isolated environment on first use, which is
+      # most of this job's runtime. Keyed on the config, so a version bump in
+      # it rebuilds and nothing else does.
+      - name: Cache pre-commit environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Pre-commit
+        run: uv run pre-commit run --all-files --show-diff-on-failure
 
   test:
     strategy:

@@ -4,8 +4,20 @@ Needs a real Postgres instance — no SQLite path.
 
 ```bash
 uv sync
+pre-commit install          # see below -- this is not automatic
 POSTGRES_USER=postgres uv run pytest
 ```
+
+`pre-commit install` is a real step, not a nicety. `.pre-commit-config.yaml`
+has been in the repository since the first commit, but installing it writes to
+`.git/hooks/`, which git does not track -- so a fresh clone has the config and
+no hook. Skip it and ruff, ruff-format and sqlfluff simply never run for you.
+
+It is easy not to notice, because `[tool.ruff]` sets `fix = true`: a bare
+`ruff check` edits your files and reports only what it could not fix, so it
+exits looking clean whether or not anything was wrong. Use `--no-fix` when you
+want an answer rather than a correction. CI runs the same hooks with
+`pre-commit run --all-files`, so the hook and CI cannot disagree.
 
 Covers `NEGATIVE_ID`/`UUID4`/`UUID7_POLYFILL` (native `UUID7` needs Postgres
 18+, covered only by pure-Python/SQL-string unit tests) across a
