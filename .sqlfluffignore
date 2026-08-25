@@ -2,3 +2,10 @@
 # statement elsewhere — there's no standalone statement here for sqlfluff
 # to parse on its own.
 django_overlay/sql_templates/pk_defaults/
+
+# Carries psycopg bind placeholders (`= %s`) in its WHERE clause. Those are not
+# SQL and no dialect parses them, so sqlfluff reports an unparsable section and
+# then lints whatever half-tree it managed to build -- which is where its
+# aliasing and join-order findings on this file came from. A file it cannot
+# parse is a file it cannot judge.
+django_overlay/sql_templates/introspection/table_indexes.sql.j2
