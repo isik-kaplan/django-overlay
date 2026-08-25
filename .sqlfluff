@@ -2,7 +2,7 @@
 dialect = postgres
 templater = jinja
 max_line_length = 120
-library_path = sqlfluff_libs
+library_path = sqlfluff_libs/libs
 # AM04: ambiguous column count in a SELECT * (n/a, we always name columns).
 # LT02/LT03/LT05/LT14/CV06/CV07/CP01: pure layout/formatting rules that
 # fight the compact-but-valid whitespace real Jinja for-loops produce
@@ -26,3 +26,11 @@ table_name = note
 negate = True
 source = {"schema": "public", "table": "personsource", "id_column": "id", "extra_where": "", "negate": True}
 target_tables = [{"schema": "public", "table": "person", "id_column": "id", "negate": False}, {"schema": "public", "table": "personsource", "id_column": "id", "negate": True}]
+origin_column = _overlay_origin
+origin_base = base
+origin_source = source
+pk_sequence = person_id_seq
+referencing_pk = id
+target_pk = id
+target_table = person
+target_view = person_view
