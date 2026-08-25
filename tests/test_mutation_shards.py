@@ -160,13 +160,18 @@ def workflow_matrix(key):
     return {value.strip() for value in found.group(1).split(",")}
 
 
-def probe_regions():
-    """The regions the unreachable-mutant probe actually has mutations for."""
+def probe_mutants():
+    """The unreachable-mutant probe's own list, imported by path."""
     path = ROOT / "tests" / "probe_unreachable_mutants.py"
     spec = importlib.util.spec_from_file_location("probe_unreachable_mutants", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return {mutant[0] for mutant in module.MUTANTS}
+    return module.MUTANTS
+
+
+def probe_regions():
+    """The regions the unreachable-mutant probe actually has mutations for."""
+    return {mutant[0] for mutant in probe_mutants()}
 
 
 def test_every_unreachable_region_is_dispatched_by_the_workflow():
@@ -175,6 +180,34 @@ def test_every_unreachable_region_is_dispatched_by_the_workflow():
     assert not absent, (
         f"region(s) {sorted(absent)} have mutations in probe_unreachable_mutants.py "
         "but no job in mutation.yml, so nothing runs them"
+    )
+
+
+# docs/ is not in mutmut's also_copy, so it does not exist inside mutants/ and
+# the suite that runs there cannot read it. Skipped rather than copied: adding a
+# path to also_copy changes the [tool.mutmut] table, which is in the mutation
+# cache-key fingerprint, so it would discard every shard's phase-one tree --
+# hours of settled verdicts -- to let a documentation assertion run somewhere it
+# has nothing to say. Nothing under docs/ is mutated, and the ordinary test run
+# covers it. ROOT.name is the detector because the copied tree is literally the
+# directory called "mutants"; a missing-file check would skip silently forever
+# if the docs were ever moved.
+@pytest.mark.skipif(
+    ROOT.name == "mutants",
+    reason="docs/ is not copied into the mutant tree, and nothing in it is mutated",
+)
+def test_the_documented_mutation_count_is_the_real_one():
+    """The prose in DEVELOPMENT.md carries a number, and numbers in prose rot.
+
+    It said "~30 hand-chosen mutations" while the list held 43. Nothing was
+    wrong with the harness -- the count simply stopped being true and no reader
+    could tell. A count worth writing down is worth asserting.
+    """
+    docs = (ROOT / "docs" / "development" / "DEVELOPMENT.md").read_text()
+    total = len(probe_mutants())
+    assert f"{total} hand-chosen mutations" in docs, (
+        f"DEVELOPMENT.md does not say there are {total} hand-chosen mutations; "
+        "probe_unreachable_mutants.py has grown or shrunk since it was written"
     )
 
 
