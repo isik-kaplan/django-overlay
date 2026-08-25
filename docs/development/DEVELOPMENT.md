@@ -162,11 +162,23 @@ POSTGRES_USER=postgres uv run python tests/probe_unreachable_mutants.py
 POSTGRES_USER=postgres uv run python tests/probe_unreachable_mutants.py sql operations
 ```
 
-~30 hand-chosen mutations, one suite run each, exit code = number of unexpected
-results. It runs in CI. Unlike mutmut's generated mutants these are picked for
-meaning, so a survivor is always worth reading — and each one's `old` string
-must match the source exactly once, so a refactor that moves the code reports
-STALE rather than silently testing nothing.
+43 hand-chosen mutations, one suite run each, exit code = number of unexpected
+results. Unlike mutmut's generated mutants these are picked for meaning, so a
+survivor is always worth reading — and each one's `old` string must match the
+source exactly once, so a refactor that moves the code reports STALE rather
+than silently testing nothing.
+
+In CI it is one job per region, for the same reason the mutation run is one job
+per subsystem: it is a serial loop paying a suite pass per mutation, and as a
+single job it was the longest thing in the mutation workflow — 660s to 905s
+across four runs, ahead of every mutation shard. Measured serially and locally
+the regions cost: metaclass 196s, sql 163s, uniqueness 41s, operations 32s,
+sources 3s. Note that `sql` has the most mutations (17 of 43) and is not the
+dearest, because `-x` means a killed mutation only costs as much as the suite
+needs to reach the test that objects. The region list in
+`.github/workflows/mutation.yml` is asserted against the probe in both
+directions by `tests/test_mutation_shards.py`, so a new region cannot end up
+running in no job.
 
 A mutation that provably *cannot* be killed is marked `"equivalent"` in the
 list with a comment saying why, and the harness then asserts it survives — so
