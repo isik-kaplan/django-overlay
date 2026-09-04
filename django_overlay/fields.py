@@ -16,18 +16,30 @@ class OverlayForeignKey(models.ForeignKey):
     integrity instead comes from a constraint trigger (see
     operations.AddOverlayConstraint)."""
 
-    def __init__(self, to, *args, **kwargs):
+    def __init__(self, to, *args, partition_column: str | None = None, **kwargs):
         if "db_constraint" in kwargs:
             raise OverlayConfigurationError(
                 "OverlayForeignKey always sets db_constraint=False (Postgres can't hold a real FK "
                 "against a view) — don't pass db_constraint yourself."
             )
         kwargs["db_constraint"] = False
+        # Which column on *this* model carries the target source's partition
+        # key. Only the insert-side trigger needs it, and only it needs telling
+        # — see constraint_trigger.sql.j2 for why the other probes find the key
+        # themselves. Omitted, the probe fans out across every partition: still
+        # correct, just paying for a scan of all of them on every write.
+        # `manage.py check` says so rather than leaving it to be discovered.
+        self.partition_column = partition_column
         super().__init__(to, *args, **kwargs)
 
     def deconstruct(self):
         name, path, args, kwargs = super().deconstruct()
         kwargs.pop("db_constraint", None)
+        if self.partition_column is not None:
+            # Serialized, because the trigger body is written from migration
+            # state: a field that lost this on the round trip would rebuild
+            # the unpruned probe the next time the migration was replayed.
+            kwargs["partition_column"] = self.partition_column
         return name, path, args, kwargs
 
     def trigger_name(self, model) -> str:
@@ -41,10 +53,12 @@ class OverlayForeignKey(models.ForeignKey):
 
     def target_tables(self, tenant_schema: str) -> list[dict]:
         """The target's base table plus its source, if any — see target_tables_for()."""
-        return target_tables_for(self.remote_field.model, tenant_schema)
+        return target_tables_for(self.remote_field.model, tenant_schema, partition_column=self.partition_column)
 
 
-def target_tables_for(target, tenant_schema: str, soft_delete: bool | None = None) -> list[dict]:
+def target_tables_for(
+    target, tenant_schema: str, soft_delete: bool | None = None, partition_column: str | None = None
+) -> list[dict]:
     """[{"schema", "table", "id_column", "negate", "soft_delete"}, ...] for
     `target`'s base table (never negated) and its source (negated for a
     NEGATIVE_ID target). Always both: an overlay model
@@ -55,7 +69,14 @@ def target_tables_for(target, tenant_schema: str, soft_delete: bool | None = Non
     `soft_delete` can be overridden for the same reason the column list is
     taken from historical state: a trigger rebuilt while replaying an older
     migration must not reference `_overlay_deleted` before the migration that
-    adds it has run."""
+    adds it has run.
+
+    `partition_column` is the referencing model's column holding the target
+    source's partition key. It lands on the source entry only — the base table
+    is an ordinary unpartitioned table, so a key predicate there would filter
+    correctly and prune nothing. Both halves have to be present for the entry
+    to appear: a source with no declared key has nothing to prune on, and a
+    key with no local column has no value to prune by."""
     masks = target._overlay_meta.soft_delete if soft_delete is None else soft_delete
     base = {
         "schema": tenant_schema,
@@ -73,6 +94,11 @@ def target_tables_for(target, tenant_schema: str, soft_delete: bool | None = Non
             "id_column": source.id_column,
             "negate": negates_source_ids(target._overlay_meta.strategy),
             "soft_delete": False,
+            "partition": (
+                {"column": source.partition_key, "local_column": partition_column}
+                if source.partition_key and partition_column
+                else None
+            ),
             # A tombstone hides the source row from the view, so it has to hide
             # it from the FK check too. Without this the source branch accepts
             # a row the view will not return, and you get a reference you can
