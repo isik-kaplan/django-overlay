@@ -17,12 +17,18 @@ to leave everything exactly as it was, because that is what makes the feature
 free for every project that does not partition.
 """
 
+import io
 from unittest import mock
 
 import pytest
+from django.core.management import call_command
 from django.db import connection, models
 
-from django_overlay.checks import _partition_column_problems, _partition_key_problems
+from django_overlay.checks import (
+    _partition_column_problems,
+    _partition_key_problems,
+    check_partition_declarations,
+)
 from django_overlay.fields import OverlayForeignKey, target_tables_for
 from django_overlay.introspection import partition_summary
 from django_overlay.sources import SourceTable
@@ -149,8 +155,7 @@ def test_a_partition_key_the_model_has_no_field_for_is_an_error():
         problems,
         "django_overlay.E004",
         Person,
-        "Person's source declares partition_key='not_a_column', but the model has no field with "
-        "that column.",
+        "Person's source declares partition_key='not_a_column', but the model has no field with that column.",
         "The view selects 'not_a_column' from both branches under one name, so the model needs a "
         "field for it before any trigger can reference it. Add the field, or correct the "
         "partition_key.",
@@ -334,3 +339,97 @@ def test_an_index_created_on_the_parent_is_not_reported_as_unattached(partitione
 
     assert "btree (id)" in shapes
     assert "btree (id)" not in {index["shape"] for index in summary["unattached"]}
+
+
+# ------------------------------------------------- through the operator's hands
+#
+# Everything above reaches inside: the two problem-finders are called directly,
+# and the summary is read as a dict. Neither is how any of this is actually
+# encountered. A partition declaration is met through `manage.py check` and
+# `manage.py show_source_indexes`, and both of those have a layer of their own
+# -- a registered check walking the whole app registry, and a command turning a
+# summary into something a person reads. That layer is where a declaration that
+# is right in isolation goes missing in practice.
+
+
+def test_the_registered_check_finds_nothing_in_an_unpartitioned_project(db):
+    """The premise the whole feature rests on: a project that does not
+    partition pays nothing and is told nothing. The check walks every model in
+    the registry to establish it."""
+    assert check_partition_declarations(None) == []
+
+
+def test_the_registered_check_surfaces_a_key_with_no_field_behind_it(db):
+    """E004 as `manage.py check` actually produces it, rather than as
+    `_partition_key_problems()` returns it. The check has to find the model on
+    its own -- a rule that only fires when handed the right model is a rule
+    that never fires."""
+    with partitioned(Person, BAD_KEY):
+        errors = check_partition_declarations(None)
+
+    keys = [error for error in errors if error.id == "django_overlay.E004"]
+    assert len(keys) == 1
+    assert "not_a_column" in keys[0].msg
+    # The W003s alongside it are correct and not incidental: a key was
+    # declared, so every field pointing at Person is now an unpruned probe.
+    # Both rules read the same declaration and neither suppresses the other.
+    assert {error.id for error in errors} == {"django_overlay.E004", "django_overlay.W003"}
+
+
+def test_the_registered_check_warns_about_an_undeclared_partition_column(db):
+    """W003 through the same door, and this one has to reach a *different*
+    model from the one that was patched: the declaration is on Person's source
+    and the fault is on every field pointing at Person. A check that only
+    looked at the model it was told about would miss all of them."""
+    with partitioned(Person, PARTITIONED):
+        warnings = check_partition_declarations(None)
+
+    assert warnings
+    assert {warning.id for warning in warnings} == {"django_overlay.W003"}
+    referenced = " ".join(warning.msg for warning in warnings)
+    assert "PersonAddressThrough.person" in referenced
+    assert "PersonProfile.person" in referenced
+
+
+def report(**options) -> str:
+    out = io.StringIO()
+    call_command("show_source_indexes", stdout=out, **options)
+    return out.getvalue()
+
+
+def test_the_command_reports_a_partitioned_source_and_what_it_costs(partitioned_table):
+    """The half of `show_source_indexes` a partitioned source adds. Without the
+    declaration the operator needs three facts in one place: that the parent is
+    partitioned, how many partitions there are -- that count is the multiplier
+    on every unpruned probe -- and that nothing is pruning."""
+    with partitioned(Person, SourceTable(schema="public", table="probe_people")):
+        output = report(model="testapp.Person")
+
+    assert "  partitioned parent, 3 partitions, key not declared" in output
+    assert (
+        "      every probe this package generates fans out across all of them — set SourceTable(partition_key=...)"
+    ) in output
+
+
+def test_the_command_reports_an_index_that_covers_only_some_partitions(partitioned_table):
+    """The finding parity structurally cannot produce. `probe_people_ca_email`
+    exists on one partition of three, so the parent reports the shape as
+    absent -- and the ordinary MISSING line would tell you to create an index
+    that is already there on a third of the table."""
+    with partitioned(Person, SourceTable(schema="public", table="probe_people")):
+        output = report(model="testapp.Person")
+
+    assert "UNATTACHED  btree (email) — on 1 of 3 partitions" in output
+
+
+def test_the_command_names_the_key_once_it_is_declared(partitioned_table):
+    """And the state to aim for. The same table, declared, reports the key
+    instead of the warning -- so the output distinguishes 'partitioned and
+    handled' from 'partitioned and not', which is the whole point of printing
+    it."""
+    declared = SourceTable(schema="public", table="probe_people", partition_key="first_name")
+    with partitioned(Person, declared):
+        output = report(model="testapp.Person")
+
+    assert "key first_name" in output
+    assert "fans out across all of them" not in output
