@@ -542,6 +542,79 @@ def test_overlay_selective_stops_at_the_depth_limit():
     assert _selective_declared(_Deep(), _depth=_MAX_SUBQUERY_DEPTH + 1) is True
 
 
+class _Nested:
+    """A stand-in for one Query in a chain of them: the attributes
+    `_nested_queries()` reads, and nothing else.
+
+    Real querysets cannot be nested to an arbitrary depth from a test without
+    building the queries to go with them, and the depth limit is the one thing
+    about this walk that only shows up at a depth nothing legitimate reaches.
+    """
+
+    alias_map = {}
+    where = None
+
+    def __init__(self, selective=False, inner=None):
+        self._overlay_selective = selective
+        self.annotations = {"inner": inner} if inner is not None else {}
+
+
+def marked_at(depth):
+    """A chain whose only selective node sits exactly `depth` levels down."""
+    node = _Nested(selective=True)
+    for _ in range(depth):
+        node = _Nested(inner=node)
+    return node
+
+
+def test_a_scope_declared_at_the_last_level_the_walk_reaches_is_read():
+    """The limit is a limit on how far to look, and the level at it is inside
+    it. Off by one here and the deepest scope a caller can legitimately declare
+    reads as not declared -- the lever silently stops working at a depth nobody
+    would think to test by hand."""
+    assert _selective_declared(marked_at(_MAX_SUBQUERY_DEPTH + 1)) is True
+
+
+def test_a_scope_declared_past_the_limit_is_not_read():
+    """And the level past it is outside it, which is what makes the bound a
+    bound: a walk that keeps its own count wrong, or does not keep one at all,
+    finds this and never terminates on a cycle."""
+    assert _selective_declared(marked_at(_MAX_SUBQUERY_DEPTH + 2)) is False
+
+
+def test_a_query_that_never_declared_the_flag_is_not_selective():
+    """Only OverlayQuery carries `_overlay_selective`; a plain model's Query
+    has never heard of it, and the walk reaches plenty of them. Absent has to
+    read as "not declared", which is the opposite of what a default of True
+    would make it."""
+    assert _selective_declared(PlainPerson.objects.all().query) is False
+
+
+def test_a_node_carrying_no_annotations_is_walked_rather_than_raised_on():
+    """`_nested_queries()` reads whatever came off a where-node by duck-typing,
+    so it meets objects that are not full Query instances. The defaults are
+    what make that safe."""
+
+    class _Bare:
+        alias_map = {}
+        where = None
+
+    assert _nested_queries(_Bare()) == []
+
+
+def test_an_alias_map_entry_with_no_table_name_is_skipped():
+    """The same defensiveness one level up: `_overlay_views_read()` reads
+    `table_name` off every entry in alias_map, and an entry that has none is
+    not an overlay view rather than an error."""
+
+    class _Query:
+        alias_map = {"x": object()}
+        where = None
+        annotations = {}
+
+    assert _overlay_views_read(_Query()) == set()
+
+
 def test_overlay_selective_changes_the_plan_and_not_the_rows():
     """The same bar the ban itself is held to. A lever that altered results
     would not be a plan hint, and the m2m row multiplicity is what makes this

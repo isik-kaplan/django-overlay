@@ -316,3 +316,14 @@ reason = """
 The same call with output_field removed altogether. Identical reasoning to
 mutmut_9: Value infers BooleanField from False.
 """
+
+["django_overlay.models.planning.x__selective_declared__mutmut_4"]
+reason = """
+getattr(query, "_overlay_selective", False) -> the same with None as the
+default. The result is read only as the condition of an `if`, where False and
+None are both falsy, so nothing downstream can tell them apart. The same shape
+as the three exemptions above it, and out of a pragma's reach for the same
+reason -- the mutation belongs to a keyword-less argument inside the call, and
+a pragma on the line would also suppress the default-of-True mutation next to
+it, which a test does kill.
+"""
