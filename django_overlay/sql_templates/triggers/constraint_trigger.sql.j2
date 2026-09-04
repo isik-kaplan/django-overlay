@@ -1,5 +1,13 @@
 CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
 BEGIN
+  -- The one probe in this package that cannot find the target's partition key
+  -- on its own. This trigger fires on the *referencing* table, so NEW is a
+  -- referencing row: `NEW.state` here is the phone's state, which is the
+  -- person's state only if somebody says so. Hence
+  -- OverlayForeignKey(partition_column=...), and hence `t.partition` being
+  -- absent -- an unpruned probe across every partition, correct but slow --
+  -- rather than guessed at, when it is not declared.
+  --
   -- Deferred to COMMIT, so by the time this runs NEW is how the row looked
   -- when the event was queued, not necessarily how it looks now. Postgres
   -- doesn't drop queued events for rows deleted later in the same
@@ -22,7 +30,7 @@ BEGIN
      AND NEW.{{ column | qi }} IS NOT NULL
      AND NOT (
        {% for t in target_tables -%}
-       EXISTS (SELECT 1 FROM {{ t.schema | qi }}.{{ t.table | qi }} WHERE {{ t.id_column | qi }} = {{ "-" if t.negate }}NEW.{{ column | qi }}{% if t.soft_delete %} AND NOT _overlay_deleted{% endif %}{% if t.masked_by %} AND NOT EXISTS (SELECT 1 FROM {{ t.masked_by.schema | qi }}.{{ t.masked_by.table | qi }} WHERE {{ t.masked_by.table | qi }}.{{ t.masked_by.id_column | qi }} = NEW.{{ column | qi }} AND {{ t.masked_by.table | qi }}._overlay_deleted){% endif %})
+       EXISTS (SELECT 1 FROM {{ t.schema | qi }}.{{ t.table | qi }} WHERE {{ t.id_column | qi }} = {{ "-" if t.negate }}NEW.{{ column | qi }}{% if t.partition %} AND {{ t.partition.column | qi }} = NEW.{{ t.partition.local_column | qi }}{% endif %}{% if t.soft_delete %} AND NOT _overlay_deleted{% endif %}{% if t.masked_by %} AND NOT EXISTS (SELECT 1 FROM {{ t.masked_by.schema | qi }}.{{ t.masked_by.table | qi }} WHERE {{ t.masked_by.table | qi }}.{{ t.masked_by.id_column | qi }} = NEW.{{ column | qi }} AND {{ t.masked_by.table | qi }}._overlay_deleted){% endif %})
        {%- if not loop.last %} OR {% endif %}
        {% endfor -%}
      )

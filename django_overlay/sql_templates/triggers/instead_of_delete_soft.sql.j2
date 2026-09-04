@@ -17,6 +17,12 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM {{ source.schema | qi }}.{{ source.table | qi }}
     WHERE {{ source.id_column | qi }} = {{ "-" if source.negate }}OLD.{{ pk_column | qi }}
+      {%- if source.partition_key %}
+      -- The source is partitioned and OLD is a view row, so it already carries
+      -- the key. Without this the "one indexed lookup per deleted row" above
+      -- is one lookup *per partition* per deleted row.
+      AND {{ source.partition_key | qi }} = OLD.{{ source.partition_key | qi }}
+      {%- endif %}
   ) THEN
     UPDATE {{ tenant_schema | qi }}.{{ base_table | qi }} SET _overlay_deleted = TRUE WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
     IF NOT FOUND THEN

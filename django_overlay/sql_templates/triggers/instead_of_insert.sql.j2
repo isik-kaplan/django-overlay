@@ -10,6 +10,11 @@ BEGIN
   IF NEW.{{ pk_column | qi }} IS NOT NULL AND EXISTS (
     SELECT 1 FROM {{ source.schema | qi }}.{{ source.table | qi }}
     WHERE {{ source.id_column | qi }} = {{ "-" if source.negate }}NEW.{{ pk_column | qi }}
+      {%- if source.partition_key %}
+      -- NEW is a view row, so the key is in scope and the collision check
+      -- prunes to one partition. See SourceTable.partition_key.
+      AND {{ source.partition_key | qi }} = NEW.{{ source.partition_key | qi }}
+      {%- endif %}
   ) THEN
     RAISE EXCEPTION 'overlay: {{ view_name }} is declared overridable = False, so a row cannot be inserted with the id of an existing source row'
       USING ERRCODE = '0A000',
