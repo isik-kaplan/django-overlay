@@ -25,3 +25,38 @@ def compare_indexes(source_indexes: list[dict], base_indexes: list[dict]) -> tup
     missing_locally = [index for index in source_indexes if index["shape"] not in base_shapes]
     missing_at_source = [index for index in base_indexes if index["shape"] not in source_shapes]
     return missing_locally, missing_at_source
+
+
+# relkind for a declaratively-partitioned parent. Ordinary tables are "r".
+PARTITIONED = "p"
+
+
+def partition_summary(cursor, schema: str, table: str) -> dict | None:
+    """`{"partitions": n, "unattached": [{"shape", "on_partitions"}, ...]}` for
+    a partitioned parent, or None for an ordinary table.
+
+    Two things parity cannot see without this.
+
+    A partitioned parent is transparent to `table_indexes()` in the direction
+    that flatters it: `CREATE INDEX` on the parent creates a partitioned index
+    the catalogue reports under the parent, so the shape shows up and every
+    partition really does have it. The direction it hides is the other one --
+    an index built directly on one partition is attached to nothing, so the
+    parent reports nothing and parity calls the shape missing everywhere when
+    it exists on some. `unattached` is exactly that set, with how many
+    partitions carry each shape, so half-covered is distinguishable from
+    absent.
+
+    The count is worth reporting on its own, because it is the multiplier on
+    every probe that cannot prune. A lookup with no partition key in it is not
+    one index scan, it is `partitions` of them.
+    """
+    cursor.execute(render("introspection/table_partitions.sql.j2"), [schema, table])
+    row = cursor.fetchone()
+    if row is None or row[0] != PARTITIONED:
+        return None
+    cursor.execute(render("introspection/unattached_partition_indexes.sql.j2"), [schema, table])
+    return {
+        "partitions": row[1],
+        "unattached": [{"shape": shape, "on_partitions": count} for shape, count in cursor.fetchall()],
+    }
