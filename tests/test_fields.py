@@ -146,7 +146,7 @@ def test_the_source_entry_never_carries_soft_delete():
     targets = AddressNote._meta.get_field("address").target_tables("public")
     source = [t for t in targets if t["table"] == "testapp_shared_addresssource"][0]
 
-    assert set(source) == {"schema", "table", "id_column", "negate", "soft_delete", "masked_by"}
+    assert set(source) == {"schema", "table", "id_column", "negate", "soft_delete", "masked_by", "partition"}
     assert source["soft_delete"] is False
 
 
