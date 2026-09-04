@@ -34,3 +34,6 @@ referencing_pk = id
 target_pk = id
 target_table = person
 target_view = person_view
+# A declared partition key, so referenced_row_trigger.sql.j2 renders the pruning
+# branch rather than dying on `Undefined | qi`.
+partition_key = state
