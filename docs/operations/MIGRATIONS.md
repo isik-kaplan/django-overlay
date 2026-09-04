@@ -36,3 +36,10 @@ One thing this can't catch: a tenant's configured source changing (e.g.
 moved vendors) without a field change — that's a data change, not a schema
 change. Call `django_overlay.sync.resync_view(model)` yourself when that
 happens, or run `manage.py resync_overlay_views app_label.ModelName [...]`.
+Both rebuild the view, its `INSTEAD OF` triggers *and* every constraint trigger
+whose body names that source, in one transaction.
+
+If the new source is a rebuilt copy of the old one rather than a different
+vendor entirely — a blue-green load — `resync_overlay_views` is not enough on
+its own, because nothing in it asks whether the new table still means the same
+thing by an id. See [SOURCE_SWAPS.md](SOURCE_SWAPS.md).

@@ -157,3 +157,7 @@ Two things to know:
 - **A source row deleted by its owner is out of reach.** We don't own that
   table and can't put a trigger on it, so if the vendor deletes a row your
   references to it dangle. Nothing in this design can prevent that.
+- **The same is true of the source changing wholesale.** Every check above
+  fires on a write to *your* table, so replacing the source table underneath
+  them can invalidate all of them without a single trigger firing. Doing that
+  deliberately is [SOURCE_SWAPS.md](SOURCE_SWAPS.md).
