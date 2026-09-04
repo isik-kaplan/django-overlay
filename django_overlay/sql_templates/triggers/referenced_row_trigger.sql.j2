@@ -15,6 +15,13 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM {{ tenant_schema | qi }}.{{ target_view | qi }}
     WHERE {{ target_pk | qi }} = OLD.{{ target_pk | qi }}
+      {%- if partition_key %}
+      -- This trigger fires on the target's own base table, so OLD is a target
+      -- row and the partition key needs no declaration on the referencing
+      -- side to be in scope. The predicate reaches the view's source branch
+      -- and prunes it; the base branch is not partitioned and ignores it.
+      AND {{ partition_key | qi }} = OLD.{{ partition_key | qi }}
+      {%- endif %}
   ) THEN
     RETURN NULL;
   END IF;
