@@ -51,6 +51,12 @@ MEASURED = {
     # this suite's cells run past the cap. 0.05 and 3.0 are extrapolated from
     # those two points, which are close to linear in rows.
     "fence": {0.05: 6, 0.3: 25, 1.0: 70, 3.0: 220},
+    # The flattest curve here, and for a reason worth knowing: almost all of
+    # this suite's time is building its own tables, which is linear in rows,
+    # and almost none of it is the probes -- the pruned column does not move
+    # with scale at all. 0.05, 0.3 and 1.0 measured directly; 3.0 extrapolated
+    # linearly from the build, which is what dominates.
+    "partitions": {0.05: 2, 0.3: 5, 1.0: 17, 3.0: 50},
 }
 
 # Cold graph build, in seconds. Independent of the cap -- it runs no queries
