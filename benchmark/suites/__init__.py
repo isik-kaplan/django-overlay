@@ -31,6 +31,7 @@ SUITE_NAMES = (
     "ban",
     "hops",
     "fence",
+    "partitions",
 )
 
 # What a smoke run does: the two suites that would catch a genuine breakage,
