@@ -26,6 +26,7 @@ from django_overlay.models import (
     _nested_queries,
     _overlay_views_joined,
     _overlay_views_read,
+    _selective_declared,
     planning,
 )
 from tests.testapp.models import (
@@ -448,3 +449,122 @@ def test_a_deeply_chained_query_still_answers():
         inner = BenchPerson.objects.filter(pk__in=inner.values("pk"))
     assert _overlay_views_joined(inner.query) >= 1
     assert list(inner[:1]) == []
+
+
+# --------------------------------------------------------- overlay_selective()
+#
+# The caller's lever for the one thing shape cannot see. The ban is right for a
+# broad multi-hop filter and wrong for an identity search of the same shape, and
+# nothing at compile time separates them -- so the separation is declared.
+
+
+def test_overlay_selective_lifts_the_ban():
+    """The shape the lever exists for: two hops, which the threshold bans
+    unconditionally, declared selective by the caller."""
+    banned = BenchPerson.objects.filter(**TWO_HOPS)
+    lifted = BenchPerson.objects.filter(**TWO_HOPS).overlay_selective()
+
+    assert any(BAN in statement for statement in statements(banned))
+    assert not any(BAN in statement for statement in statements(lifted))
+
+
+def test_overlay_selective_lifts_the_limited_ban_too():
+    """The sliced threshold is the lower of the two, so a single hop with a
+    LIMIT is banned. An identity search that pages its results is exactly that
+    shape and wants the same lever."""
+    paged = Roster.objects.filter(members__name="m").order_by("id")[:20]
+    lifted = Roster.objects.filter(members__name="m").overlay_selective().order_by("id")[:20]
+
+    assert any(BAN in statement for statement in statements(paged))
+    assert not any(BAN in statement for statement in statements(lifted))
+
+
+def test_overlay_selective_is_position_independent():
+    """Read once at compile time, so it does not matter where in the chain it
+    goes -- including before the filter that tips the query over the
+    threshold."""
+    before = BenchPerson.objects.overlay_selective().filter(**TWO_HOPS)
+    after = BenchPerson.objects.filter(**TWO_HOPS).overlay_selective()
+
+    assert not any(BAN in statement for statement in statements(before))
+    assert not any(BAN in statement for statement in statements(after))
+
+
+def test_overlay_selective_survives_cloning():
+    """`Query.clone()` copies __dict__, and every queryset method chains
+    through it. A flag that did not survive would silently stop working the
+    moment anyone added an `.order_by()` after it."""
+    marked = BenchPerson.objects.filter(**TWO_HOPS).overlay_selective()
+    chained = marked.order_by("id").values("pk").filter(city="city0")
+
+    assert chained.query._overlay_selective is True
+    assert not any(BAN in statement for statement in statements(chained))
+
+
+def test_overlay_selective_does_not_leak_to_a_sibling_queryset():
+    """`_chain()`, not mutation in place. The manager and any queryset derived
+    before the call must be unaffected."""
+    base = BenchPerson.objects.filter(**TWO_HOPS)
+    base.overlay_selective()
+
+    assert base.query._overlay_selective is False
+    assert any(BAN in statement for statement in statements(base))
+
+
+def test_overlay_selective_is_read_through_a_subquery():
+    """`_overlay_views_read()` counts views reached through a subquery, so the
+    suppression has to be reachable the same way -- otherwise marking the inner
+    queryset reads as doing nothing at all."""
+    inner = Roster.objects.filter(members__name="m").overlay_selective().values("pk")
+    outer = Roster.objects.filter(pk__in=inner)
+
+    assert _selective_declared(outer.query) is True
+
+
+def test_an_unmarked_query_is_not_selective():
+    assert _selective_declared(BenchPerson.objects.filter(**TWO_HOPS).query) is False
+
+
+def test_overlay_selective_stops_at_the_depth_limit():
+    """The walk is bounded the same way the view count is. Nothing legitimate
+    nests this deep; a runaway is a bug elsewhere and must not become an
+    unbounded recursion here."""
+
+    class _Deep:
+        alias_map = {}
+        where = None
+        annotations = {}
+        _overlay_selective = True
+
+    assert _selective_declared(_Deep(), _depth=_MAX_SUBQUERY_DEPTH + 1) is True
+
+
+def test_overlay_selective_changes_the_plan_and_not_the_rows():
+    """The same bar the ban itself is held to. A lever that altered results
+    would not be a plan hint, and the m2m row multiplicity is what makes this
+    worth asserting rather than assuming."""
+    banned = list(BenchPerson.objects.filter(**TWO_HOPS).order_by("id").values_list("pk", flat=True))
+    lifted = list(
+        BenchPerson.objects.filter(**TWO_HOPS).overlay_selective().order_by("id").values_list("pk", flat=True)
+    )
+
+    assert banned == lifted
+
+
+def test_overlay_selective_leaves_the_session_as_it_found_it():
+    """Nothing was set, so nothing needs restoring -- but the assertion is
+    cheap and the failure it catches (a `SET` on a path that never wraps) is
+    not."""
+    list(BenchPerson.objects.filter(**TWO_HOPS).overlay_selective())
+    with connection.cursor() as cursor:
+        cursor.execute("SHOW enable_nestloop")
+        assert cursor.fetchone()[0] == "on"
+
+
+def test_overlay_selective_is_a_no_op_when_the_setting_is_off():
+    """Nothing to lift. The setting already answers False, and the lever must
+    not read as turning the ban back on."""
+    with OFF:
+        assert not any(
+            BAN in statement for statement in statements(BenchPerson.objects.filter(**TWO_HOPS).overlay_selective())
+        )
