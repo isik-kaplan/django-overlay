@@ -21,6 +21,7 @@ from .planning import (
     _force_hash_joins_enabled,
     _hash_joins_forced,
     _overlay_views_joined,
+    _selective_declared,
 )
 
 
@@ -93,8 +94,18 @@ class OverlayQuery(sql.Query):
     rewritten and unrewritten forms return identical rows for each of them.
     """
 
+    # Set by OverlayQuerySet.overlay_selective(). A class attribute so every
+    # query answers the question without one having to have been constructed
+    # through the queryset method, and so `Query.clone()` -- which copies
+    # __dict__ -- carries a declared one across every chain() and clone().
+    _overlay_selective = False
+
     def _wants_hash_joins(self) -> bool:
         if not _force_hash_joins_enabled():
+            return False
+        # The caller has said this scope is small, so the plan the threshold
+        # forbids is the one they want. See `_selective_declared()`.
+        if _selective_declared(self):
             return False
         limited = self.high_mark is not None or self.low_mark
         # Through the module, not `from planning import _HASH_JOIN_THRESHOLD`.
