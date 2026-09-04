@@ -338,3 +338,82 @@ the same call -- a default of True, and the default removed -- are both killed
 by an OverlayForeignKey pointed at a plain model, which is why a pragma on the
 line is not the answer.
 """
+
+["django_overlay.swaps.probes.x__relation_exists__mutmut_6"]
+reason = """
+The same statement as checks._table_exists above, lowercased the same way, and
+equivalent for the same reason: Postgres does not care about the case of SQL
+keywords. The two live in different modules because they answer the question at
+different moments -- one at `manage.py check` time, one against a swap
+candidate -- and neither is a place to reach for the other.
+"""
+
+["django_overlay.sync.x_inbound_overlay_foreign_keys__mutmut_2"]
+reason = """
+get_models(include_auto_created=True) -> the same with None, which Django
+treats as falsy exactly like False -- so this and mutmut_3 are one mutation
+twice. Auto-created models are in scope on purpose, but none of them can ever
+carry an OverlayForeignKey: OverlayManyToManyField takes `through` as a
+required keyword-only argument, so every through model in an overlay project is
+one somebody declared. Verified against the test project, whose only
+auto-created models are Django's own auth join tables, all of them plain
+ForeignKey. The argument is there so a resync stays right if that ever changes.
+"""
+
+["django_overlay.sync.x_inbound_overlay_foreign_keys__mutmut_3"]
+reason = """
+The same call with include_auto_created=False, and unkillable for the reason
+above: nothing an auto-created model holds can be an OverlayForeignKey, so
+including them changes what this walks and never what it returns.
+"""
+
+["django_overlay.sync.x_inbound_overlay_foreign_keys__mutmut_6"]
+reason = """
+getattr(model, "_is_overlay_view_model", False) -> the same with None as the
+default. Read only as the condition of an `if`, where False and None are both
+falsy. The same shape as the exemptions for checks._overlay_models_with_a_source
+and show_source_indexes._models, and out of a pragma's reach for the same
+reason.
+"""
+
+["django_overlay.sync.x_resync_view__mutmut_14"]
+reason = """
+`SELECT set_config(...)` lowercased to `select set_config(...)`. Postgres does
+not care about the case of a keyword, so the two are the same statement -- the
+third of this shape here, alongside checks._table_exists and
+swaps.probes._relation_exists. A pragma on the line would also suppress the
+mutations of set_config's own arguments, which the lock-timeout tests kill.
+"""
+
+["django_overlay.swaps.cutover.x_swap_source__mutmut_104"]
+reason = """
+`SELECT set_config(...)` lowercased. The same statement, for the same reason as
+sync.resync_view's copy of it: Postgres does not care about the case of a
+keyword. A pragma would also suppress the mutations of set_config's own
+arguments, and the lock-timeout is passed straight through from the command
+line.
+"""
+
+["django_overlay.management.commands.swap_source.xǁCommandǁ_model__mutmut_15"]
+reason = """
+getattr(model, "_is_overlay_view_model", False) -> the same with None as the
+default, read only through `not`, where False and None are indistinguishable.
+The fifth of this shape in the package; the neighbouring mutations of the same
+call are killed by asking the command for a plain model.
+"""
+
+["django_overlay.management.commands.swap_source.xǁCommandǁadd_arguments__mutmut_79"]
+reason = """
+dest="allow" -> dest=None on `--allow`. argparse falls back to deriving the
+destination from the long option, which for `--allow` is `allow` -- the same
+name, so the parsed namespace is identical. It is written out because the
+argument beside it genuinely needs one: `--identity-column` would otherwise
+land on `identity_column`, singular, and the two reading differently would be
+worse than one of them being redundant.
+"""
+
+["django_overlay.management.commands.swap_source.xǁCommandǁadd_arguments__mutmut_85"]
+reason = """
+The same argument removed altogether rather than set to None, and identical in
+effect: argparse derives `allow` from `--allow` either way.
+"""
