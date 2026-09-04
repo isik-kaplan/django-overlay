@@ -14,6 +14,11 @@ def _source_context(source, strategy: Strategy) -> dict | None:
         "id_column": source.id_column,
         "extra_where": source.extra_where,
         "negate": negates_source_ids(strategy),
+        # None unless the source is declared partitioned. Every template that
+        # probes the source by id reads it and adds the key to its predicate,
+        # so the probe prunes to one partition instead of fanning out across
+        # all of them. See SourceTable.partition_key.
+        "partition_key": source.partition_key,
     }
 
 
@@ -179,9 +184,14 @@ def build_referenced_row_trigger_sql(
     target_table: str,
     target_view: str,
     target_pk: str = "id",
+    partition_key: str | None = None,
 ) -> str:
     """The delete side of one OverlayForeignKey: refuse to remove a row that is
-    still referenced. Lives on the *target's* base table."""
+    still referenced. Lives on the *target's* base table.
+
+    `partition_key` is the target source's, and needs no declaration on the
+    referencing side: this trigger fires on the target's own base table, so
+    OLD is a target row and already carries the key."""
     return render(
         "triggers/referenced_row_trigger.sql.j2",
         tenant_schema=tenant_schema,
@@ -190,6 +200,7 @@ def build_referenced_row_trigger_sql(
         target_table=target_table,
         target_view=target_view,
         target_pk=target_pk,
+        partition_key=partition_key,
         function_name=f"check_{trigger_name}",
         trigger_name=trigger_name,
     )
