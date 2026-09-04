@@ -82,6 +82,7 @@ SHARDS = {
         "django_overlay/management/commands/makemigrations.py",
         "django_overlay/management/commands/resync_overlay_views.py",
         "django_overlay/management/commands/show_source_indexes.py",
+        "django_overlay/management/commands/swap_source.py",
     ],
     # Source swaps, caller-facing: what a report is, and the three functions
     # that read the deployed source, run the preflight and cut over.
