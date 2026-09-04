@@ -15,3 +15,15 @@ django_overlay/sql_templates/introspection/table_indexes.sql.j2
 # file sqlfluff cannot parse is a file it cannot judge.
 django_overlay/sql_templates/introspection/table_partitions.sql.j2
 django_overlay/sql_templates/introspection/unattached_partition_indexes.sql.j2
+
+# The same bind-placeholder problem again: these read the catalogue, and a
+# catalogue query is parameterised by the relation it is asked about.
+django_overlay/sql_templates/swaps/view_source_relations.sql.j2
+django_overlay/sql_templates/swaps/column_types.sql.j2
+django_overlay/sql_templates/swaps/estimated_rows.sql.j2
+
+# Its entire WHERE clause is SourceTable.extra_where -- a caller-supplied SQL
+# fragment this file does not contain and cannot vouch for. Rendered with the
+# empty default every other template's context uses, what is left is the word
+# WHERE on its own.
+django_overlay/sql_templates/swaps/extra_where_probe.sql.j2
