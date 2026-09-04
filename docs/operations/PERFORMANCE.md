@@ -128,7 +128,13 @@ BenchPerson.objects.filter(pk__in=BenchPerson.objects
                            .filter(addresses__city="city0").values("pk"))
 ```
 
-### The one manual lever
+### The manual levers
+
+Two, and they exist for the same reason: the library decides by query shape
+alone, and there are two things shape cannot see. How many rows a subquery
+returns is the first. Whether a multi-hop filter is selective is the second.
+
+#### The fence
 
 The fence's crossover depends on how many rows your subquery returns, which the
 library cannot see when it compiles a lookup and will not go looking for — every
@@ -169,6 +175,48 @@ Which is why no static row count would have been the right default: the same
 absolute scope is worth fencing in a big table and not worth it in a small one. It resolves on any overlay model and raises `FieldError` on a
 plain one, because the resolution lives on the overlay query rather than on the
 field.
+
+#### `.overlay_selective()`
+
+The nested-loop ban is decided by how many overlay views land in one statement
+— five normally, two once the query carries a slice. That count is a proxy for
+how many relations the planner has to size blindly, and it is right for a broad
+multi-hop filter: two m2m hops at 1,000,000 people are 752ms banned and do not
+finish unbanned.
+
+It is wrong for a filter of the same shape that resolves to one row. An identity
+search — name plus an exact email plus an exact phone — is three hops and
+therefore five views, so it trips the threshold unconditionally, and what it
+buys is a hash build over the whole email relation to return a single person.
+The threshold's own note records the same regression one view lower down: 7ms →
+60ms, because "200 rows is exactly where a nested loop is the right plan".
+
+So say so:
+
+```python
+Person.objects.filter(
+    state__in=states, name=name,
+    emails__address=email, phones__number=phone,
+).overlay_selective()
+```
+
+Nested loops stay permitted for that statement and nothing else changes — same
+rows, same query, different plan, which is the same bar the ban and the fence
+are held to.
+
+Reach for it when the predicate resolves to a handful of rows: a unique-ish
+column, an id, an exact contact detail. **Do not** reach for it on a scope you
+cannot bound — a state, a city, a status flag — because the plan it re-permits
+is the one that runs to exhaustion, and unlike the fence there is no crossover
+where it merely stops paying. Chainable, position-independent, and readable
+through a subquery (the view count is gathered the same way, so marking an
+inner queryset works rather than silently doing nothing).
+
+The alternative, if you would rather not annotate: stage the search as two
+round trips, resolving ids from the most selective predicate first and passing
+a materialised list to the second query. That keeps every statement at one hop
+and never trips the threshold at all — but it has to be a real list, since a
+lazy queryset is inlined as a subquery and counted.
 
 ## The number that governs everything
 
