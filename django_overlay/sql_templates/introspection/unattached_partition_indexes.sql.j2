@@ -1,0 +1,22 @@
+-- Index shapes that exist on individual partitions without being attached to
+-- a partitioned index on the parent. Those are invisible to table_indexes(),
+-- which reads the parent, so parity would report them as absent everywhere
+-- while some partitions do have them -- the silent half-covered case.
+--
+-- Attachment is recorded in pg_inherits, the same catalogue that records table
+-- partitioning: an index built by CREATE INDEX on the parent leaves each
+-- partition's copy with an inhparent row, and one built directly on a
+-- partition leaves none.
+SELECT
+    substring(pg_get_indexdef(i.indexrelid) FROM ' USING (.*)$') AS shape,
+    count(*) AS on_partitions
+FROM pg_inherits parts
+JOIN pg_class part ON part.oid = parts.inhrelid
+JOIN pg_index i ON i.indrelid = part.oid
+JOIN pg_class parent ON parent.oid = parts.inhparent
+JOIN pg_namespace n ON n.oid = parent.relnamespace
+WHERE n.nspname = %s
+  AND parent.relname = %s
+  AND NOT EXISTS (SELECT 1 FROM pg_inherits attached WHERE attached.inhrelid = i.indexrelid)
+GROUP BY shape
+ORDER BY shape

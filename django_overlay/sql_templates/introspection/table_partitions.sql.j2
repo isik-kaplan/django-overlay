@@ -1,0 +1,7 @@
+SELECT
+    c.relkind,
+    (SELECT count(*) FROM pg_inherits WHERE inhparent = c.oid) AS partitions
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = %s
+  AND c.relname = %s
