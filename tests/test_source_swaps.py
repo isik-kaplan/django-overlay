@@ -854,6 +854,94 @@ def test_the_command_refuses_a_model_that_is_not_an_overlay():
         run("testapp.PersonProfile")
 
 
+# --------------------------------------------------------- the whole procedure
+#
+# Everything above tests one check or one mechanism. What none of it shows is a
+# swap happening to a tenant who has actually been using the model -- which is
+# the only state a real cutover is ever performed from. So these two build that
+# state first: a row the tenant has overridden, a row they have deleted, a row
+# something else references, and a vendor refresh that changes values under all
+# of it.
+
+
+def a_populated_tenant(db_cursor):
+    """The four states a base table can be in relative to its source, all at
+    once: untouched, overridden, tombstoned, and referenced."""
+    untouched = PersonSource.objects.create(first_name="Ada", age=36)
+    overridden = PersonSource.objects.create(first_name="Grace", age=45)
+    deleted = PersonSource.objects.create(first_name="Alan", age=41)
+
+    # Touching a source-backed row copies it down; the base copy shadows the
+    # source row from then on.
+    Person.objects.filter(pk=-overridden.id).update(first_name="Grace H.")
+    # Soft delete leaves a tombstone that hides the source row from the view.
+    Person.objects.filter(pk=-deleted.id).delete()
+    PersonProfile.objects.create(person_id=-untouched.id, bio="referenced")
+    return untouched, overridden, deleted
+
+
+def test_a_vendor_refresh_swaps_cleanly_over_a_tenant_who_has_been_using_it(monkeypatch, db_cursor):
+    """The procedure, start to finish, on a tenant with something to lose.
+
+    The vendor rebuilds the table: same ids meaning the same people, one
+    person's details corrected, one person added. Every overlay semantic has to
+    survive it -- an untouched row picks the refresh up, an overridden row does
+    not, a tombstone still hides, a reference still resolves, and a row that
+    only exists in the new table is simply there."""
+    untouched, overridden, deleted = a_populated_tenant(db_cursor)
+    candidate = green(db_cursor, "testapp_shared_personsource", "green_person")
+    db_cursor.execute("UPDATE green_person SET age = 37 WHERE id = %s", [untouched.id])
+    db_cursor.execute("UPDATE green_person SET age = 46 WHERE id = %s", [overridden.id])
+    db_cursor.execute("INSERT INTO green_person (id, first_name, age) VALUES (9001, 'Katherine', 33)")
+    analyze(db_cursor, "green_person")
+
+    # Preflight while the old table is still the one being served.
+    report = verify_source_swap(Person, candidate, identity_columns=["first_name"])
+    assert report.ok, str(report)
+
+    point_at(monkeypatch, Person, candidate)
+    swap_source(Person, identity_columns=["first_name"])
+
+    # An untouched row is a window onto the source, so it refreshes.
+    assert Person.objects.get(pk=-untouched.id).age == 37
+    # An overridden one is a copy, so it does not -- not the name the tenant
+    # set, and not the age the vendor corrected underneath it either.
+    assert Person.objects.get(pk=-overridden.id).first_name == "Grace H."
+    assert Person.objects.get(pk=-overridden.id).age == 45
+    # The tombstone still masks its row, which is only true if the swap kept
+    # the id the tombstone was written against.
+    assert not Person.objects.filter(pk=-deleted.id).exists()
+    # And the reference still resolves, through the new table.
+    assert PersonProfile.objects.get().person.first_name == "Ada"
+    assert Person.objects.get(pk=-9001).first_name == "Katherine"
+
+
+def test_a_swap_can_be_pointed_back_at_the_table_it_came_from(monkeypatch, db_cursor):
+    """Rolling back is the same operation with the arguments the other way
+    round, and the reason to keep the old table rather than drop it on success.
+
+    Worth its own test because the second cutover is the one that runs against
+    a database the first one already changed -- the deployed source it reads
+    back is now the candidate of the previous swap."""
+    untouched, overridden, _ = a_populated_tenant(db_cursor)
+    blue = Person.get_source()
+    candidate = green(db_cursor, "testapp_shared_personsource", "green_person")
+    db_cursor.execute("UPDATE green_person SET age = 37 WHERE id = %s", [untouched.id])
+    analyze(db_cursor, "green_person")
+
+    point_at(monkeypatch, Person, candidate)
+    swap_source(Person, identity_columns=["first_name"])
+    assert Person.objects.get(pk=-untouched.id).age == 37
+
+    point_at(monkeypatch, Person, blue)
+    swap_source(Person, identity_columns=["first_name"])
+
+    assert deployed_source(connection, resolve_schema(connection), Person).table == ("testapp_shared_personsource")
+    assert Person.objects.get(pk=-untouched.id).age == 36
+    assert Person.objects.get(pk=-overridden.id).first_name == "Grace H."
+    assert PersonProfile.objects.get().person.first_name == "Ada"
+
+
 # ------------------------------------------------------ the arithmetic itself
 #
 # Three checks here decide on a comparison rather than on the presence of a
