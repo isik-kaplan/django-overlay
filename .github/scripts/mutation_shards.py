@@ -77,11 +77,46 @@ SHARDS = {
         "django_overlay/checks.py",
         "django_overlay/apps.py",
     ],
-    # makemigrations and the two operational commands.
+    # makemigrations and the operational commands.
     "commands": [
         "django_overlay/management/commands/makemigrations.py",
         "django_overlay/management/commands/resync_overlay_views.py",
         "django_overlay/management/commands/show_source_indexes.py",
+    ],
+    # Source swaps, caller-facing: what a report is, and the three functions
+    # that read the deployed source, run the preflight and cut over.
+    #
+    # Three shards, and django_overlay/swaps/ is a package rather than a module
+    # for the same reason models/ is: as one file it was 822 mutants and about
+    # an hour against a 30-minute working target. The seams are the ones the
+    # code already declared -- the report and the cutover, then SHAPE_CHECKS,
+    # then ROW_CHECKS -- so the split is by subject and the balance falls out of
+    # it rather than being imposed. Measured: 317, 272 and 233 mutants, at
+    # roughly five seconds each.
+    #
+    # Two was the first attempt and was not enough. Halving a file does not
+    # halve the longer half: report+cutover came to 317 mutants and the other
+    # three files to 505, which measured 43 minutes -- so the shard that was
+    # already the problem stayed the problem. Sizing the shards took measuring
+    # them; the subject seam happened to fall in the right place, but only
+    # because there were three of them to choose between.
+    "swaps": [
+        "django_overlay/swaps/__init__.py",
+        "django_overlay/swaps/report.py",
+        "django_overlay/swaps/cutover.py",
+    ],
+    # Source swaps, the catalogue half: the probe context, and the checks that
+    # ask pg_catalog whether the candidate is even the same shape. Everything
+    # here runs before a single row is looked at.
+    "probes": [
+        "django_overlay/swaps/probes.py",
+        "django_overlay/swaps/shape.py",
+    ],
+    # Source swaps, the row half: each existing trigger's predicate transposed
+    # over the rows that already exist. The slowest per mutant of the three --
+    # every one of these is real SQL across two real tables.
+    "rows": [
+        "django_overlay/swaps/rows.py",
     ],
     # Field descriptors and the identity/uniqueness rules around them.
     "fields": [
