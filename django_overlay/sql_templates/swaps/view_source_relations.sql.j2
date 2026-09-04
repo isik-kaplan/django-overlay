@@ -1,0 +1,20 @@
+{#- Every relation the *deployed* view reads, which is the only trustworthy
+    answer to "what is this overlay actually pointing at right now". Config can
+    say green while the database still says blue -- that gap is exactly what a
+    cutover closes, so reading it back out of the catalogue rather than out of
+    get_source() is the point.
+
+    A view's dependency is on the relation's OID, not its name, which is also
+    why a rename-based swap silently does nothing: the view follows the old
+    physical table into its new name. -#}
+SELECT DISTINCT n.nspname, c.relname
+FROM pg_rewrite r
+JOIN pg_depend d ON d.objid = r.oid AND d.classid = 'pg_rewrite'::regclass
+JOIN pg_class v ON v.oid = r.ev_class
+JOIN pg_namespace vn ON vn.oid = v.relnamespace
+JOIN pg_class c ON c.oid = d.refobjid AND d.refclassid = 'pg_class'::regclass
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE vn.nspname = %s
+  AND v.relname = %s
+  AND c.oid <> v.oid
+  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')

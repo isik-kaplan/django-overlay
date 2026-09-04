@@ -1,0 +1,32 @@
+{#- One OverlayUniqueConstraint's source-side trigger, re-run as a set
+    operation -- the uniqueness counterpart of dangling_references.sql.j2, and
+    for the same reason: the trigger only ever fires on writes to the base
+    table, and a swap is a write to the other one.
+
+    The predicate is unique_constraint_trigger.sql.j2's, transposed. The
+    trigger asks "does the source already hold the value this row is
+    writing"; this asks "does the candidate hold a value some base row already
+    holds", which is the same question with the quantifier moved. Both
+    soft-delete narrowings come along: a tombstoned base row reserves nothing,
+    and neither does a source row a tombstone masks. -#}
+SELECT count(*)
+FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS overlay_base
+INNER JOIN {{ source.schema | qi }}.{{ source.table | qi }} ON (
+    {% for c in columns %}overlay_base.{{ c | qi }} = {{ source.table | qi }}.{{ c | qi }}{% if not loop.last %} AND {% endif %}{% endfor %}
+
+)
+WHERE {% for c in columns %}overlay_base.{{ c | qi }} IS NOT NULL{% if not loop.last %} AND {% endif %}{% endfor %}
+
+{%- if source.extra_where %}
+    AND ({{ source.extra_where }})
+{%- endif %}
+    AND {{ source.table | qi }}.{{ source.id_column | qi }} != {{ "-" if negate }}overlay_base.{{ pk_column | qi }}
+{%- if soft_delete %}
+    AND NOT overlay_base._overlay_deleted
+    AND NOT EXISTS (
+        SELECT 1
+        FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS tombstone
+        WHERE tombstone.{{ pk_column | qi }} = {{ "-" if negate }}{{ source.table | qi }}.{{ source.id_column | qi }}
+            AND tombstone._overlay_deleted
+    )
+{%- endif %}

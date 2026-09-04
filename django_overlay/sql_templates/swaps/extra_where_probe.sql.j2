@@ -1,0 +1,12 @@
+{#- EXPLAIN rather than SELECT: the only question is whether the predicate
+    resolves against the candidate's columns, and answering it must not scan
+    the table this package exists to sit in front of.
+
+    Worth its own probe because extra_where is raw SQL spliced into the view's
+    text. Against a candidate that renamed the column it names, the failure is
+    a CREATE OR REPLACE VIEW that raises in the middle of the cutover
+    transaction -- correct, since the transaction rolls back, but a much worse
+    place to find out than the preflight. -#}
+EXPLAIN SELECT 1
+FROM {{ source.schema | qi }}.{{ source.table | qi }}
+WHERE {{ source.extra_where }}

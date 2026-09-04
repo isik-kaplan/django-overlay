@@ -1,0 +1,23 @@
+{#- An estimate, on purpose: this is a sanity check against a truncated load,
+    and count(*) on the table this package exists to sit in front of is not a
+    thing to run at cutover time.
+
+    The WHERE is two branches because pg_partition_tree() answers for a
+    partition tree and returns *nothing at all* for an ordinary table -- so a
+    plain table is matched directly, and a partitioned parent is excluded from
+    that branch and matched through its leaves instead. Excluded rather than
+    added to them: ANALYZE sets a partitioned parent's reltuples to the whole
+    tree's total, so counting the parent alongside its own partitions would
+    double every partitioned source. Both branches filter pg_class rows rather
+    than joining, so a leaf that matches both is still one row.
+
+    reltuples is -1 for a relation that has never been analysed, which is worth
+    surfacing on its own: the UNION ALL view is an appendrel the planner
+    already has trouble costing, and swapping in a table with no statistics
+    makes that worse. MIN() carries that through. -#}
+SELECT
+    COALESCE(SUM(GREATEST(pc.reltuples, 0)), 0)::bigint AS estimated_rows,
+    COALESCE(MIN(pc.reltuples), 0) AS lowest_reltuples
+FROM pg_class AS pc
+WHERE (pc.oid = %(relation)s::regclass AND pc.relkind <> 'p')
+    OR pc.oid IN (SELECT relid FROM pg_partition_tree(%(relation)s::regclass) WHERE isleaf)

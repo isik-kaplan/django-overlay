@@ -1,0 +1,41 @@
+{#- One OverlayForeignKey's insert-side trigger, re-run as a set operation over
+    every row that already exists.
+
+    The trigger checks one row at a time, on write, and a swap writes nothing it
+    can see -- millions of source rows appear and disappear without a single
+    INSERT on a table this package has a trigger on. So the check has to be run
+    the other way round at cutover: not "is this new reference valid" but "are
+    all the existing ones still valid against the table we are about to point
+    at".
+
+    The predicate mirrors fields.target_tables_for() exactly, including the
+    parts that are easy to leave out: the base branch excludes tombstoned rows,
+    and the source branch excludes a source row masked by one. A reference the
+    view cannot return is a dangling reference even though the row is there. -#}
+SELECT count(*)
+FROM {{ tenant_schema | qi }}.{{ referencing_table | qi }} AS overlay_ref
+WHERE overlay_ref.{{ column | qi }} IS NOT NULL
+AND NOT EXISTS (
+    SELECT 1
+    FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS overlay_base
+    WHERE overlay_base.{{ target_pk | qi }} = overlay_ref.{{ column | qi }}
+{%- if target_soft_delete %}
+        AND NOT overlay_base._overlay_deleted
+{%- endif %}
+)
+AND NOT EXISTS (
+    SELECT 1
+    FROM {{ source.schema | qi }}.{{ source.table | qi }}
+    WHERE {{ source.table | qi }}.{{ source.id_column | qi }} = {{ "-" if negate }}overlay_ref.{{ column | qi }}
+{%- if source.extra_where %}
+        AND ({{ source.extra_where }})
+{%- endif %}
+{%- if target_soft_delete %}
+        AND NOT EXISTS (
+            SELECT 1
+            FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS tombstone
+            WHERE tombstone.{{ target_pk | qi }} = overlay_ref.{{ column | qi }}
+                AND tombstone._overlay_deleted
+        )
+{%- endif %}
+)
