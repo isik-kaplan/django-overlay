@@ -1,0 +1,17 @@
+{#- The base table, in EXCLUSIVE mode -- not the view, and not ACCESS
+    EXCLUSIVE. Both halves of that are deliberate.
+
+    The race being closed is a write that was validated against the old source
+    and commits after the preflight has looked. Deferred foreign-key triggers
+    make that window a real one: the check has already run by the time COMMIT
+    comes round. EXCLUSIVE blocks every writer and no reader, which is exactly
+    the shape of the problem -- and it catches writes that never went through
+    the ORM, since every path into an overlay model lands here in the end.
+
+    Locking the view instead would be the obvious move and the wrong one:
+    Postgres locks the relations named in a view's definition along with it, so
+    an ACCESS EXCLUSIVE lock on the view reaches through to the vendor's table
+    and blocks every reader of it, everywhere, for the length of the cutover.
+    The view still takes its own AccessExclusiveLock when CREATE OR REPLACE
+    VIEW runs a moment later; that one is unavoidable and brief. -#}
+LOCK TABLE {{ tenant_schema | qi }}.{{ base_table | qi }} IN EXCLUSIVE MODE

@@ -1,0 +1,52 @@
+{#- The check the whole procedure hangs off. Everything in the overlay keys off
+    the source's id: the view's pk mapping, the anti-join that stops a
+    materialised row appearing twice, every tombstone, and every
+    OverlayForeignKey column in the project. All of that stays *valid* across a
+    swap -- and stops being *true* -- if the new table hands the same ids to
+    different entities.
+
+    Two counts, and they are different failures:
+
+    `reassigned` -- the same id now carries a different identity. Nothing
+    raises, every check passes, and your overrides, tombstones and foreign keys
+    silently point at other people.
+
+    `renumbered` -- the same entity survived under a different id. References
+    to it dangle, and its override no longer shadows it.
+
+    Rows whose identity has a NULL component join under neither, which is what
+    equality means; a source whose identity key is nullable is not one.
+-#}
+{% macro qualified(alias, cols) -%}
+{% for c in cols %}{{ alias }}.{{ c | qi }}{% if not loop.last %}, {% endif %}{% endfor %}
+{%- endmacro -%}
+{% macro id_and_keys(source, cols) -%}
+SELECT {{ source.id_column | qi }} AS overlay_id, {% for c in cols %}{{ c | qi }}{% if not loop.last %}, {% endif %}{% endfor %}
+    FROM {{ source.schema | qi }}.{{ source.table | qi }}
+{%- if source.extra_where %}
+    WHERE {{ source.extra_where }}
+{%- endif %}
+{%- endmacro -%}
+WITH overlay_current AS (
+    {{ id_and_keys(current, identity_columns) }}
+),
+
+overlay_candidate AS (
+    {{ id_and_keys(candidate, identity_columns) }}
+)
+
+SELECT
+    (
+        SELECT count(*)
+        FROM overlay_current AS cur
+        INNER JOIN overlay_candidate AS cand ON cur.overlay_id = cand.overlay_id
+        WHERE ({{ qualified("cand", identity_columns) }}) IS DISTINCT FROM ({{ qualified("cur", identity_columns) }})
+    ) AS reassigned,
+    (
+        SELECT count(*)
+        FROM overlay_current AS cur
+        INNER JOIN overlay_candidate AS cand ON
+            {% for c in identity_columns %}cur.{{ c | qi }} = cand.{{ c | qi }}{% if not loop.last %} AND {% endif %}{% endfor %}
+
+        WHERE cand.overlay_id IS DISTINCT FROM cur.overlay_id
+    ) AS renumbered
