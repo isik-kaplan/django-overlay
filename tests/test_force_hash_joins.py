@@ -30,8 +30,11 @@ from django_overlay.models import (
     planning,
 )
 from tests.testapp.models import (
+    BenchAddress,
     BenchPerson,
     BenchPersonAddress,
+    BenchPersonPhone,
+    BenchPhone,
     Member,
     PlainPerson,
     Roster,
@@ -568,3 +571,67 @@ def test_overlay_selective_is_a_no_op_when_the_setting_is_off():
         assert not any(
             BAN in statement for statement in statements(BenchPerson.objects.filter(**TWO_HOPS).overlay_selective())
         )
+
+
+# ---------------------------------------------------------- with real rows
+#
+# Everything above asserts on the SQL, which is the right level for a plan
+# hint. What it cannot show is that the hint is still only a hint once there
+# are rows for it to be wrong about -- and an m2m conjunction is exactly the
+# shape where a plan change can quietly change the answer, because each hop
+# multiplies rows before the filter collapses them again. So the lever gets
+# one test with a populated graph behind it.
+
+
+def a_person(first_name, city, phone_number):
+    """One person reachable by both hops. The shape the lever's docstring
+    describes: a conjunction that resolves to a single row."""
+    person = BenchPerson.objects.create(
+        first_name=first_name, last_name="Doe", city=city, postcode="AA1 1AA", status="active"
+    )
+    address = BenchAddress.objects.create(line1="1 High St", city=city, postcode="AA1 1AA", country="GB")
+    phone = BenchPhone.objects.create(number=phone_number, kind="mobile")
+    BenchPersonAddress.objects.create(person=person, address=address)
+    BenchPersonPhone.objects.create(person=person, phone=phone)
+    return person
+
+
+def test_a_selective_two_hop_lookup_returns_the_same_rows_as_the_banned_plan():
+    """The scenario the lever exists for, end to end: an identity lookup that
+    crosses two m2m hops and resolves to one person. The threshold bans the
+    nested loop unconditionally, the caller knows this scope is a handful of
+    rows, and the two plans have to agree on what they return."""
+    wanted = a_person("Ada", "city0", "+447000000001")
+    a_person("Grace", "city1", "+447000000002")
+    a_person("Alan", "city0", "+447000000003")
+    # A second address in another city, so the person matches one hop's
+    # predicate by more than one path and the join really does multiply.
+    BenchPersonAddress.objects.create(
+        person=wanted,
+        address=BenchAddress.objects.create(line1="2 Low St", city="city9", postcode="ZZ9 9ZZ", country="GB"),
+    )
+
+    scope = {"addresses__city": "city0", "phones__number": "+447000000001"}
+    banned = BenchPerson.objects.filter(**scope).order_by("id")
+    lifted = BenchPerson.objects.filter(**scope).overlay_selective().order_by("id")
+
+    assert any(BAN in statement for statement in statements(banned))
+    assert not any(BAN in statement for statement in statements(lifted))
+    # Ordered, because an unordered comparison of two different plans is a
+    # comparison of two arbitrary orderings.
+    assert list(lifted.values_list("pk", flat=True)) == list(banned.values_list("pk", flat=True)) == [wanted.pk]
+
+
+def test_a_selective_page_of_a_broad_scope_still_agrees_with_the_banned_plan():
+    """The other half of the same promise. A broad scope is the case the ban
+    exists for, so a caller marking one selective is making a mistake -- and a
+    mistake about cost must stay a mistake about cost. The rows do not move."""
+    for index in range(6):
+        a_person(f"Person{index}", "city0", f"+44700000{index:04d}")
+
+    scope = {"addresses__city": "city0"}
+    banned = BenchPerson.objects.filter(**scope).order_by("id")[:3]
+    lifted = BenchPerson.objects.filter(**scope).overlay_selective().order_by("id")[:3]
+
+    assert list(lifted.values_list("pk", flat=True)) == list(banned.values_list("pk", flat=True))
+    assert len(list(lifted)) == 3
