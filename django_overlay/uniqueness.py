@@ -53,6 +53,18 @@ def constraint_name(table: str, fields) -> str:
     return f"{name[: MAX_IDENTIFIER_LENGTH - len(digest) - 1]}_{digest}"
 
 
+def trigger_name(base_table: str, constraint_name: str) -> str:
+    """The name of the source-side trigger backing one OverlayUniqueConstraint.
+
+    Shared rather than derived where it is needed, because it is needed in
+    three places now: the migration operation that creates the trigger, the one
+    that drops it, and the resync that rebuilds it when a model's source
+    changes. Two of those computing the name independently is how a trigger
+    ends up orphaned under a name nothing drops -- still firing, still probing
+    the table it was written against."""
+    return f"overlayunique_{base_table}_{constraint_name}"[:MAX_IDENTIFIER_LENGTH]
+
+
 def suggested_constraint(table: str, fields, name: str | None = None) -> str:
     """The line to paste into Meta.constraints. No condition= in it — a
     soft_delete model's constraints are narrowed for you, so the caller never

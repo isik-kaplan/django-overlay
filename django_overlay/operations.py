@@ -3,6 +3,7 @@ from django.db import migrations
 
 from . import sql as overlay_sql
 from . import sync as overlay_sync
+from . import uniqueness as overlay_uniqueness
 from ._templating import render
 from .fields import target_tables_for
 
@@ -231,7 +232,7 @@ class AddOverlayUniqueConstraint(migrations.RunPython):
         self.constraint_name = constraint_name
 
         def trigger_name(base_model) -> str:
-            return f"overlayunique_{base_model._meta.db_table}_{constraint_name}"[:63]
+            return overlay_uniqueness.trigger_name(base_model._meta.db_table, constraint_name)
 
         def historical_columns(apps, base_model):
             # Same reasoning as AddOverlayConstraint.historical_field.
@@ -323,7 +324,7 @@ class RemoveOverlayUniqueConstraint(migrations.RunPython):
         self.constraint_name = constraint_name
 
         def trigger_name(base_model) -> str:
-            return f"overlayunique_{base_model._meta.db_table}_{constraint_name}"[:63]
+            return overlay_uniqueness.trigger_name(base_model._meta.db_table, constraint_name)
 
         def forward(apps, schema_editor):
             model = django_apps.get_model(app_label, model_name)
