@@ -168,7 +168,11 @@ class AddOverlayConstraint(migrations.RunPython):
             # has run yet.
             historical_target = apps.get_model(target_meta.app_label, live_target._base_model._meta.model_name)
             target_soft_delete = any(f.column == "_overlay_deleted" for f in historical_target._meta.fields)
-            targets = target_tables_for(live_target, tenant_schema, target_soft_delete)
+            # getattr, not attribute access: a migration written before
+            # partition_column existed reconstructs a field without it, and a
+            # historical FK is only ever as new as the migration that wrote it.
+            partition_column = getattr(field, "partition_column", None)
+            targets = target_tables_for(live_target, tenant_schema, target_soft_delete, partition_column)
             schema_editor.execute(
                 overlay_sql.build_constraint_trigger_sql(
                     trigger_name,
@@ -192,6 +196,10 @@ class AddOverlayConstraint(migrations.RunPython):
                     live_target._base_model._meta.db_table,
                     live_target._meta.db_table,
                     live_target._meta.pk.column,
+                    # The target's own key, read off the live source. This
+                    # trigger fires on the target's base table, so it needs no
+                    # declaration from the referencing side to reach it.
+                    live_target.get_source().partition_key,
                 )
             )
 
