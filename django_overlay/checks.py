@@ -398,3 +398,97 @@ def _uncovered_columns_warning(cursor, model, schema, base_table, source):
         obj=model,
         id="django_overlay.W002",
     )
+
+
+@checks.register(checks.Tags.models)
+def check_partition_declarations(app_configs, **kwargs):
+    """Fails for a partition declaration that cannot do its job.
+
+    Three ways it can be wrong, and none of them shows up as a broken query —
+    a probe that fails to prune returns exactly the right rows, so the only
+    symptom is that every write scans every partition forever. That is the
+    kind of mistake a check exists for.
+
+    Two are errors, because the declaration is incoherent:
+
+    - `partition_key` naming a column the model has no field for. The view
+      selects the key from both branches under one name, so a key the model
+      cannot see is a key no generated trigger can reference either.
+    - `partition_column` naming a column the *referencing* model doesn't have.
+
+    One is a warning, because the code is correct and merely slow: an
+    `OverlayForeignKey` at a partitioned target with no `partition_column`.
+    Only the caller knows whether the referencing row is guaranteed to share
+    the target's partition — see constraint_trigger.sql.j2 — so this cannot be
+    inferred, and a project that genuinely references across partitions is
+    right to leave it off.
+    """
+    errors = []
+    for model in apps.get_models():
+        if not getattr(model, "_is_overlay_view_model", False):
+            continue
+        errors.extend(_partition_key_problems(model))
+    for model in apps.get_models(include_auto_created=True):
+        for field in model._meta.get_fields():
+            if isinstance(field, OverlayForeignKey):
+                errors.extend(_partition_column_problems(model, field))
+    return errors
+
+
+def _model_columns(model) -> set:
+    return {field.column for field in model._meta.fields}
+
+
+def _partition_key_problems(model) -> list:
+    source = model.get_source()
+    if source is None or not source.partition_key:
+        return []
+    if source.partition_key in _model_columns(model):
+        return []
+    return [
+        checks.Error(
+            f"{model.__name__}'s source declares partition_key="
+            f"{source.partition_key!r}, but the model has no field with that column.",
+            hint=(
+                f"The view selects {source.partition_key!r} from both branches under one name, so "
+                "the model needs a field for it before any trigger can reference it. Add the field, "
+                "or correct the partition_key."
+            ),
+            obj=model,
+            id="django_overlay.E004",
+        )
+    ]
+
+
+def _partition_column_problems(model, field) -> list:
+    target = field.remote_field.model
+    source = target.get_source() if getattr(target, "_is_overlay_view_model", False) else None
+    partition_key = source.partition_key if source else None
+
+    if field.partition_column and field.partition_column not in _model_columns(model):
+        return [
+            checks.Error(
+                f"{model.__name__}.{field.name} declares partition_column="
+                f"{field.partition_column!r}, but {model.__name__} has no field with that column.",
+                hint="It names a column on the referencing model that holds the target's partition key.",
+                obj=field,
+                id="django_overlay.E005",
+            )
+        ]
+    if partition_key and not field.partition_column:
+        return [
+            checks.Warning(
+                f"{model.__name__}.{field.name} points at {target.__name__}, whose source is "
+                f"partitioned on {partition_key!r}, but no partition_column is declared. The "
+                "FK's insert-side trigger will probe every partition on every write.",
+                hint=(
+                    f"If a {model.__name__} always shares its {target.__name__}'s "
+                    f'{partition_key!r}, pass partition_column="<that column>". If it genuinely '
+                    "references across partitions, leave this as it is — the probe is correct, "
+                    "just unpruned."
+                ),
+                obj=field,
+                id="django_overlay.W003",
+            )
+        ]
+    return []
