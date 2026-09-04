@@ -343,6 +343,103 @@ queries the source on every insert and update, and without an index that is a
 full scan per write — and `ANALYZE` the base table after bulk materialising, so
 the planner costs the anti-join against real statistics.
 
+## Partitioned source tables
+
+A declaratively-partitioned source works unchanged — the view reads the parent
+like any other table, and `SELECT ... FROM people WHERE email = %s` returns the
+right rows whether that is one table or fifty. What changes is the cost. Pruning
+only happens when the partition key is in the predicate; without it the plan is
+an `Append` over every partition, so a lookup is not one index scan but *n* of
+them.
+
+Application queries carry the key because somebody wrote them. The probes this
+package generates cannot, so tell it once:
+
+```python
+SourceTable(schema="external", table="people", partition_key="state")
+```
+
+Left unset — the default — every template renders exactly the SQL it rendered
+before, byte for byte. Setting it on an existing model rewrites trigger bodies,
+so it needs a resync, the same as `overridable`.
+
+With it set, four of the five probes prune for free, because the key is already
+in scope where they run:
+
+| probe | how it finds the key |
+|---|---|
+| `INSTEAD OF DELETE`, soft — the per-row source lookup | `OLD.state`, a view row |
+| `INSTEAD OF INSERT` — the `overridable=False` collision check | `NEW.state`, a view row |
+| FK delete side — the "still visible?" view lookup | `OLD.state`, a target base row |
+| `OverlayUniqueConstraint` — the source-side trigger | its own `fields`; see below |
+
+The fifth needs telling. The FK **insert**-side trigger fires on the
+*referencing* table, so `NEW.state` there is the child's state, which is the
+parent's only if you say so:
+
+```python
+person = OverlayForeignKey(Person, partition_column="state")
+```
+
+Omit it and the probe fans out across every partition — correct, just unpruned.
+`manage.py check` warns (`django_overlay.W003`) rather than erroring, because a
+project that genuinely references across partitions is right to leave it off.
+
+### Scoped and global uniqueness
+
+There is no extra argument for this, and none is needed — the source-side
+trigger emits one `src.<col> = NEW.<col>` per constrained field, so naming the
+key in `fields` *is* the declaration:
+
+```python
+OverlayUniqueConstraint(fields=["state", "email"])  # per state: one partition
+OverlayUniqueConstraint(fields=["email"])           # global: every partition
+```
+
+The scoped form prunes provably rather than heuristically: the key is what
+decides which partition a row lives in, so a row matching `(state, email)` can
+only be in that state's partition. The global form fans out because it genuinely
+has to, and that is the honest cost of a cross-partition uniqueness rule.
+
+Your primary key is unaffected either way. A globally-unique `uuid7` pk stays
+exactly that, because the *base* table isn't partitioned — the rule that a
+partitioned table's key must include the partition columns only binds tables
+that are themselves partitioned.
+
+One thing Postgres cannot do for you here: a **unique index** on a partitioned
+table must include the partition key, so a globally-unique email cannot be
+enforced on the source at all. The vendor's table can hold the same address in
+two states. The trigger stops *your* base table from adding a value already in
+the source; it cannot make the source self-consistent.
+
+### Indexes
+
+`manage.py show_source_indexes` reports the partition count and, separately, any
+index shape that exists on individual partitions without being attached to the
+parent. That distinction matters: `CREATE INDEX` on the parent creates a
+partitioned index the catalogue reports under the parent, and every partition
+really does have it — but an index built directly on one partition is attached
+to nothing, so index parity reads the parent, sees nothing, and tells you to
+create a shape that already covers part of the table.
+
+Note also that `CREATE INDEX` on a partitioned parent cannot use `CONCURRENTLY`.
+Building one over a large source means `CREATE INDEX ON ONLY parent`, a
+concurrent build per partition, then `ALTER INDEX ... ATTACH PARTITION`.
+
+### What is not done for you
+
+The package never creates, attaches or detaches a partition, and it does not
+partition your base table. Partitioning the base table would let its branch of
+the `UNION ALL` prune too, but a partitioned table's primary key must include
+the partition key — which turns `PRIMARY KEY (id)` into `(state, id)` and breaks
+the single-column `ON CONFLICT (pk)` that three trigger templates and the bulk
+copy-up rely on. That is a redesign, not a setting.
+
+The nested-loop thresholds in `planning` were also fitted against an
+unpartitioned source. Stacking an `Append` over *n* partitions beneath an
+appendrel the ban already exists for may move them; measure with
+`benchmark/suites/ban.py` on your own shape before trusting the defaults.
+
 ## Why the view is written with `NOT EXISTS`
 
 The source branch has to exclude rows the base table has taken over. Expressed
