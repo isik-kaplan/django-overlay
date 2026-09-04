@@ -177,6 +177,35 @@ def _overlay_views_joined(query) -> int:
     return len(_overlay_views_read(query))
 
 
+def _selective_declared(query, _depth=0) -> bool:
+    """Has the caller declared this statement's scope selective?
+
+    The ban is decided by shape, because shape is the only thing readable off
+    the code — the same rule the m2m fence and the select_related redirect are
+    held to. Shape cannot see selectivity, and selectivity is what decides
+    whether the banned plan was the wrong one or the right one. A conjunction
+    across three hops that resolves to one person wants exactly the nested loop
+    the threshold forbids: probe an index, get a row, loop into the next table.
+    The same shape across three broad predicates is the case the ban exists for.
+
+    So this is the caller's lever, and it is the same lever the fence already
+    is — `pk__overlay_fenced_in` exists because the crossover depends on how
+    many rows a subquery returns, which the library will not go looking for.
+    Nothing here probes the data either.
+
+    Walked through subqueries the same way `_overlay_views_read()` counts them,
+    and for the same reason: a scope attached as `pk__in=<queryset>` puts its
+    views in a subquery, and they are all in the one statement Postgres plans.
+    If the count can be reached from a subquery then so must the suppression,
+    or marking the inner queryset would read as doing nothing.
+    """
+    if getattr(query, "_overlay_selective", False):
+        return True
+    if _depth > _MAX_SUBQUERY_DEPTH:
+        return False
+    return any(_selective_declared(inner, _depth + 1) for inner in _nested_queries(query))
+
+
 @contextlib.contextmanager
 def _hash_joins_forced(connection):
     """Ban nested loops for the statement inside, then put the setting back.

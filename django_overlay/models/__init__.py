@@ -39,6 +39,7 @@ from .planning import (
     _overlay_view_tables,
     _overlay_views_joined,
     _overlay_views_read,
+    _selective_declared,
 )
 from .query import (
     OverlayQuery,
