@@ -2,7 +2,7 @@ from django.apps import apps as django_apps
 from django.core.management.base import BaseCommand
 from django.db import connections
 
-from ...introspection import compare_indexes, table_indexes
+from ...introspection import compare_indexes, partition_summary, table_indexes
 from ...sync import resolve_schema
 
 
@@ -58,6 +58,27 @@ class Command(BaseCommand):
                 f"{model._meta.label}  {tenant_schema}.{base_table}  <-  {source.schema}.{source.table}"
             )
         )
+        partitions = partition_summary(cursor, source.schema, source.table)
+        if partitions:
+            declared = source.partition_key or self.style.WARNING("not declared")
+            self.stdout.write(f"  partitioned parent, {partitions['partitions']} partitions, key {declared}")
+            if not source.partition_key:
+                self.stdout.write(
+                    "      every probe this package generates fans out across all of them — "
+                    "set SourceTable(partition_key=...)"
+                )
+            for index in partitions["unattached"]:
+                # Half-covered, which parity below cannot see: these live on
+                # partitions and are attached to nothing, so the parent reports
+                # them as absent. Reported here rather than folded into
+                # source_indexes, because "on 3 of 50" is not the same claim as
+                # "the source has this index".
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"  UNATTACHED  {index['shape']} — on {index['on_partitions']} of "
+                        f"{partitions['partitions']} partitions, not on the parent"
+                    )
+                )
         if not source_indexes:
             self.stdout.write("  source table has no indexes at all")
         for index in source_indexes:
