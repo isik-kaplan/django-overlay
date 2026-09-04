@@ -42,6 +42,8 @@ view's fault or the query's.
 | `set_algebra` | can the leaf-by-leaf strategy stay in SQL? |
 | `ban` | what `DJANGO_OVERLAY_FORCE_HASH_JOINS` is worth, and what it costs |
 | `hops` | does the ban still hold at three and four conditions? |
+| `fence` | where materialising an m2m scope stops paying |
+| `partitions` | what declaring a source partitioned prunes away, swept by partition count |
 
 `--smoke` runs `shapes` and `ban`, which is what CI does on every push.
 
