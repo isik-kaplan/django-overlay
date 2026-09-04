@@ -1,0 +1,23 @@
+{#- Values that appear twice *within* one source table, for the columns an
+    OverlayUniqueConstraint covers.
+
+    Nothing has ever checked this. The constraint's native half is a unique
+    index on the base table, and its source-side half asks only whether a value
+    the tenant is writing already exists at source -- neither can see two source
+    rows sharing one. So the source has always been taken on trust, and a swap
+    is the moment that trust is worth spending a query on: the same probe runs
+    against the current table too, so a report can say whether the candidate
+    introduces duplicates or merely inherits them. -#}
+SELECT count(*)
+FROM (
+    SELECT 1
+    FROM {{ source.schema | qi }}.{{ source.table | qi }}
+    WHERE {% for c in columns %}{{ c | qi }} IS NOT NULL{% if not loop.last %} AND {% endif %}{% endfor %}
+
+{%- if source.extra_where %}
+        AND ({{ source.extra_where }})
+{%- endif %}
+    GROUP BY {% for c in columns %}{{ c | qi }}{% if not loop.last %}, {% endif %}{% endfor %}
+
+    HAVING count(*) > 1
+) AS overlay_duplicates

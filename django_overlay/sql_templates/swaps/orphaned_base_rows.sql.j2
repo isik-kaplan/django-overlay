@@ -1,0 +1,29 @@
+{#- Base rows that are vendor-backed today and would not be after the swap --
+    overrides and tombstones whose source row is absent from the candidate.
+
+    Not an integrity break, and the report says so. Materialisation copies the
+    whole row, so an override whose source row vanishes still shows through the
+    view intact, and a tombstone masking nothing costs an index entry. What is
+    lost is the *link*: source_row() returns None and reset_to_source() has
+    nothing to reset to. Worth knowing before the swap, not worth blocking it.
+
+    Membership in the current source is what makes a base row vendor-backed,
+    which is the one formulation that works for every strategy -- under the
+    UUID strategies a materialised row and an organic one are told apart by
+    nothing else. -#}
+{% macro present_in(source) -%}
+SELECT 1
+        FROM {{ source.schema | qi }}.{{ source.table | qi }}
+        WHERE {{ source.table | qi }}.{{ source.id_column | qi }} = {{ "-" if negate }}overlay_base.{{ pk_column | qi }}
+{%- if source.extra_where %}
+            AND ({{ source.extra_where }})
+{%- endif %}
+{%- endmacro -%}
+SELECT count(*)
+FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS overlay_base
+WHERE EXISTS (
+    {{ present_in(current) }}
+)
+AND NOT EXISTS (
+    {{ present_in(candidate) }}
+)
