@@ -352,6 +352,23 @@ only happens when the partition key is in the predicate; without it the plan is
 an `Append` over every partition, so a lookup is not one index scan but *n* of
 them.
 
+Measured by `django-overlay benchmark --suite partitions`, one pass at scale
+1.0 — 1,000,000 rows, 500 probes a cell, one probe per row a trigger would fire
+on. Each figure is unpruned over pruned:
+
+| partitions | point lookup by id | lookup by email | miss by email |
+|---|---|---|---|
+| 4 | x1.6 | x1.8 | x2.2 |
+| 16 | x4.5 | x5.7 | x6.7 |
+| 64 | x13.8 | x19.2 | x24.3 |
+
+The pruned column does not move with the partition count — it is one index scan
+at 4 partitions and one at 64, sitting alongside the same rows in a flat table.
+It is the unpruned column that tracks it, which is the whole claim. The worst
+shape is the third: an insert of a value the source does not hold, where nothing
+matches, so there is no row to stop at and every partition is visited in full
+before the answer comes back no.
+
 Application queries carry the key because somebody wrote them. The probes this
 package generates cannot, so tell it once:
 
