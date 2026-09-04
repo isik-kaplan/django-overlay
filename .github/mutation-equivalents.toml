@@ -338,3 +338,12 @@ the same call -- a default of True, and the default removed -- are both killed
 by an OverlayForeignKey pointed at a plain model, which is why a pragma on the
 line is not the answer.
 """
+
+["django_overlay.swaps.probes.x__relation_exists__mutmut_6"]
+reason = """
+The same statement as checks._table_exists above, lowercased the same way, and
+equivalent for the same reason: Postgres does not care about the case of SQL
+keywords. The two live in different modules because they answer the question at
+different moments -- one at `manage.py check` time, one against a swap
+candidate -- and neither is a place to reach for the other.
+"""
