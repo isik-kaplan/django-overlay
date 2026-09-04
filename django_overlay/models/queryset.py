@@ -182,6 +182,53 @@ class OverlayQuerySet(models.QuerySet):
             output_field=models.BooleanField(),
         )
 
+    # ----------------------------------------------------- the selectivity lever
+
+    def overlay_selective(self):
+        """Declare this queryset's scope small, so nested loops stay allowed.
+
+        The nested-loop ban in `planning` is decided by shape — how many
+        overlay views land in one statement — because shape is the only thing
+        readable off the code. What shape cannot see is *selectivity*, and
+        selectivity is what decides whether the banned plan was wrong or right.
+
+        Both cases are already measured, from opposite sides:
+
+        - Broad, and the ban is load-bearing. Two m2m hops at 1,000,000 people
+          are 752ms banned and do not finish unbanned; three are 3,851ms.
+        - Selective, and the ban is the regression. `_HASH_JOIN_THRESHOLD`'s own
+          note records 7ms -> 60ms for a selective filter with no LIMIT, because
+          "200 rows is exactly where a nested loop is the right plan".
+
+        An identity search — name plus email plus phone, resolving to one person
+        — is three hops and therefore five views, so it trips the threshold
+        unconditionally, and a forced hash build over the whole email relation
+        is what it costs. That is the shape this exists for::
+
+            Person.objects.filter(
+                state__in=states, name=name,
+                emails__address=email, phones__number=phone,
+            ).overlay_selective()
+
+        Use it when you know the predicate resolves to a handful of rows: a
+        unique-ish column, an id, an exact contact detail. Do not use it on a
+        scope you cannot bound — a state, a city, a status flag — because the
+        plan it re-permits is the one that runs to exhaustion, and there is no
+        LIMIT on the damage.
+
+        Nothing here probes the database to decide. That is the same line the
+        m2m fence holds (`pk__overlay_fenced_in` exists for exactly this reason)
+        and the reason the decision is yours: SQL that depends on database state
+        is SQL you cannot read off the code.
+
+        Reachable from a subquery, since the view count is too — see
+        `planning._selective_declared()`. Chainable and position-independent;
+        the flag is read once, at compile time.
+        """
+        clone = self._chain()
+        clone.query._overlay_selective = True
+        return clone
+
     # ------------------------------------------------ select_related routing
 
     def _clone(self):
