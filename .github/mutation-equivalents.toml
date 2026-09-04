@@ -327,3 +327,14 @@ reason -- the mutation belongs to a keyword-less argument inside the call, and
 a pragma on the line would also suppress the default-of-True mutation next to
 it, which a test does kill.
 """
+
+["django_overlay.checks.x__partition_column_problems__mutmut_5"]
+reason = """
+getattr(target, "_is_overlay_view_model", False) -> the same with None as the
+default. It is read only as the condition of a conditional expression, where
+False and None are both falsy, so the branch taken is the same either way. One
+of several of exactly this shape in this file; the two neighbouring mutations of
+the same call -- a default of True, and the default removed -- are both killed
+by an OverlayForeignKey pointed at a plain model, which is why a pragma on the
+line is not the answer.
+"""

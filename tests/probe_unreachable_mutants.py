@@ -335,8 +335,15 @@ MUTANTS = [
         "sql",
         "the delete-side guard stops allowing a row that reverts to source",
         "django_overlay/sql_templates/triggers/referenced_row_trigger.sql.j2",
-        "  IF EXISTS (\n    SELECT 1 FROM {{ tenant_schema | qi }}.{{ target_view | qi }}\n    WHERE {{ target_pk | qi }} = OLD.{{ target_pk | qi }}\n  ) THEN\n    RETURN NULL;\n  END IF;",
-        "",
+        # Anchored on the guard's exit rather than the whole `IF EXISTS` block.
+        # The block acquired the partition-key predicate and the paragraph of
+        # comment explaining it, and a pattern that spans a comment goes stale
+        # the next time somebody rewords one -- which is exactly what happened.
+        # `NULL;` is a no-op statement, so the guard still runs and simply stops
+        # returning: a row that reverted to source falls through to the
+        # reference check and raises, which is the failure this describes.
+        "  ) THEN\n    RETURN NULL;\n  END IF;",
+        "  ) THEN\n    NULL;\n  END IF;",
     ),
     (
         "sql",
