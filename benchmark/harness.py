@@ -92,6 +92,34 @@ def set_statement_cap(milliseconds):
         cursor.execute("SET lock_timeout = 5000")
 
 
+@contextmanager
+def without_statement_cap():
+    """Build a fixture with the measurement cap lifted, then put it back.
+
+    The cap bounds what a *measured* query is allowed to spend. Building the
+    rows to measure against is not a measurement, and at scale 1.0 it does not
+    fit inside one: the partitions suite loads a million rows and builds two
+    indexes over them, which finished comfortably at 300,000 and was cancelled
+    at 1,000,000 by the ten-second cap the run happened to be measuring under.
+    That took the suite, and with it the closing summary -- so a run that also
+    lost twelve cells to a broken connection never got to say so.
+
+    Restored rather than cleared, for the reason graph.py gives about its own
+    copy of this: a suite that leaves the session uncapped makes every suite
+    after it unbounded, which is a worse failure than the one being fixed
+    because it is silent.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute("SHOW statement_timeout")
+        previous = cursor.fetchone()[0]
+        cursor.execute("SET statement_timeout = 0")
+    try:
+        yield
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute("SET statement_timeout = %s", [previous])
+
+
 class Abandoned(Exception):
     """Raised inside a measurement that has run past its wall-clock ceiling."""
 

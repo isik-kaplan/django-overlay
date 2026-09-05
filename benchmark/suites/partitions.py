@@ -75,26 +75,31 @@ def build_tables(rows: int, partitions: int) -> None:
     question for this. The flat table is the floor: it says how much of the
     unpruned column is the partitioning and how much is just the row count.
     """
-    _drop()
-    _sql(
-        f"CREATE TABLE {PARENT} (id bigint NOT NULL, bucket int NOT NULL, email text NOT NULL) "
-        "PARTITION BY LIST (bucket)"
-    )
-    for bucket in range(partitions):
-        _sql(f"CREATE TABLE {PARENT}_{bucket} PARTITION OF {PARENT} FOR VALUES IN ({bucket})")
-    _sql(f"CREATE TABLE {FLAT} (id bigint NOT NULL, bucket int NOT NULL, email text NOT NULL)")
-
-    for table in (PARENT, FLAT):
+    # Under the cap lifted, because none of this is a measurement. At scale
+    # 1.0 the email index over a million rows does not build inside a ten
+    # second statement timeout, and the suite died in setup rather than
+    # reporting a slow cell -- see harness.without_statement_cap().
+    with harness.without_statement_cap():
+        _drop()
         _sql(
-            f"INSERT INTO {table} (id, bucket, email) "
-            "SELECT i, mod(i, %s), 'person' || i || '@example.com' FROM generate_series(1, %s) AS i",
-            [partitions, rows],
+            f"CREATE TABLE {PARENT} (id bigint NOT NULL, bucket int NOT NULL, email text NOT NULL) "
+            "PARTITION BY LIST (bucket)"
         )
-        # Built after the load, which is faster and is what any real
-        # blue-green rebuild of a source table does anyway.
-        _sql(f"CREATE INDEX ON {table} (id)")
-        _sql(f"CREATE INDEX ON {table} (email)")
-        _sql(f"ANALYZE {table}")
+        for bucket in range(partitions):
+            _sql(f"CREATE TABLE {PARENT}_{bucket} PARTITION OF {PARENT} FOR VALUES IN ({bucket})")
+        _sql(f"CREATE TABLE {FLAT} (id bigint NOT NULL, bucket int NOT NULL, email text NOT NULL)")
+
+        for table in (PARENT, FLAT):
+            _sql(
+                f"INSERT INTO {table} (id, bucket, email) "
+                "SELECT i, mod(i, %s), 'person' || i || '@example.com' FROM generate_series(1, %s) AS i",
+                [partitions, rows],
+            )
+            # Built after the load, which is faster and is what any real
+            # blue-green rebuild of a source table does anyway.
+            _sql(f"CREATE INDEX ON {table} (id)")
+            _sql(f"CREATE INDEX ON {table} (email)")
+            _sql(f"ANALYZE {table}")
 
 
 def define_probe(name: str, table: str, predicate: str, partitions: int) -> None:
