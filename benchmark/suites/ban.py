@@ -216,9 +216,18 @@ def run(ctx):
     section = harness.Section(
         "What the exclusions would cost if banned anyway (threshold forced to 1)",
         COLUMNS,
-        note="at 1,000,000 rows banning these was free, which argued for one threshold; "
-        "the hash the ban forces is built over a larger relation as scale grows",
+        note="banning these costs a narrow one hop 3-5x and buys nothing, which is why "
+        "the exclusions exist -- measured x0.3 at 1,000,000 rows and x0.1 at 300,000, so "
+        "the harm is relatively worse the smaller the relation, not larger",
     )
+    # The note above used to read "at 1,000,000 rows banning these was free,
+    # which argued for one threshold". It was never free, and the gain column
+    # in this very section had been saying so: x0.3 in the saved 1.0 baseline
+    # this project's PERFORMANCE.md was written from, x0.3 and x0.1 on CI at
+    # 1.0 and 0.3, x0.2 run locally. A note arguing against the exclusions
+    # while the table under it measured them as load-bearing is worse than no
+    # note, because the exclusions are what keep a narrow one hop at 9ms
+    # instead of 47ms.
     with threshold(1):
         row(ctx, section, "one hop, narrow", resolve, NARROW, 1, models)
         row(ctx, section, "one hop, broad", resolve, BROAD, 1, models)
