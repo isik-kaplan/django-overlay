@@ -64,12 +64,12 @@ that way: a test that never ran cannot have killed a mutant that lived, and a
 kill is a kill whichever tests produced it. Phase two takes each survivor and
 runs the **whole** suite against it, which is what the report gates on.
 
-Only survivors pay for a full pass. That is the difference between four of the
-six shards needing ten to twenty hours and all six fitting inside one:
+Only survivors pay for a full pass. That is the difference between a shard
+needing ten to twenty hours and a shard fitting inside one:
 
-| | per mutant | 2,209 mutants |
+| | per mutant | 3,690 mutants |
 |---|---|---|
-| whole suite for every mutant | ~32s local, ~97s CI | 19.6h local, 59h CI |
+| whole suite for every mutant | ~32s local, ~97s CI | 33h local, 99h CI |
 | traced tests, then confirm | ~2s, plus a full pass per survivor | ~1.2h local |
 
 Phase two caches its verdicts, in `mutants/mutmut-confirmed-cache.json`, which
@@ -147,9 +147,19 @@ once, in the ordinary test run — add a module without assigning it to a shard
 and `pytest` fails with its name, rather than the module silently never being
 mutated.
 
-The `models` shard is 42% of the mutants on its own and `only_mutate` matches
-files rather than line ranges, so it cannot be split further. It is the
-critical path.
+`only_mutate` matches files rather than line ranges, so a shard can never be
+smaller than the smallest module in it, and a module that is on the critical
+path has to be split before its shard can be. That is why
+`django_overlay/swaps/` and `django_overlay/models/` are packages rather than
+modules.
+
+Which shard is the critical path is a question for the clock, not for the
+mutant count. Phase one runs only the tests tracing associates with each
+mutant, so what a shard costs is what *those* tests cost, and that varies by
+more than an order of magnitude: `commands` carries 678 mutants, the most of
+any shard, and finishes in minutes because they trace to argparse tests, while
+the swap shards each carry a fifth of that and every one of their mutants
+re-runs real SQL against two real tables. Size a shard by measuring it.
 
 The one legitimate exit is a genuinely equivalent mutant — one whose mutated
 form is indistinguishable from the original. Mark it in place and say why:
