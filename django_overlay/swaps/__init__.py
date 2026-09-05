@@ -38,7 +38,7 @@ by size:
 
     report  <-  probes  <-  columns    \
                         <-  indexes     \
-                        <-  size         >-  cutover
+                        <-  size         >-  preflight  <-  cutover
                         <-  identity    /
                         <-  integrity  /
 
@@ -47,29 +47,28 @@ Everything is re-exported here, so `from django_overlay.swaps import ...`
 means what it did when this was one file -- including the private names the
 test suite reaches for. The one thing a split does change is monkeypatching: a
 name has to be patched on the module that *defines* it
-(`swaps.cutover.verify_source_swap`), not on this one, where it is only a
+(`swaps.preflight.verify_source_swap`), not on this one, where it is only a
 reference.
 
-SHAPE_CHECKS and ROW_CHECKS live in cutover rather than beside the checks they
-name, because which checks are in them is a statement about the sequence --
-the shape half gates the row half, and the row half is what the cutover re-runs
-under the lock -- and cutover is the module that owns the sequence.
+SHAPE_CHECKS and ROW_CHECKS live in preflight rather than beside the checks
+they name, because which checks are in them is a statement about the sequence
+-- the shape half gates the row half, and the row half is what the cutover
+re-runs under the lock -- and preflight is the module that owns the sequence.
 """
 
 # ruff: noqa: F401 -- every import here is a re-export, which is the point.
 from .columns import _check_columns, _check_extra_where
-from .cutover import (
+from .cutover import deployed_source, swap_source
+from .identity import _check_identity, _check_orphaned_base_rows
+from .indexes import _check_indexes, _check_partitions
+from .integrity import _check_dangling_references, _check_uniqueness
+from .preflight import (
     ROW_CHECKS,
     SHAPE_CHECKS,
     _resolve_identity_columns,
     _run,
-    deployed_source,
-    swap_source,
     verify_source_swap,
 )
-from .identity import _check_identity, _check_orphaned_base_rows
-from .indexes import _check_indexes, _check_partitions
-from .integrity import _check_dangling_references, _check_uniqueness
 from .probes import (
     _column_types,
     _estimated_rows,

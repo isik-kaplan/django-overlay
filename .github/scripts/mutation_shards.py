@@ -88,6 +88,23 @@ SHARDS = {
     # the same reason models/ is: as one file it was 822 mutants, and the shard
     # holding it was the only one that ran for hours.
     #
+    # Six shards, and the number came from measuring rather than from taste.
+    # Three was the previous answer and was wrong in both of the ways this is
+    # easy to get wrong. It was sized against a local run, and local is the
+    # cheap measurement: a swap mutant costs four to seven seconds here
+    # depending on what else the machine is doing, and ten to thirteen on CI,
+    # so shards that came to 25 minutes on a laptop ran 40 to 61 in Actions. It
+    # was also balanced by mutant count, which does not predict runtime --
+    # `probes` carried fewer mutants than `swaps` and took longer, because
+    # every check in it runs real SQL across two real tables while half of
+    # `swaps` is string formatting.
+    #
+    # So the seams below are by subject, and the sizes are measured cold: the
+    # mutants/ tree removed, nothing cached, one shard at a time because they
+    # share a test database. 163 mutants is the peak and it is a floor as well
+    # as a peak -- swap_source() alone is 142 of them, and a shard cannot be
+    # smaller than the module it holds.
+    #
     # Caller-facing: what a report is, the context every check runs in, and the
     # two checks that ask whether the view's own query still resolves.
     "swaps": [
@@ -107,14 +124,17 @@ SHARDS = {
         "django_overlay/swaps/identity.py",
     ],
     # The constraint triggers' predicates run backwards over the rows that
-    # already exist. The slowest per mutant -- every one of these is real SQL
-    # across two real tables.
+    # already exist. The slowest per mutant of the six -- every one of these is
+    # real SQL across two real tables.
     "integrity": [
         "django_overlay/swaps/integrity.py",
     ],
-    # Which checks run and in what order, and the half that changes something:
-    # the lock, the recheck under it, and the view and triggers replaced
-    # together. Still the longest of these by some way.
+    # Which checks run, in what order, and what gates what.
+    "preflight": [
+        "django_overlay/swaps/preflight.py",
+    ],
+    # The half that changes something: the lock, the recheck under it, and the
+    # view and triggers replaced together.
     "cutover": [
         "django_overlay/swaps/cutover.py",
     ],

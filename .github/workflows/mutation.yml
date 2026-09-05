@@ -141,7 +141,7 @@ jobs:
       # trade five known answers for one.
       fail-fast: false
       matrix:
-        shard: [queryset, query, models, ddl, checks, commands, fields, swaps, indexes, identity, integrity, cutover, cli]
+        shard: [queryset, query, models, ddl, checks, commands, fields, swaps, indexes, identity, integrity, preflight, cutover, cli]
 
     # Single Python version on purpose: mutation results don't vary across
     # interpreters, and each shard runs the whole suite once per mutant.
