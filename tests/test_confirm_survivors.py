@@ -664,8 +664,33 @@ def test_an_exemption_for_a_mutant_that_no_longer_exists_fails(run_in):
 def test_an_exemption_for_a_mutant_that_is_now_killed_fails(run_in):
     """An unnecessary exemption makes the policy look smaller than it is."""
     write_meta(run_in, "cli", {"django_overlay.cli.x_main__mutmut_40": 1})
-    problems = confirm_survivors.stale_exemptions({"django_overlay.cli.x_main__mutmut_40": GOOD_REASON})
+    problems = confirm_survivors.stale_exemptions(
+        {"django_overlay.cli.x_main__mutmut_40": GOOD_REASON},
+        run=lambda name, root=None: (1, 0.0, "tests/test_cli.py::test_it"),
+    )
     assert problems and "kills it now" in problems[0]
+    assert "tests/test_cli.py::test_it" in problems[0], "say which test, so it can be read"
+
+
+def test_a_phase_one_kill_the_whole_suite_cannot_reproduce_retires_nothing(run_in):
+    """Phase one runs the traced tests, so a flaky test anywhere in that subset
+    exits non-zero and is recorded as a kill. Retiring an exemption on that
+    would delete a correct one and demand a test for a difference that does not
+    exist -- which is exactly what nearly happened to
+    models.planning._selective_declared's getattr-default mutant.
+
+    So the kill is settled the way every other verdict here is settled: against
+    the whole suite."""
+    write_meta(run_in, "cli", {"django_overlay.cli.x_main__mutmut_40": 1})
+    asked = []
+
+    def run(name, root=None):
+        asked.append(name)
+        return 0, 0.0, None
+
+    problems = confirm_survivors.stale_exemptions({"django_overlay.cli.x_main__mutmut_40": GOOD_REASON}, run=run)
+    assert problems == []
+    assert asked == ["django_overlay.cli.x_main__mutmut_40"], "the kill has to be re-checked, not assumed"
 
 
 def test_an_exemption_is_not_judged_by_a_shard_that_did_not_mutate_it(run_in):

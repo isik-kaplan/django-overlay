@@ -293,12 +293,23 @@ def module_of(mutant_name):
     return Path("mutants") / (module.replace(".", "/") + ".py.meta")
 
 
-def stale_exemptions(reasons, root="mutants"):
+def stale_exemptions(reasons, root="mutants", run=run_full_suite):
     """Exemptions this run can prove are no longer earning their place.
 
     Only judged where the module was actually mutated -- a shard that does not
     cover cli.py has nothing to say about an exemption in it -- so this is
     quiet in the shards it does not concern and exact in the one it does.
+
+    A kill is confirmed against the whole suite before it retires anything,
+    which is the same rule every other verdict here is held to. Phase one runs
+    the traced tests, so *any* non-zero exit from that subset is recorded as a
+    kill -- including one a flaky test produced. That is not hypothetical:
+    models.planning._selective_declared's `getattr(..., False) -> None` mutant
+    came back killed on CI and passed all 1,445 tests when the whole suite was
+    run against it, because the value is only ever read as an `if` condition
+    and nothing can tell the two apart. Retiring an exemption on that evidence
+    would have deleted a correct one and demanded a test be written for a
+    difference that does not exist.
     """
     problems = []
     for name in sorted(reasons):
@@ -315,10 +326,14 @@ def stale_exemptions(reasons, root="mutants"):
                 "changed, so the exemption has to be made again or dropped."
             )
         elif codes[name] in KILLED_CODES:
-            problems.append(
-                f"{name} is exempted but something kills it now, so the exemption is "
-                "doing nothing except making the policy look smaller than it is."
-            )
+            code, _, killer = run(name, root=root)
+            if code in KILLED_CODES:
+                problems.append(
+                    f"{name} is exempted but something kills it now"
+                    + (f" ({killer})" if killer else "")
+                    + ", so the exemption is doing nothing except making the policy "
+                    "look smaller than it is."
+                )
     return problems
 
 
