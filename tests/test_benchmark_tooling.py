@@ -919,3 +919,57 @@ def test_the_count_matches_what_a_real_section_serialises_to():
     )
     run = [{"name": "s", "sections": [harness.section_to_data(section)]}]
     assert harness.lost_cells(run) == 1
+
+
+# ------------------------------------------------ building a fixture under a cap
+
+
+class _Cursor:
+    def __init__(self, log, previous):
+        self.log = log
+        self.previous = previous
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, statement, params=None):
+        self.log.append((statement, params))
+
+    def fetchone(self):
+        return (self.previous,)
+
+
+class _Capped:
+    def __init__(self, previous="10s"):
+        self.log = []
+        self.previous = previous
+
+    def cursor(self):
+        return _Cursor(self.log, self.previous)
+
+
+def test_a_fixture_build_lifts_the_cap_and_puts_back_what_was_there(monkeypatch):
+    """Not reset to zero: a suite that leaves the session uncapped makes every
+    suite after it unbounded, which is the silent version of this bug."""
+    capped = _Capped(previous="10s")
+    monkeypatch.setattr(harness, "connection", capped)
+    with harness.without_statement_cap():
+        capped.log.append(("CREATE INDEX", None))
+    assert capped.log == [
+        ("SHOW statement_timeout", None),
+        ("SET statement_timeout = 0", None),
+        ("CREATE INDEX", None),
+        ("SET statement_timeout = %s", ["10s"]),
+    ]
+
+
+def test_the_cap_goes_back_even_when_the_build_fails(monkeypatch):
+    capped = _Capped(previous="30s")
+    monkeypatch.setattr(harness, "connection", capped)
+    with pytest.raises(RuntimeError):
+        with harness.without_statement_cap():
+            raise RuntimeError("the load failed")
+    assert capped.log[-1] == ("SET statement_timeout = %s", ["30s"])
