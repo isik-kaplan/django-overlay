@@ -921,6 +921,85 @@ def test_the_count_matches_what_a_real_section_serialises_to():
     assert harness.lost_cells(run) == 1
 
 
+# ------------------------------------------- recovering from a broken connection
+
+
+class _Raw:
+    """A libpq handle that records what was asked of it, and can refuse."""
+
+    def __init__(self, refuse=()):
+        self.refuse = set(refuse)
+        self.calls = []
+
+    def _step(self, name):
+        self.calls.append(name)
+        if name in self.refuse:
+            raise RuntimeError(f"{name} failed")
+
+    def cancel(self):
+        self._step("cancel")
+
+    def close(self):
+        self._step("close")
+
+
+class _Connection:
+    """Django's wrapper, with the one behaviour that matters here: close()
+    leaves `connection` set when it thinks it is inside a transaction."""
+
+    def __init__(self, raw, in_atomic_block=False, closing_raises=False):
+        self.connection = raw
+        self.in_atomic_block = in_atomic_block
+        self.closed_in_transaction = False
+        self.closing_raises = closing_raises
+
+    def close(self):
+        if self.closing_raises:
+            raise RuntimeError("close failed")
+        if self.in_atomic_block:
+            self.closed_in_transaction = True
+        else:
+            self.connection = None
+
+
+def _discard(monkeypatch, wrapper):
+    monkeypatch.setattr(harness, "connection", wrapper)
+    harness.discard_connection()
+    return wrapper
+
+
+def test_the_server_side_query_is_cancelled_before_the_socket_is_closed(monkeypatch):
+    """Closing the client socket does not reliably stop the query the server is
+    still running, and the next measurement would then be racing it."""
+    raw = _Raw()
+    _discard(monkeypatch, _Connection(raw))
+    assert raw.calls == ["cancel", "close"], "cancel has to come first, and both have to happen"
+
+
+def test_a_handle_that_refuses_to_close_is_still_discarded(monkeypatch):
+    """This runs inside an exception handler. Raising here would turn one lost
+    cell into a lost suite, which is the failure it exists to prevent."""
+    wrapper = _discard(monkeypatch, _Connection(_Raw(refuse={"cancel", "close"}), closing_raises=True))
+    assert wrapper.connection is None
+    assert wrapper.closed_in_transaction is False
+
+
+def test_a_connection_closed_in_a_transaction_is_not_left_cached(monkeypatch):
+    """Django's close() marks closed_in_transaction and leaves the handle in
+    place, and every later close() returns at the first branch without touching
+    it -- so the broken connection gets handed out again. That is the one shape
+    that produces "another command is already in progress" on a connection
+    Django believes is healthy."""
+    wrapper = _discard(monkeypatch, _Connection(_Raw(), in_atomic_block=True))
+    assert wrapper.connection is None, "a wedged handle must not survive the recovery"
+    assert wrapper.closed_in_transaction is False, "or the next close() returns without closing"
+
+
+def test_nothing_is_asked_of_a_connection_that_was_never_opened(monkeypatch):
+    wrapper = _discard(monkeypatch, _Connection(None))
+    assert wrapper.connection is None
+
+
 # ------------------------------------------------ building a fixture under a cap
 
 

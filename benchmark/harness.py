@@ -120,6 +120,43 @@ def without_statement_cap():
             cursor.execute("SET statement_timeout = %s", [previous])
 
 
+def discard_connection():
+    """Throw the connection away, whatever state libpq was left in.
+
+    Three steps, because `connection.close()` on its own covers none of them.
+
+    Cancel first. An interrupted measurement leaves a query *running on the
+    server*, and closing the client socket does not reliably stop it; the next
+    measurement then competes with the query the last one abandoned.
+
+    Then close, guarded. This runs inside an exception handler, and an
+    exception raised here turns a lost cell into a lost suite -- the recovery
+    path is the last place that can afford to fail.
+
+    Then drop Django's cached handle explicitly. `close()` declines to clear it
+    when `in_atomic_block` is set, marking `closed_in_transaction` instead, and
+    every later `close()` returns at the first branch without touching the
+    connection. Nothing in the benchmark opens an atomic block today, so that
+    path should be unreachable -- but it is the one shape that yields "another
+    command is already in progress" on a connection Django believes is healthy,
+    which is the wedge this exists for. That wedge has never reproduced outside
+    CI, so this hardens the recovery rather than claiming to have found it.
+    """
+    raw = getattr(connection, "connection", None)
+    if raw is not None:
+        for step in ("cancel", "close"):
+            try:
+                getattr(raw, step)()
+            except Exception:  # noqa: BLE001 -- recovery must not raise
+                pass
+    try:
+        connection.close()
+    except Exception:  # noqa: BLE001 -- recovery must not raise
+        pass
+    connection.connection = None
+    connection.closed_in_transaction = False
+
+
 class Abandoned(Exception):
     """Raised inside a measurement that has run past its wall-clock ceiling."""
 
@@ -186,11 +223,13 @@ def _abandoned():
 
     The interrupt can land anywhere -- including between sending a statement
     and reading its result -- so the connection is not in a state worth
-    reasoning about. Closing it is the one reset that is certain, and Django
-    reopens on next use.
+    reasoning about. Throwing it away is the one reset that is certain, and
+    Django reopens on next use. See discard_connection(), which does more than
+    close it, because closing is not always enough to stop what the abandoned
+    measurement left running.
     """
     before = _connection_state()
-    connection.close()
+    discard_connection()
     print(f"ABANDONED a measurement; connection was {before}, now {_connection_state()}", file=sys.stderr)
     return Cell(0.0, note="gave up")
 
@@ -258,7 +297,7 @@ def _cap_or_lost(error, cap_ms):
     if _sqlstate(error) in CAP_SQLSTATES:
         return Cell(float(cap_ms), capped=True)
     before = _connection_state()
-    connection.close()
+    discard_connection()
     first_line = str(error).strip().splitlines()[0] if str(error).strip() else error.__class__.__name__
     print(f"LOST CONNECTION [was {before}] {first_line}", file=sys.stderr)
     return Cell(0.0, note=LOST_NOTE)
