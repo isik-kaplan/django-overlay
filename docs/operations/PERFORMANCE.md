@@ -37,6 +37,14 @@ Read the absolute milliseconds first. The ratios matter when they cross an order
 of magnitude, and the mirror is a floor the overlay cannot reach rather than a
 target it should hit.
 
+**And read them against the machine.** These were taken on 14 cores, Postgres
+17, best-of-two passes; the saved runs under `benchmark/results/` record the
+environment of each, and `--compare-to` is the honest way to compare. The same
+suite on a four-core CI runner at one pass measured 7,408ms for the two-hop row
+below that reads 752ms here — with the `plain` mirror moving from 28ms to 145ms
+alongside it, which is how you tell a slower machine from a slower library. A
+number from this page only means something against a number taken the same way.
+
 ### Fast — at or better than the mirror
 
 ```python
