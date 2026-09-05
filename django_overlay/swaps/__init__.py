@@ -33,27 +33,43 @@ What this will not do is decide for you. Everything it finds is reported; only
 the findings that mean *silent* breakage block, and `allow=` downgrades any of
 them for the case where you know better.
 
-One module until it was split, and the split is by subject rather than by size:
+One module until it was split, and split again; both times by subject, never
+by size:
 
-    report  <-  probes  <-  shape
-                       <-  rows   <-  cutover
+    report  <-  probes  <-  columns    \
+                        <-  indexes     \
+                        <-  size         >-  cutover
+                        <-  identity    /
+                        <-  integrity  /
 
-Nothing points backwards, so the move was a move and not a rewrite. Everything
-is re-exported here, so `from django_overlay.swaps import ...` means what it
-did when this was one file -- including the private names the test suite reaches
-for. The one thing a split does change is monkeypatching: a name has to be
-patched on the module that *defines* it (`swaps.cutover.verify_source_swap`),
-not on this one, where it is only a reference.
+Nothing points backwards, so both moves were moves and not rewrites.
+Everything is re-exported here, so `from django_overlay.swaps import ...`
+means what it did when this was one file -- including the private names the
+test suite reaches for. The one thing a split does change is monkeypatching: a
+name has to be patched on the module that *defines* it
+(`swaps.cutover.verify_source_swap`), not on this one, where it is only a
+reference.
+
+SHAPE_CHECKS and ROW_CHECKS live in cutover rather than beside the checks they
+name, because which checks are in them is a statement about the sequence --
+the shape half gates the row half, and the row half is what the cutover re-runs
+under the lock -- and cutover is the module that owns the sequence.
 """
 
 # ruff: noqa: F401 -- every import here is a re-export, which is the point.
+from .columns import _check_columns, _check_extra_where
 from .cutover import (
+    ROW_CHECKS,
+    SHAPE_CHECKS,
     _resolve_identity_columns,
     _run,
     deployed_source,
     swap_source,
     verify_source_swap,
 )
+from .identity import _check_identity, _check_orphaned_base_rows
+from .indexes import _check_indexes, _check_partitions
+from .integrity import _check_dangling_references, _check_uniqueness
 from .probes import (
     _column_types,
     _estimated_rows,
@@ -70,21 +86,7 @@ from .report import (
     _qualified,
     _same_relation,
 )
-from .rows import (
-    ROW_CHECKS,
-    _check_dangling_references,
-    _check_identity,
-    _check_orphaned_base_rows,
-    _check_uniqueness,
-)
-from .shape import (
-    SHAPE_CHECKS,
-    _check_columns,
-    _check_extra_where,
-    _check_indexes,
-    _check_partitions,
-    _check_row_estimate,
-)
+from .size import _check_row_estimate
 
 
 __all__ = [
