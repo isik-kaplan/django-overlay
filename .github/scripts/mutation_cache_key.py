@@ -25,10 +25,18 @@ verdicts as this run's. That is not hypothetical -- splitting models.py into a
 package changed what the `models` shard owns, and without this the next run
 would have reported ~736 kills for a file that no longer exists.
 
-Each shard already has its own key namespace, so including the list only
-invalidates a shard when that shard's own files change, which is exactly when
-invalidation is needed. check_mutants.tree_problems() is the second layer, for
-if this one ever fails.
+Each shard has its own key namespace, so its file list only invalidates the
+shard it belongs to. That is not enough on its own. `mutants/` holds a copy of
+the *whole* package and the suite runs inside it, so a module deleted anywhere
+is still on disk in every other shard's restored tree, and the baseline fails
+on a file that shard never mutated. Splitting swaps/ six ways did exactly
+that: the six new shards passed on empty caches and all eight untouched ones
+failed on ghosts of rows.py and shape.py. So the package's whole module list
+goes in too, and any add, delete or rename invalidates every shard.
+
+check_mutants.tree_problems() is the second layer, for if this one ever fails
+-- though it reads the files that have *results* in the tree, which makes it a
+net for stale verdicts rather than for stale source.
 
 This lives in a file rather than inline in the workflow because it was inline
 once, as a heredoc, and the closing delimiter was indented along with the YAML
@@ -44,17 +52,32 @@ import tomllib
 from pathlib import Path
 
 
-def shard_files(shard):
-    """The files `shard` owns, straight from the map CI selects with."""
-    if shard is None:
-        return []
+def _shard_map():
     path = Path(__file__).resolve().parent / "mutation_shards.py"
     spec = importlib.util.spec_from_file_location("mutation_shards", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def shard_files(shard):
+    """The files `shard` owns, straight from the map CI selects with."""
+    if shard is None:
+        return []
+    module = _shard_map()
     if shard not in module.SHARDS:
         raise SystemExit(f"unknown shard {shard!r}; known: {', '.join(sorted(module.SHARDS))}")
     return module.SHARDS[shard]
+
+
+def package_modules():
+    """Every module the package contains, whoever mutates it.
+
+    A different question from shard_files(), and the one that catches a module
+    disappearing: every shard's tree carries the whole package, so every
+    shard's tree is stale when the package gains or loses a file."""
+    module = _shard_map()
+    return sorted({path for paths in module.SHARDS.values() for path in paths} | set(module.NOT_SHARDED))
 
 
 def fingerprint(pyproject=Path("pyproject.toml"), lock=Path("uv.lock"), shard=None):
@@ -70,6 +93,7 @@ def fingerprint(pyproject=Path("pyproject.toml"), lock=Path("uv.lock"), shard=No
         "dependencies": config["project"].get("dependencies", []),
         "lock": hashlib.sha256(Path(lock).read_bytes()).hexdigest(),
         "shard_files": shard_files(shard),
+        "package_modules": package_modules(),
     }
     return hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()[:16]
 

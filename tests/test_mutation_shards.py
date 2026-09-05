@@ -287,6 +287,31 @@ def test_the_key_does_not_depend_on_whether_a_shard_is_selected(tmp_path):
     assert key.fingerprint(unselected, lock, shard="models") == key.fingerprint(selected, lock, shard="models")
 
 
+def test_losing_a_module_invalidates_every_shard(monkeypatch):
+    """A module deleted from one shard makes every *other* shard's tree stale
+    too, because `mutants/` holds a copy of the whole package and the suite
+    runs inside it. Splitting swaps/ six ways is how this was found: the six
+    new shards started cold and passed, and all eight untouched ones restored
+    a tree still holding rows.py and shape.py, where this very file failed the
+    baseline on modules that belong to no shard.
+
+    So the key covers the package's whole module list, not just the shard's
+    slice -- and an untouched shard's key has to move when a module anywhere
+    disappears."""
+    key = load_cache_key()
+    before = {shard: key.fingerprint(shard=shard) for shard in shards.SHARDS}
+
+    surviving = dict(shards.SHARDS)
+    victim = next(s for s, paths in surviving.items() if len(paths) > 1)
+    surviving[victim] = surviving[victim][:-1]
+    monkeypatch.setattr(shards, "SHARDS", surviving)
+    monkeypatch.setattr(key, "_shard_map", lambda: shards)
+
+    after = {shard: key.fingerprint(shard=shard) for shard in surviving}
+    unchanged = sorted(shard for shard in after if after[shard] == before[shard])
+    assert not unchanged, f"these shards would restore a tree holding the deleted module: {unchanged}"
+
+
 def test_an_unknown_shard_has_no_key():
     key = load_cache_key()
     with pytest.raises(SystemExit):
