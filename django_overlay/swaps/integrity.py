@@ -1,85 +1,21 @@
-"""Whether the rows that already exist survive the swap.
+"""The constraint triggers' predicates, run backwards over the rows that
+already exist.
 
-Each one is an existing trigger's predicate, transposed. The triggers ask
-"is this row being written valid"; a swap writes nothing they can see, so the
-same question has to be asked with the quantifier moved -- "are all the rows
-that already exist still valid against the table we are about to point at".
+An OverlayForeignKey and an OverlayUniqueConstraint are each enforced by a
+trigger that asks, of one row being written, whether it is valid. A swap
+writes no row any of them can see, so the same question has to be asked with
+the quantifier moved: not "is this reference valid" but "are all the
+references that already exist still valid against the table we are about to
+point at".
 
-These are also the checks a concurrent write can invalidate, which is why the
-cutover re-runs exactly this set while holding the lock.
+Both checks count against the current source as well as the candidate, so a
+problem that is already true today is reported as the pre-existing one it is
+rather than blamed on the swap. Only what the swap *creates* blocks.
 """
 
 from ..sync import inbound_overlay_foreign_keys, overlay_unique_constraints
 from .probes import _Probe
 from .report import ERROR, WARNING, Finding, _qualified
-
-
-def _check_identity(probe: _Probe) -> list[Finding]:
-    """Whether the candidate means the same thing by an id as the current
-    source does. Nothing else in this module matters as much."""
-    if not probe.identity_columns:
-        return [
-            Finding(
-                "S005",
-                WARNING,
-                "No identity_columns given, so nothing verified that the candidate means the same "
-                "entity by an id as the current source does. Renumbering is the one failure here "
-                "that raises nothing, breaks nothing visibly, and silently repoints every override, "
-                "tombstone and foreign key at a different row. Pass the source's natural key.",
-            )
-        ]
-    reassigned, renumbered = probe.scalar_row(
-        "identity_drift.sql.j2",
-        current=probe.current,
-        candidate=probe.candidate,
-        identity_columns=list(probe.identity_columns),
-    )
-    findings = []
-    if reassigned:
-        findings.append(
-            Finding(
-                "S003",
-                ERROR,
-                f"{reassigned:,} id(s) carry a different {list(probe.identity_columns)} in "
-                f"{_qualified(probe.candidate)} than in {_qualified(probe.current)}. Every override, "
-                "tombstone and foreign key holding one of those now points at a different entity, "
-                "and nothing will raise.",
-            )
-        )
-    if renumbered:
-        findings.append(
-            Finding(
-                "S004",
-                ERROR,
-                f"{renumbered:,} row(s) present in both tables changed id. References to them "
-                "dangle and their overrides no longer shadow them.",
-            )
-        )
-    return findings
-
-
-def _check_orphaned_base_rows(probe: _Probe) -> list[Finding]:
-    orphaned = probe.count(
-        "orphaned_base_rows.sql.j2",
-        tenant_schema=probe.tenant_schema,
-        base_table=probe.base_table,
-        pk_column=probe.pk_column,
-        negate=probe.negate,
-        current=probe.current,
-        candidate=probe.candidate,
-    )
-    if not orphaned:
-        return []
-    return [
-        Finding(
-            "S006",
-            WARNING,
-            f"{orphaned:,} base row(s) are backed by a source row the candidate does not have. "
-            "They keep their values and stay visible — materialisation copies the whole row — but "
-            "they stop being vendor-backed: source_row() returns None and reset_to_source() has "
-            "nothing to reset to.",
-        )
-    ]
 
 
 def _check_dangling_references(probe: _Probe) -> list[Finding]:
@@ -178,15 +114,3 @@ def _check_uniqueness(probe: _Probe) -> list[Finding]:
                 )
             )
     return findings
-
-
-# Everything about the rows themselves -- each one a trigger's predicate run
-# backwards over the data that already exists. These are the checks a
-# concurrent write can invalidate, which is why the cutover re-runs exactly
-# this tuple while holding the lock.
-ROW_CHECKS = (
-    _check_identity,
-    _check_orphaned_base_rows,
-    _check_dangling_references,
-    _check_uniqueness,
-)

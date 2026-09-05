@@ -2,6 +2,11 @@
 
 The three things a caller actually calls. Everything underneath is a check or
 a report; this is the part that takes the lock and replaces the view.
+
+SHAPE_CHECKS and ROW_CHECKS live here rather than beside the checks they name,
+because which checks are in them is a statement about the sequence -- the
+shape half gates the row half, and the row half is what the cutover re-runs
+under the lock -- and this is the module that owns the sequence.
 """
 
 from dataclasses import replace
@@ -12,44 +17,33 @@ from .._templating import render
 from ..exceptions import OverlaySwapRefused
 from ..sources import SourceTable
 from ..sync import resolve_schema, statement_executor, sync_source_triggers, sync_view
+from .columns import _check_columns, _check_extra_where
+from .identity import _check_identity, _check_orphaned_base_rows
+from .indexes import _check_indexes, _check_partitions
+from .integrity import _check_dangling_references, _check_uniqueness
 from .probes import _Probe, _relation_exists
 from .report import ERROR, WARNING, Finding, SwapReport, _allow, _qualified, _same_relation
-from .rows import ROW_CHECKS
-from .shape import SHAPE_CHECKS
+from .size import _check_row_estimate
 
 
-def deployed_source(connection, tenant_schema: str, model) -> SourceTable | None:
-    """The source table the view is *actually* reading, read out of the
-    catalogue rather than out of get_source().
+# Everything about the candidate's shape: what columns it has, how it is
+# indexed and partitioned, roughly how much is in it, and whether the
+# predicate the view splices in still resolves against it. All of it has to
+# hold before a single row-level probe is worth running, because every one of
+# those names the columns these checks are about.
+SHAPE_CHECKS = (_check_columns, _check_indexes, _check_partitions, _check_row_estimate, _check_extra_where)
 
-    Those two answers differ for the whole length of a swap, which is the
-    reason this exists: config is edited, the database is not, and the gap
-    between them is exactly what the cutover closes. Asking the database means
-    a swap cannot be run twice by accident, cannot be run against a view that
-    was never deployed, and reports what is true rather than what is intended.
 
-    Only the schema and the table come back. How the source is *read* --
-    id_column, extra_where, partition_key -- is not recoverable from a view
-    definition without parsing it, so swap_source() carries those over from the
-    configured source and says so. A swap that also changes one of them is a
-    different operation, and `current=` is how you spell it.
-    """
-    base_table = model._base_model._meta.db_table
-    with connection.cursor() as cursor:
-        cursor.execute(render("swaps/view_source_relations.sql.j2"), [tenant_schema, model._meta.db_table])
-        relations = [
-            (schema, table)
-            for schema, table in cursor.fetchall()
-            if not (schema == tenant_schema and table == base_table)
-        ]
-    if len(relations) != 1:
-        # Zero means the view isn't there, or is source-less (which the
-        # metaclass refuses, but a half-migrated database can still show).
-        # More than one means something hand-edited the view, and guessing
-        # which relation is "the source" is not this function's job.
-        return None
-    schema, table = relations[0]
-    return SourceTable(schema=schema, table=table)
+# Everything about the rows themselves -- each one a trigger's predicate run
+# backwards over the data that already exists. These are the checks a
+# concurrent write can invalidate, which is why the cutover re-runs exactly
+# this tuple while holding the lock.
+ROW_CHECKS = (
+    _check_identity,
+    _check_orphaned_base_rows,
+    _check_dangling_references,
+    _check_uniqueness,
+)
 
 
 def _resolve_identity_columns(model, identity_columns) -> tuple[tuple[str, ...], list[Finding]]:
@@ -139,6 +133,40 @@ def verify_source_swap(
             return SwapReport(label, current, candidate, tuple(findings))
         findings += _run(probe, ROW_CHECKS)
     return SwapReport(label, current, candidate, tuple(findings))
+
+
+def deployed_source(connection, tenant_schema: str, model) -> SourceTable | None:
+    """The source table the view is *actually* reading, read out of the
+    catalogue rather than out of get_source().
+
+    Those two answers differ for the whole length of a swap, which is the
+    reason this exists: config is edited, the database is not, and the gap
+    between them is exactly what the cutover closes. Asking the database means
+    a swap cannot be run twice by accident, cannot be run against a view that
+    was never deployed, and reports what is true rather than what is intended.
+
+    Only the schema and the table come back. How the source is *read* --
+    id_column, extra_where, partition_key -- is not recoverable from a view
+    definition without parsing it, so swap_source() carries those over from the
+    configured source and says so. A swap that also changes one of them is a
+    different operation, and `current=` is how you spell it.
+    """
+    base_table = model._base_model._meta.db_table
+    with connection.cursor() as cursor:
+        cursor.execute(render("swaps/view_source_relations.sql.j2"), [tenant_schema, model._meta.db_table])
+        relations = [
+            (schema, table)
+            for schema, table in cursor.fetchall()
+            if not (schema == tenant_schema and table == base_table)
+        ]
+    if len(relations) != 1:
+        # Zero means the view isn't there, or is source-less (which the
+        # metaclass refuses, but a half-migrated database can still show).
+        # More than one means something hand-edited the view, and guessing
+        # which relation is "the source" is not this function's job.
+        return None
+    schema, table = relations[0]
+    return SourceTable(schema=schema, table=table)
 
 
 def swap_source(
