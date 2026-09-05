@@ -101,9 +101,19 @@ SHARDS = {
     #
     # So the seams below are by subject, and the sizes are measured cold: the
     # mutants/ tree removed, nothing cached, one shard at a time because they
-    # share a test database. 163 mutants is the peak and it is a floor as well
-    # as a peak -- swap_source() alone is 142 of them, and a shard cannot be
-    # smaller than the module it holds.
+    # share a test database. Measured 2026-09-05, on a laptop that was also
+    # running something else:
+    #
+    #     cutover  163 mutants  16 min     integrity  139  12 min
+    #     swaps    163          14 min     preflight  136  11 min
+    #     indexes  127          10 min     identity    94  11 min
+    #
+    # 163 is the peak, and it is a floor as much as a peak: swap_source() alone
+    # is 142 of them, and a shard can never be smaller than the module it
+    # holds. `identity` is the reminder that none of this is arithmetic -- 94
+    # mutants at 7.0 seconds each, the slowest of the six, because
+    # _check_identity compares two whole tables on their natural key while the
+    # cheapest here run at 4.7.
     #
     # Caller-facing: what a report is, the context every check runs in, and the
     # two checks that ask whether the view's own query still resolves.
@@ -124,8 +134,7 @@ SHARDS = {
         "django_overlay/swaps/identity.py",
     ],
     # The constraint triggers' predicates run backwards over the rows that
-    # already exist. The slowest per mutant of the six -- every one of these is
-    # real SQL across two real tables.
+    # already exist.
     "integrity": [
         "django_overlay/swaps/integrity.py",
     ],
