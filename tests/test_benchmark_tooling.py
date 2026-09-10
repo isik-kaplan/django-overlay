@@ -698,6 +698,7 @@ def test_a_single_switch_off_is_named_in_the_label():
 # time and django.setup() happens once per process. That is also the property
 # under test -- resolve the flags after setup and they move nothing.
 
+
 PROBE = """
 import json, sys
 from click.testing import CliRunner
@@ -718,6 +719,8 @@ print("PROBE=" + json.dumps({
     "redirect_select_related": queryset._redirect_select_related_enabled(),
     "force_hash_joins": planning._force_hash_joins_enabled(),
     "array_subquery_in": fields._array_subquery_in_enabled(),
+    "m2m_fence": query._m2m_fence_enabled(),
+    "late_row_lookup": queryset._late_row_lookup_enabled(),
 }))
 print("SETTINGS=" + settings.SETTINGS_MODULE)
 """
@@ -746,33 +749,43 @@ def what_the_library_saw(*flags, want_settings_module=False):
     return json.loads(line.removeprefix("PROBE="))
 
 
+def _every_switch(value):
+    """{option name: value} for every switch the table knows about.
+
+    Derived rather than written out, because a hardcoded expectation here is
+    what let `m2m_fence` and `late_row_lookup` go untested through this path:
+    the probe asked about four gates, the table had six, and a flag that
+    reached nothing looked exactly like a flag that worked. A new switch now
+    fails these until it is wired all the way through.
+    """
+    from benchmark import switches
+
+    return {switches.option_name(switch): value for switch in switches.SWITCHES}
+
+
 def test_by_default_the_library_has_every_optimisation_on():
-    assert what_the_library_saw() == {
-        "rewrite_traversals": True,
-        "redirect_select_related": True,
-        "force_hash_joins": True,
-        "array_subquery_in": True,
-    }
+    assert what_the_library_saw() == _every_switch(True)
 
 
-def test_no_optimisations_reaches_all_four_gates_in_the_library():
-    assert what_the_library_saw("--no-optimisations") == {
-        "rewrite_traversals": False,
-        "redirect_select_related": False,
-        "force_hash_joins": False,
-        "array_subquery_in": False,
-    }
+def test_no_optimisations_reaches_every_gate_in_the_library():
+    assert what_the_library_saw("--no-optimisations") == _every_switch(False)
 
 
-@pytest.mark.parametrize(
-    "flag",
-    [
-        "--no-rewrite-traversals",
-        "--no-redirect-select-related",
-        "--no-force-hash-joins",
-        "--no-array-subquery-in",
-    ],
-)
+def test_the_benchmark_settings_module_defines_a_setting_for_every_switch():
+    """settings.py assigns these one per line, so it is the place a new switch
+    gets forgotten -- and forgetting it is silent. The CLI writes the
+    environment variable, settings.py never reads it, and the library falls
+    back to its default while the run's record reports the arm that was asked
+    for. That is an A/B that measured one arm twice.
+    """
+    from benchmark import settings as benchmark_settings
+    from benchmark import switches
+
+    missing = [switch.setting for switch in switches.SWITCHES if not hasattr(benchmark_settings, switch.setting)]
+    assert not missing, f"benchmark/settings.py does not read: {', '.join(missing)}"
+
+
+@pytest.mark.parametrize("flag", [f"--no-{switch.flag}" for switch in switches.SWITCHES], ids=lambda f: f)
 def test_each_flag_turns_off_its_own_gate_and_no_other(flag):
     """One flag reaching the wrong setting is the mistake a table of names
     invites, and it produces a plausible number rather than a failure."""
