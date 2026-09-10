@@ -173,7 +173,7 @@ def _array_in_sql(lookup, compiler, connection):
 
     A function rather than a shared method, because the two lookups that need
     it have deliberately different parents: OverlaySubqueryIn extends RelatedIn
-    for a foreign key's instance-to-pk conversion, and OverlayFencedIn extends
+    for a foreign key's instance-to-pk conversion, and OverlaySelectiveIn extends
     In because a primary key needs none of that. A zero-arg `super()` resolves
     against the class that *defined* the method, so one class borrowing the
     other's `as_sql` gets a super() pointing outside its own MRO — which raised
@@ -192,8 +192,36 @@ def _array_in_sql(lookup, compiler, connection):
 OverlayForeignKey.register_lookup(OverlaySubqueryIn)
 
 
-class OverlayFencedIn(In):
+class OverlaySelectiveIn(In):
     """The same `= ANY (ARRAY(…))` rewrite, on a primary key.
+
+    **Not the same mechanism as `OverlayQuerySet.overlay_selective()`**, despite
+    the shared word. The two are named for the *claim you are making* — "this is
+    selective" — and that claim is all they have in common. Underneath:
+
+    ==========================  =========================================
+    `pk__overlay_selective_in`  compiles one lookup differently:
+                                `IN (subquery)` becomes
+                                `= ANY (ARRAY(subquery))`. Touches no other
+                                part of the plan.
+    `.overlay_selective()`      suppresses the nested-loop ban for the whole
+                                statement: `SET enable_nestloop = off` is
+                                not issued. Touches every join in it.
+    ==========================  =========================================
+
+    They also fail differently when the claim is wrong, which matters more than
+    the mechanism. This lookup's downside is bounded — a plain `IN` overtakes
+    the array form above roughly 5% of the table and is ~2-3x better by 50%, so
+    a bad guess costs a constant factor. `.overlay_selective()` re-permits a
+    plan that runs to exhaustion, and there is no crossover where it merely
+    stops paying. Guess wrong here and the page is slow; guess wrong there and
+    the query does not come back.
+
+    Neither is the m2m fence, which is the *internal* mechanism this lookup is
+    also used for — `DJANGO_OVERLAY_M2M_FENCE`, `OverlayQuery._m2m_fence()`,
+    `benchmark/suites/fence.py`. "Fence" names the thing the library does to
+    an m2m traversal on its own; `overlay_selective_in` names the thing you
+    ask for by hand. One lookup class serves both callers.
 
     `OverlaySubqueryIn` is registered on `OverlayForeignKey`, so it covers
     `filter(fk__in=<subquery>)`. The M2M fence needs it on the *primary key* of
@@ -226,7 +254,7 @@ class OverlayFencedIn(In):
     So the decision goes to whoever can make it. The lookup name is usable by
     hand on any overlay model:
 
-        Roster.objects.filter(pk__overlay_fenced_in=Member.objects.values("pk"))
+        Roster.objects.filter(pk__overlay_selective_in=Member.objects.values("pk"))
         # -> "roster_view"."id" = ANY (ARRAY(SELECT U0."id" FROM "member_view" U0))
 
     That is the supported way to fence a scope, and the whole of the interface:
@@ -246,7 +274,7 @@ class OverlayFencedIn(In):
     fence added it is 0.4ms / 105.9ms, returning identical rows.
     """
 
-    lookup_name = "overlay_fenced_in"
+    lookup_name = "overlay_selective_in"
 
     def as_sql(self, compiler, connection):
         # Written out rather than borrowed from OverlaySubqueryIn: see

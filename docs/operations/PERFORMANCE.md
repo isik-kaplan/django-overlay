@@ -142,6 +142,29 @@ Two, and they exist for the same reason: the library decides by query shape
 alone, and there are two things shape cannot see. How many rows a subquery
 returns is the first. Whether a multi-hop filter is selective is the second.
 
+Both are named for the claim you are making — *this is selective* — because
+that claim is the only thing you know and the compiler doesn't. **They are not
+the same mechanism, and they do not fail the same way.** Read this table before
+reaching for either:
+
+| | `pk__overlay_selective_in=<qs>` | `.overlay_selective()` |
+|---|---|---|
+| what it changes | how **one lookup** compiles: `= ANY (ARRAY(subquery))` instead of `IN (subquery)` | the **whole statement's** plan: `SET enable_nestloop = off` is not issued |
+| scope | that one condition | every join in the query |
+| what you're claiming | this subquery returns few rows | this multi-hop filter resolves to few rows |
+| if you're wrong | bounded — a plain `IN` wins above ~5% of the table, ~2–3× by 50% | **unbounded** — re-permits the plan that runs to exhaustion |
+| where it's decided | `OverlaySelectiveIn`, resolved in `OverlayQuery.build_lookup()` | `planning._selective_declared()` |
+
+The asymmetry in the fourth row is the one to remember. Guess wrong on the
+lookup and a page is slow. Guess wrong on the method and the query does not
+come back.
+
+A third name for the same lookup class: the **fence** is what the library calls
+this array rewrite when it adds one *itself* to an m2m traversal
+(`DJANGO_OVERLAY_M2M_FENCE`, `OverlayQuery._m2m_fence()`,
+`benchmark/suites/fence.py`). "Fence" is the mechanism; `overlay_selective_in`
+is the lever you reach for by hand. Same SQL, different caller.
+
 #### The fence
 
 The fence's crossover depends on how many rows your subquery returns, which the
@@ -151,8 +174,8 @@ database state is SQL you cannot read off the code. So the per-query decision is
 yours to make, and there is a lookup for it:
 
 ```python
-BenchPerson.objects.filter(pk__overlay_fenced_in=inner)   # forces = ANY (ARRAY(…))
-BenchPerson.objects.filter(pk__in=inner)                  # leaves a plain IN
+BenchPerson.objects.filter(pk__overlay_selective_in=inner)  # forces = ANY (ARRAY(…))
+BenchPerson.objects.filter(pk__in=inner)                    # leaves a plain IN
 ```
 
 Swept at 1,000,000 people, the same subquery compiled both ways:
@@ -164,9 +187,30 @@ Swept at 1,000,000 people, the same subquery compiled both ways:
 | 50,000 | 688ms | 600ms | ×1.1 |
 | 500,000 | 2,408ms | 2,455ms | ×1.0 |
 
-So it stops paying rather than turning into a penalty on this shape: reach for it
-when you know the scope is selective, leave `pk__in` alone when you know it is
-not or cannot tell.
+On this shape it stops paying rather than turning into a penalty. **That is not
+universal** — on others it becomes one. A `count(*)` over the view, swept the
+same way at 1,000,000 people and share 0.1, crosses over between 5% and 20% and
+then keeps going:
+
+| scope | plain `IN` | `ARRAY` | |
+|---|---|---|---|
+| 1,000 (0.1%) | 50.8ms | 3.5ms | ×14.4 |
+| 50,000 (5%) | 60.6ms | 48.7ms | ×1.2 |
+| 200,000 (20%) | 91.7ms | 184.2ms | **×0.5** |
+| 500,000 (50%) | 188.5ms | 555.2ms | **×0.34** |
+
+`OverlaySelectiveIn`'s docstring records a third shape — a twenty-aggregate
+summary — at 2.3× *slower* at a 1,000,000-row scope. So the honest rule is:
+reach for it when you know the scope is selective, leave `pk__in` alone when you
+know it is not or cannot tell, and do not assume the penalty regime is
+hypothetical.
+
+Why a percentage and not a row count: `plain IN` is nearly flat in the subquery
+size (51 → 60 → 189ms across a 500× change) because it scans the table once
+either way, while the array form is linear in the number of ids it materialises.
+The crossover is wherever materialising N ids overtakes one pass over the table
+— and the cost of that pass scales with the table, so the fraction is what stays
+put.
 
 The threshold to carry in your head is a **fraction of the table, not a row
 count** — measured at both 300,000 and 1,000,000 people, the fence crosses over

@@ -23,7 +23,8 @@ from django.db.models import Count, F, OuterRef, Q, Subquery
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
-from django_overlay.fields import OverlayFencedIn
+from django_overlay.fields import OverlaySelectiveIn
+from django_overlay.models import query as query_module
 from tests.testapp.models import (
     Member,
     Person,
@@ -557,7 +558,7 @@ def test_a_many_to_many_traversal_is_fenced_not_replaced():
 def test_the_fence_lookup_is_registered_on_nothing():
     """The fence's private lookup must stay unreachable from application code.
 
-    It used to be `models.Field.register_lookup(OverlayFencedIn)`, which put the
+    It used to be `models.Field.register_lookup(OverlaySelectiveIn)`, which put the
     name on every field of every model in any project that imported this
     package — including plain non-overlay ones — to serve a single internal
     call site. `OverlayQuery.build_lookup()` constructs it directly instead.
@@ -570,13 +571,13 @@ def test_the_fence_lookup_is_registered_on_nothing():
     who has not established, as `_m2m_fence()` has, that the conjunct is
     redundant with a join already in the query.
     """
-    name = OverlayFencedIn.lookup_name
+    name = OverlaySelectiveIn.lookup_name
     assert models.Field.get_lookups().get(name) is None, "must not be on every Django field"
     assert Person._meta.pk.get_lookups().get(name) is None, "not on overlay pks either"
 
     # Unreachable through a plain Query, which is what a non-overlay model has.
     with pytest.raises(FieldError):
-        PlainPerson.objects.filter(pk__overlay_fenced_in=PlainPerson.objects.values("pk")).query.sql_with_params()
+        PlainPerson.objects.filter(pk__overlay_selective_in=PlainPerson.objects.values("pk")).query.sql_with_params()
 
     # Still reachable through OverlayQuery, or the fence itself would be dead.
     statement = str(Roster.objects.filter(members__name="m").query)
@@ -945,3 +946,50 @@ def test_the_fence_declines_a_through_model_it_cannot_read(graph):
     field = Roster._meta.get_field("members")
     with mock.patch.object(field, "m2m_field_name", side_effect=RuntimeError("unusual through model")):
         assert "= ANY (ARRAY(SELECT" not in sql_of(Roster.objects.filter(members__name="m"))
+
+
+def test_the_old_fenced_in_lookup_name_still_resolves_and_warns():
+    """`overlay_fenced_in` was renamed to `overlay_selective_in`.
+
+    The rename is cosmetic — same lookup class, same SQL — but a lookup name
+    that silently stopped resolving would not raise where it was written. It
+    would fall through to `Query.build_lookup()` and be reported as an
+    unknown field, which is a confusing way to find out about a rename. So the
+    old name is still accepted, and says so.
+
+    Asserting the SQL as well as the warning: a deprecation shim that warns and
+    then quietly compiles a plain `IN` would pass a warning-only test while
+    giving back the plan the lookup exists to avoid.
+    """
+    inner = Person.objects.values("pk")
+
+    with pytest.warns(DeprecationWarning, match="overlay_selective_in") as caught:
+        deprecated = str(Person.objects.filter(pk__overlay_fenced_in=inner).query)
+
+    current = str(Person.objects.filter(pk__overlay_selective_in=inner).query)
+    assert "= ANY (ARRAY" in deprecated, "the old name must still get the array form"
+    assert deprecated == current, "the two names must compile to identical SQL"
+
+    (warning,) = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    # The reason is the useful half of a deprecation, and the line it names
+    # has to be the caller's, not one inside Django or this package, which
+    # tells a reader nothing about what to change. (Not `== __file__`: under
+    # mutation testing a trampoline frame sits between, and is the caller.)
+    assert str(warning.message).endswith(
+        "Same lookup, same SQL — renamed so that it and overlay_selective() share the claim they both make."
+    )
+    assert not warning.filename.startswith(query_module._FRAMEWORK_DIRS)
+
+
+def test_the_current_selective_in_name_does_not_warn():
+    """The other half of the shim: only the old spelling is deprecated.
+
+    Without this, a shim that warned on both names would look correct to the
+    test above while making the supported spelling noisy for everyone.
+    """
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        statement = str(Person.objects.filter(pk__overlay_selective_in=Person.objects.values("pk")).query)
+    assert "= ANY (ARRAY" in statement

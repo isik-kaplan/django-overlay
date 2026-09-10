@@ -22,7 +22,7 @@ It is differential rather than SQL-pinning, deliberately. Turning an
 optimisation off is *supposed* to change the SQL; what it must never change is
 the rows. The failure this catches is the one that matters and the one an
 assertion about SQL misses -- a configuration that returns different results, or
-that does not run at all. The latter is not hypothetical: `OverlayFencedIn`
+that does not run at all. The latter is not hypothetical: `OverlaySelectiveIn`
 borrowed `OverlaySubqueryIn.as_sql`, whose zero-arg `super()` then resolved
 outside its own MRO, and every m2m-fenced query raised TypeError with
 DJANGO_OVERLAY_ARRAY_SUBQUERY_IN off. It took an A/B benchmark to find.

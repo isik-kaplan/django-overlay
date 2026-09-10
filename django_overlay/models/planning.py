@@ -189,7 +189,7 @@ def _selective_declared(query, _depth=0) -> bool:
     The same shape across three broad predicates is the case the ban exists for.
 
     So this is the caller's lever, and it is the same lever the fence already
-    is — `pk__overlay_fenced_in` exists because the crossover depends on how
+    is — `pk__overlay_selective_in` exists because the crossover depends on how
     many rows a subquery returns, which the library will not go looking for.
     Nothing here probes the data either.
 

@@ -63,7 +63,7 @@ def fenced_arrays(model, leaves):
     queryset = model.objects.all()
     for leaf in leaves:
         inner = model.objects.filter(**leaf).values("pk")
-        queryset = queryset.filter(Q(pk__overlay_fenced_in=inner))
+        queryset = queryset.filter(Q(pk__overlay_selective_in=inner))
     return queryset.values("pk").distinct().count()
 
 
@@ -106,7 +106,7 @@ def run(ctx):
             if has_plain:
                 plain, plain_people = ctx.measure(lambda s=strategy, ls=leaves: s(PlainPerson, ls), rounds=2)
             else:
-                # `overlay_fenced_in` resolves only through OverlayQuery, by
+                # `overlay_selective_in` resolves only through OverlayQuery, by
                 # design -- a plain model has no way to express this row.
                 plain, plain_people = None, None
             if truth is None and plain_people is not None:

@@ -128,7 +128,7 @@ def test_the_fence_is_built_when_nothing_is_negated():
 
     assert fence is not None
     path, value = fence
-    assert path == "pk__overlay_fenced_in"
+    assert path == "pk__overlay_selective_in"
 
 
 def test_an_expression_value_is_not_fenced():

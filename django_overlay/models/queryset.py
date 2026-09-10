@@ -217,9 +217,21 @@ class OverlayQuerySet(models.QuerySet):
         LIMIT on the damage.
 
         Nothing here probes the database to decide. That is the same line the
-        m2m fence holds (`pk__overlay_fenced_in` exists for exactly this reason)
-        and the reason the decision is yours: SQL that depends on database state
-        is SQL you cannot read off the code.
+        m2m fence holds and the reason the decision is yours: SQL that depends
+        on database state is SQL you cannot read off the code.
+
+        **Not the same mechanism as `pk__overlay_selective_in`**, which is the
+        other half of that reasoning and shares only the claim. This method
+        suppresses `SET enable_nestloop = off` for the whole statement, so it
+        moves every join in it. That lookup changes how one `IN` compiles —
+        `= ANY (ARRAY(subquery))` instead of a semi-join — and touches nothing
+        else. See `OverlaySelectiveIn` for the side-by-side.
+
+        The failure modes differ more than the mechanisms do, and that is the
+        part worth remembering. A wrong claim there costs a bounded factor: a
+        plain `IN` overtakes the array form somewhere above 5% of the table and
+        is ~2-3x better by 50%. A wrong claim *here* re-permits the plan that
+        runs to exhaustion, with no crossover where it merely stops paying.
 
         Reachable from a subquery, since the view count is too — see
         `planning._selective_declared()`. Chainable and position-independent;

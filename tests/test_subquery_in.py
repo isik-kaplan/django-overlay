@@ -193,7 +193,7 @@ def test_the_fence_has_a_flag_of_its_own_now():
     fenced = Roster.objects.filter(members__name="m")
     clause = str(fenced.query)
 
-    assert "overlay_fenced_in" not in clause
+    assert "overlay_selective_in" not in clause
     assert "ANY (ARRAY" not in clause
     assert list(fenced) == [], "and it still executes"
 
@@ -207,7 +207,7 @@ def test_the_fence_flag_refuses_a_non_boolean_like_every_other():
 
 
 def test_the_fenced_lookup_declines_a_literal_scope():
-    """The one branch of OverlayFencedIn.as_sql that reads no setting.
+    """The one branch of OverlaySelectiveIn.as_sql that reads no setting.
 
     `_m2m_fence()` always builds a queryset, so this is reachable only by
     naming the lookup by hand -- which is the supported way to fence a scope
@@ -217,7 +217,7 @@ def test_the_fenced_lookup_declines_a_literal_scope():
     """
     from tests.testapp.models import Roster
 
-    clause = str(Roster.objects.filter(pk__overlay_fenced_in=[1, 2]).query)
+    clause = str(Roster.objects.filter(pk__overlay_selective_in=[1, 2]).query)
 
     assert "ANY (ARRAY" not in clause, "a literal list has no subquery to fence"
     assert " IN (" in clause

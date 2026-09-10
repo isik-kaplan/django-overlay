@@ -6,7 +6,10 @@ many views a statement reads and decides whether to ban nested loops for it.
 """
 
 import contextvars
+import warnings
+from pathlib import Path
 
+import django
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
@@ -14,7 +17,7 @@ from django.db.models import sql
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.sql.where import AND, WhereNode
 
-from ..fields import OverlayFencedIn, OverlayForeignKey, OverlayManyToManyField
+from ..fields import OverlayForeignKey, OverlayManyToManyField, OverlaySelectiveIn
 from . import planning
 from .planning import (
     _ban_nested_loops,
@@ -23,6 +26,11 @@ from .planning import (
     _overlay_views_joined,
     _selective_declared,
 )
+
+
+# Where a warning must not be attributed: the frames between a caller's
+# queryset call and the code that notices something worth warning about.
+_FRAMEWORK_DIRS = (str(Path(django.__file__).parent), str(Path(__file__).parent.parent))
 
 
 def _m2m_fence_enabled() -> bool:
@@ -51,7 +59,7 @@ def _m2m_fence_enabled() -> bool:
     Where the fence genuinely costs more than it saves -- a scope matching most
     of the table, where it is 1,680ms against 862ms unfenced -- the answer is to
     narrow the scope or to fence by hand where you know it pays, not to disable
-    it globally. See OverlayFencedIn.
+    it globally. See OverlaySelectiveIn.
     """
     configured = getattr(settings, "DJANGO_OVERLAY_M2M_FENCE", True)
     if not isinstance(configured, bool):
@@ -70,6 +78,12 @@ def _rewrite_traversals_enabled() -> bool:
 
 
 _fence_suppressed = contextvars.ContextVar("django_overlay_fence_suppressed", default=False)
+
+
+# The pre-rename name of OverlaySelectiveIn.lookup_name, still resolved by
+# build_lookup() with a DeprecationWarning. One place, so the warning text
+# and the check cannot disagree about the spelling.
+_DEPRECATED_SELECTIVE_IN_LOOKUP = "overlay_fenced_in"
 
 
 class OverlayQuery(sql.Query):
@@ -175,10 +189,10 @@ class OverlayQuery(sql.Query):
         return combined, list(needed_inner) + list(fenced_inner)
 
     def build_lookup(self, lookups, lhs, rhs):
-        """Resolve the fence's private lookup name without registering it anywhere.
+        """Resolve the array lookup's private name without registering it anywhere.
 
-        `_m2m_fence()` returns `("pk__overlay_fenced_in", …)`, and a primary key
-        is an ordinary `UUIDField` or `AutoField` that this package does not
+        `_m2m_fence()` returns `("pk__overlay_selective_in", …)`, and a primary
+        key is an ordinary `UUIDField` or `AutoField` that this package does not
         own — so the only way to make Django resolve that name through the
         normal path was `models.Field.register_lookup()`, which installs it on
         every field of every model in the importing project.
@@ -188,11 +202,30 @@ class OverlayQuery(sql.Query):
         handed to this method as a lookup rather than rejected as a bad field.
         Constructing the lookup directly therefore keeps the fence working and
         leaves every field in the project untouched — including, deliberately,
-        overlay models' own primary keys. See `OverlayFencedIn` for why this is
-        not offered as a public way to scope a query.
+        overlay models' own primary keys. See `OverlaySelectiveIn` for what it
+        does and how it differs from `overlay_selective()`.
+
+        `overlay_fenced_in` is the name this had before the two manual levers
+        were given one vocabulary. Accepted here so a project that wrote it does
+        not break on upgrade, with a DeprecationWarning rather than silence —
+        a lookup name that quietly stopped resolving would not raise, it would
+        fall through to `super()` and be reported as a bad field, which is a
+        confusing way to learn about a rename.
         """
-        if lookups == [OverlayFencedIn.lookup_name]:
-            return OverlayFencedIn(lhs, rhs)
+        if lookups == [_DEPRECATED_SELECTIVE_IN_LOOKUP]:
+            warnings.warn(
+                f"pk__{_DEPRECATED_SELECTIVE_IN_LOOKUP} is deprecated; use "
+                f"pk__{OverlaySelectiveIn.lookup_name} instead. Same lookup, same SQL — "
+                "renamed so that it and overlay_selective() share the claim they both make.",
+                DeprecationWarning,
+                # The caller's .filter() is many frames up, through Django's
+                # query building and ours; a fixed stacklevel only ever named a
+                # line inside one of them.
+                skip_file_prefixes=_FRAMEWORK_DIRS,
+            )
+            return OverlaySelectiveIn(lhs, rhs)
+        if lookups == [OverlaySelectiveIn.lookup_name]:
+            return OverlaySelectiveIn(lhs, rhs)
         return super().build_lookup(lookups, lhs, rhs)
 
     def split_exclude(self, *args, **kwargs):
@@ -282,7 +315,7 @@ class OverlayQuery(sql.Query):
         # its own fenced subquery and the whole thing nests.
         links = models.QuerySet(model=through, query=OverlayQuery(through))
         links = links.filter(**{f"{to_there}__{rest}": value})
-        return ("pk__overlay_fenced_in", links.values(to_here))
+        return ("pk__overlay_selective_in", links.values(to_here))
 
     @staticmethod
     def _m2m_ends(field):

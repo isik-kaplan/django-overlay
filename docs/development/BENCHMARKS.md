@@ -106,8 +106,8 @@ statistics, because SQL that depends on database state is SQL you cannot read of
 the code — the same query would plan differently on two machines and a stale
 `ANALYZE` would change behaviour silently. Where the right answer genuinely
 depends on data size, the library picks a static default and offers a manual
-per-query opt-in instead; see `OverlayFencedIn` for the one case, reachable as
-`filter(pk__overlay_fenced_in=<queryset>)`.
+per-query opt-in instead; see `OverlaySelectiveIn` for the one case, reachable as
+`filter(pk__overlay_selective_in=<queryset>)`.
 
 ## Scale
 

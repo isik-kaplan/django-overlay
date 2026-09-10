@@ -13,14 +13,14 @@ materialisation, roughly 16 bytes per row for a uuid key, paid on every
 execution. A selective scope pays almost nothing for a plan that cannot go
 wrong; a scope matching most of the table pays for the whole table.
 
-The number in OverlayFencedIn's docstring -- 2.0x faster at a 25,000-row scope
+The number in OverlaySelectiveIn's docstring -- 2.0x faster at a 25,000-row scope
 and 2.3x slower at a 1,000,000-row one -- came from a probe that has since been
 deleted, so it is currently unreproducible. This is what replaces it, and what
 any change to the default has to argue against.
 
 Nothing here makes the library adapt: the fence is decided by query shape, and
 where the shape is not enough the answer is this measurement plus a manual
-`filter(pk__overlay_fenced_in=...)`, never a runtime probe. See
+`filter(pk__overlay_selective_in=...)`, never a runtime probe. See
 docs/development/BENCHMARKS.md.
 """
 
@@ -66,13 +66,13 @@ def scoped(model, scope, fenced):
     """The scope as a subquery, fenced by hand or left as a plain `IN`.
 
     This is the array rewrite on its own, with nothing else varying: one
-    subquery, compiled two ways. `pk__overlay_fenced_in` is the supported way to
+    subquery, compiled two ways. `pk__overlay_selective_in` is the supported way to
     ask for it, and what somebody reaches for when the sweep says their scope is
     on the paying side of the crossover.
     """
     inner = model.objects.filter(**scope).values("pk")
     fenceable = fenced and getattr(model, "_is_overlay_view_model", False)
-    lookup = "pk__overlay_fenced_in" if fenceable else "pk__in"
+    lookup = "pk__overlay_selective_in" if fenceable else "pk__in"
     return model.objects.filter(**{lookup: inner}).values("pk").distinct().count()
 
 
@@ -162,7 +162,7 @@ def run(ctx):
         section = harness.Section(
             f"The array rewrite alone: one subquery, two compiled forms{suffix}",
             FORM_COLUMNS,
-            note="pk__in against pk__overlay_fenced_in, automatic fence on in both",
+            note="pk__in against pk__overlay_selective_in, automatic fence on in both",
         )
         for label, scope in SCOPES:
             form_row(ctx, section, label, scope, models)

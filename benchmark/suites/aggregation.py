@@ -145,7 +145,7 @@ def _resolved(model, scope, lookup, distinct):
                              DJANGO_OVERLAY_ARRAY_SUBQUERY_IN does *not* reach
                              here: OverlaySubqueryIn is registered on
                              OverlayForeignKey, and this is a primary key.
-      "overlay_fenced_in" -- the same `= ANY (ARRAY(...))` rewrite the m2m fence
+      "overlay_selective_in" -- the same `= ANY (ARRAY(...))` rewrite the m2m fence
                              uses, resolved by OverlayQuery.build_lookup().
 
     `distinct` is the other axis. Without it the subquery returns one row per
@@ -176,12 +176,12 @@ def shape_d(model, scope):
 def shape_e(model, scope):
     """Shape D plus the array rewrite -- does `= ANY (ARRAY(...))` add anything?
 
-    Overlay-only: `overlay_fenced_in` is resolved by OverlayQuery.build_lookup()
+    Overlay-only: `overlay_selective_in` is resolved by OverlayQuery.build_lookup()
     and registered on no field, so a plain model cannot reach it at all. There
     is no plain baseline to print for this row, which is itself the honest
     reading -- an ordinary Django app has no way to write this.
     """
-    return _resolved(model, scope, lookup="overlay_fenced_in", distinct=True)
+    return _resolved(model, scope, lookup="overlay_selective_in", distinct=True)
 
 
 SHAPES = (
@@ -200,14 +200,14 @@ def _which_form_compiles_to_an_array(models):
     `pk__in` reads like it should pick up DJANGO_OVERLAY_ARRAY_SUBQUERY_IN and
     does not, because that lookup is registered on OverlayForeignKey and a
     primary key is not one. The plain model is included to show that
-    `overlay_fenced_in` is unreachable there.
+    `overlay_selective_in` is unreachable there.
     """
     section = harness.Section(
         "Which scoping form compiles to `= ANY (ARRAY(...))`?",
         ("form", "compiles to"),
     )
     for model in models:
-        for lookup in ("in", "overlay_fenced_in"):
+        for lookup in ("in", "overlay_selective_in"):
             inner = model.objects.filter(city="city42").values("pk")
             try:
                 statement, _ = model.objects.filter(**{f"pk__{lookup}": inner}).query.sql_with_params()
