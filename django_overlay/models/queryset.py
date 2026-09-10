@@ -11,10 +11,15 @@ from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models, transaction
 from django.db.models.constants import LOOKUP_SEP
+from django.db.models.expressions import OuterRef, ResolvedOuterRef
+from django.db.models.fields.reverse_related import ManyToManyRel, ManyToOneRel, OneToOneRel
+from django.db.models.lookups import Lookup
+from django.db.models.sql import Query
 
 from .. import sql as overlay_sql
 from .._templating import _qi
 from ..exceptions import OverlayConfigurationError
+from ..fields import OverlaySelectiveIn
 from ..strategies import negates_source_ids
 from .query import OverlayQuery
 
@@ -41,6 +46,112 @@ def _reads_own_columns(value, model) -> bool:
     if source_expressions is None:
         return False
     return any(_reads_own_columns(expression, model) for expression in source_expressions())
+
+
+def _late_row_lookup_enabled() -> bool:
+    """settings.DJANGO_OVERLAY_LATE_ROW_LOOKUP turns the ordered-page rewrite
+    off. On by default: an unscoped ordered page measured 335ms against 40ms
+    rewritten at 1,000,000 view rows, and it is the shape every list endpoint
+    emits."""
+    configured = getattr(settings, "DJANGO_OVERLAY_LATE_ROW_LOOKUP", True)
+    if not isinstance(configured, bool):
+        raise ImproperlyConfigured(f"settings.DJANGO_OVERLAY_LATE_ROW_LOOKUP must be a bool, got {configured!r}.")
+    return configured
+
+
+def _multiplies_rows(query) -> bool:
+    """Can any join in this query return one model row more than once?
+
+    The late-row-lookup rewrite fetches the page by primary key, and fetching
+    by key returns each row once. So a query whose joins multiply rows must be
+    left alone: the direct form returns a person once per matching address and
+    the rewrite would return them once, which is fewer rows rather than the
+    same rows faster.
+
+    Read off the join descriptors, not the data. A forward `ForeignKey` or
+    `OneToOneField` reaches at most one row on the far side, and so does a
+    reverse one-to-one. A reverse foreign key or either direction of a
+    many-to-many does not.
+
+    `OneToOneRel` subclasses `ManyToOneRel`, so the order of these checks is
+    load-bearing: test the narrow case first or every reverse one-to-one is
+    refused for no reason. `ManyToManyRel` is *not* a `ManyToOneRel` subclass
+    and needs naming separately -- the reverse m2m is the shape
+    `prefetch_related()` emits, so missing it would refuse the common case
+    while catching the rare one.
+    """
+    for join in query.alias_map.values():
+        join_field = getattr(join, "join_field", None)
+        if join_field is None:  # the FROM table carries no join field
+            continue
+        if isinstance(join_field, OneToOneRel):
+            continue
+        if isinstance(join_field, (ManyToOneRel, ManyToManyRel)):
+            return True
+    return False
+
+
+def _refers_outward(expression) -> bool:
+    """Does this expression tree reach for a column of an enclosing query?
+
+    `Other.objects.filter(owner=OuterRef("pk")).order_by("id")[:1]` is a page
+    like any other, but `OuterRef("pk")` names whatever query directly encloses
+    it. Rewritten, the key query is enclosed by the page query rather than by
+    the caller's, so the reference silently binds one level too shallow -- to
+    the page's own primary key -- and the subquery returns other rows' values
+    without raising. In an export annotating each row with its earliest
+    related row this way, every row came back and the annotations were wrong.
+
+    A nested query is not descended into. Its outer references point at *this*
+    query, which the rewrite keeps intact in both the key query and the page,
+    so `filter(Exists(...OuterRef("pk")))` is still a page worth rewriting.
+
+    A lookup's right-hand side is read directly as well: Django lists it among
+    the source expressions only when it compiles, and the unresolved
+    `OuterRef` that `OuterRef(OuterRef(...))` leaves behind does not.
+    """
+    if isinstance(expression, (OuterRef, ResolvedOuterRef)):
+        return True
+    if isinstance(expression, Query):
+        return False
+    children = list(getattr(expression, "get_source_expressions", list)())
+    if isinstance(expression, Lookup):
+        children.append(expression.rhs)
+    return any(_refers_outward(child) for child in children)
+
+
+def _local_ordering(query) -> tuple | None:
+    """The query's ORDER BY terms if every one is a plain local column, else None.
+
+    The rewrite drops the page's `LIMIT` onto an inner query and puts the
+    ordering back on the outer one, so the outer has to be able to express it.
+    `order_by("addresses__city")` cannot survive that: the outer query is
+    restricted by primary key and has no join to order across.
+
+    Expressions are refused wholesale rather than inspected. An `F()` or a
+    `Func` could be local and could equally wrap a traversal, and a rewrite
+    that is right about most expressions is worse here than one that declines
+    them all -- the failure it would produce is a differently-ordered page,
+    which no exception marks.
+
+    `Meta.ordering` counts, when nothing has overridden it. The SQL carries an
+    ORDER BY either way, so refusing it would skip the rewrite for every model
+    that sets a default order -- which is most of them.
+    """
+    terms = query.order_by or (query.get_meta().ordering if query.default_ordering else ())
+    if not terms:
+        return None
+    local = {field.name for field in query.model._meta.concrete_fields}
+    local |= {field.attname for field in query.model._meta.concrete_fields}
+    for term in terms:
+        if not isinstance(term, str):
+            return None
+        name = term.removeprefix("-")
+        if name == "pk":
+            continue
+        if LOOKUP_SEP in name or name not in local:
+            return None
+    return tuple(terms)
 
 
 def _redirect_select_related_enabled() -> bool:
@@ -240,6 +351,128 @@ class OverlayQuerySet(models.QuerySet):
         clone = self._chain()
         clone.query._overlay_selective = True
         return clone
+
+    # -------------------------------------------------- the ordered-page rewrite
+
+    def overlay_direct(self):
+        """Take the ordered page as one statement, without the key round trip.
+
+        Opts out of the late-row-lookup rewrite for this queryset. Unlike the
+        two selectivity levers this is not a claim about your data that the
+        library cannot see -- the rewrite is decided entirely by shape, and it
+        was measured winning at every page size from 20 to 100,000 rows. It
+        exists for the one case that shape genuinely cannot distinguish: a
+        slice that is the whole table rather than a page of it, where the
+        direct form measured 289ms against 746ms rewritten.
+
+        If you find yourself reaching for it on an actual page, that is worth
+        reporting rather than working around.
+        """
+        clone = self._chain()
+        clone.query._overlay_direct = True
+        return clone
+
+    def __getitem__(self, k):
+        """Resolve an ordered page's keys first, then fetch those rows by key.
+
+        `ORDER BY … LIMIT 50` over the view sorts whole rows to keep fifty of
+        them. The sort itself is not the cost -- it is a top-N heapsort holding
+        31kB -- but the rows arrive unordered, so every one of them must be
+        produced and passed through it. At 1,000,000 view rows that measured
+        335ms, of which the projection is most: the same page selecting only the
+        primary key is 40ms, and one extra column takes it back to 234ms.
+
+        So resolve the keys and fetch the rows separately::
+
+            SELECT * FROM person_view
+            WHERE id = ANY (ARRAY(SELECT id FROM person_view ORDER BY id LIMIT 50))
+            ORDER BY id
+
+        335ms -> 40ms, one statement, identical rows. It wins at every page size
+        measured (x9.0 at 20, x8.5 at 200, x7.3 at 5,000, x3.4 at 100,000) and
+        only loses when the slice *is* the whole table, which `overlay_direct()`
+        is for.
+
+        There is no cap on the page size and deliberately so. The array holds
+        one id per row the caller has already asked to receive, and an id is
+        narrower than the row it stands for -- so unlike an unfenced subquery,
+        this cannot materialise more than the answer itself. The pathological
+        slice is expensive, not unbounded.
+
+        Everything the rewrite needs is in the query's shape; nothing here
+        reads the database. What it refuses is in `_wants_late_row_lookup()`.
+        """
+        if isinstance(k, slice) and self._wants_late_row_lookup(k):
+            # `.values("pk")` before the slice, not after: Django refuses to
+            # narrow a queryset that has already been sliced. This is also what
+            # stops the rewrite recursing -- the inner queryset selects the
+            # primary key and nothing else, which is the one shape
+            # `_wants_late_row_lookup()` declines.
+            keys = self.values("pk")[k]
+            # `filter()` on self, rather than a fresh queryset carrying self's
+            # output configuration across by hand. Deferred fields, prefetches,
+            # annotations and the iterable class all stay attached, and the
+            # original predicate stays too -- redundant, since those keys
+            # already satisfied it, and harmless for the same reason. Any join
+            # it brought is now evaluated against fifty keys instead of the
+            # whole view.
+            page = self.filter(**{f"pk__{OverlaySelectiveIn.lookup_name}": keys})
+            # The statement still carries a LIMIT; it moved into the array
+            # subquery. Say so, or the nested-loop ban's lowered threshold --
+            # which triggers on a query that carries a slice -- stops seeing
+            # this one. See OverlayQuery._wants_hash_joins().
+            page.query._overlay_paged = True
+            return page
+        return super().__getitem__(k)
+
+    def _wants_late_row_lookup(self, k: slice) -> bool:
+        """Whether `self[k]` should become a key lookup. Shape only.
+
+        Every clause below is a refusal, and each one is a way the rewrite
+        would otherwise return different rows rather than the same rows faster:
+
+        - **A step.** `qs[::2]` is handed to Python, not to SQL.
+        - **An unbounded slice.** `qs[10:]` has no `LIMIT`, so there is no
+          bounded key set to fetch by and nothing to win.
+        - **A model whose view has no full anti-join.** `overridable = False`
+          leaves a `Merge Append` that `LIMIT` already stops early -- an
+          unscoped ordered page on that shape measured 0.4ms against 311ms for
+          the overridable one. There is nothing here to fix.
+        - **No local ordering.** See `_local_ordering()`.
+        - **A multiplying join.** See `_multiplies_rows()`. `distinct()`
+          rescues it, because then both forms return each row once.
+        - **A reference to an enclosing query.** A correlated subquery's
+          `OuterRef` would bind to the rewritten page instead of the caller.
+          See `_refers_outward()`.
+        - **A primary-key-only projection.** Already the inner query of this
+          rewrite; rewriting it again would recurse.
+        - **A combinator, `extra()`, or a raw `values_select` beyond the pk.**
+          `union()` cannot carry the outer filter, and `extra()` can select
+          anything at all.
+        """
+        if k.step is not None or k.stop is None:
+            return False
+        if not _late_row_lookup_enabled():
+            return False
+        # A queryset handed a plain sql.Query cannot resolve the array lookup the
+        # page is fetched by, and would raise FieldError on every ordered slice.
+        if not isinstance(self.query, OverlayQuery) or self.query._overlay_direct:
+            return False
+        # Only an overridable view carries the full anti-join (see
+        # overlay_sql.anti_join_kind()); without it LIMIT already stops early.
+        if not self.model._overlay_meta.overridable:
+            return False
+        query = self.query
+        if query.combinator or query.extra or query.is_sliced:
+            return False
+        if _refers_outward(query.where) or any(_refers_outward(a) for a in query.annotations.values()):
+            return False
+        if _local_ordering(query) is None:
+            return False
+        if _multiplies_rows(query) and not query.distinct:
+            return False
+        pk_names = {"pk", self.model._meta.pk.name, self.model._meta.pk.attname}
+        return not (query.values_select and set(query.values_select) <= pk_names)
 
     # ------------------------------------------------ select_related routing
 

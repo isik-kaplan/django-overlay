@@ -147,6 +147,11 @@ def _suite_names():
     default=None,
     help="Add the redundant fence to an m2m traversal between two overlay views.",
 )
+@click.option(
+    "--late-row-lookup/--no-late-row-lookup",
+    default=None,
+    help="Resolve an ordered page's primary keys first, then fetch those rows by key.",
+)
 @click.option("--yes", is_flag=True, help="Do not prompt before a long run.")
 def benchmark(**options):
     """Measure django-overlay against plain tables holding identical rows."""

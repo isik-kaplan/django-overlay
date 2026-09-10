@@ -1,4 +1,4 @@
-"""Every combination of the four query optimisations, checked for correctness.
+"""Every combination of the six query optimisations, checked for correctness.
 
 Each is a performance mechanism that must not change an answer, and
 each has an opt-out because each has a regime where it loses -- the array fence
@@ -58,6 +58,7 @@ SWITCHES = (
     "DJANGO_OVERLAY_FORCE_HASH_JOINS",
     "DJANGO_OVERLAY_ARRAY_SUBQUERY_IN",
     "DJANGO_OVERLAY_M2M_FENCE",
+    "DJANGO_OVERLAY_LATE_ROW_LOOKUP",
 )
 
 ALL_ON = dict.fromkeys(SWITCHES, True)

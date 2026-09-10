@@ -1,11 +1,11 @@
-"""The five query optimisations, in one table.
+"""The six query optimisations, in one table.
 
 Three places have to agree about them and none of them can see the others: the
 CLI turns each into a flag, `settings.py` turns each into a Django setting
 before `django.setup()` reads it, and `environment.py` records which were on so
 that a saved run says what arm it was measuring. The table lives here so that
 those three read one set of names instead of three, and so that a test can
-assert the CLI exposes exactly these -- a sixth optimisation is an entry here
+assert the CLI exposes exactly these -- a seventh optimisation is an entry here
 and a click option there, and the test fails until it is both.
 
 The library reads every one of them through `getattr(settings, name, True)`, so
@@ -56,12 +56,19 @@ M2M_FENCE = Switch(
     "Add the redundant fence to an m2m traversal between two overlay views.",
 )
 
+LATE_ROW_LOOKUP = Switch(
+    "late-row-lookup",
+    "DJANGO_OVERLAY_LATE_ROW_LOOKUP",
+    "Resolve an ordered page's primary keys first, then fetch those rows by key.",
+)
+
 SWITCHES = (
     REWRITE_TRAVERSALS,
     REDIRECT_SELECT_RELATED,
     FORCE_HASH_JOINS,
     ARRAY_SUBQUERY_IN,
     M2M_FENCE,
+    LATE_ROW_LOOKUP,
 )
 
 # What counts as on when the value arrives as text. Anything else is off,

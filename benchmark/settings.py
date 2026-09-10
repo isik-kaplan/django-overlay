@@ -62,7 +62,7 @@ USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 
-# The five query optimisations, switchable from the environment.
+# The six query optimisations, switchable from the environment.
 #
 # A benchmark that cannot turn an optimisation off cannot say what it is worth,
 # and this module used to leave them all at their library defaults -- so the

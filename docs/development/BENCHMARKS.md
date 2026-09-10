@@ -49,7 +49,7 @@ view's fault or the query's.
 
 ## Turning the optimisations off
 
-The library carries five query optimisations, all on by default. Each one has a
+The library carries six query optimisations, all on by default. Each one has a
 flag, so the question the benchmark answers is not only "overlay against a plain
 table" but "this rewrite against no rewrite":
 
@@ -65,6 +65,7 @@ uv run django-overlay benchmark --scale 1.0 --no-optimisations
 | `--no-force-hash-joins` | `DJANGO_OVERLAY_FORCE_HASH_JOINS` |
 | `--no-array-subquery-in` | `DJANGO_OVERLAY_ARRAY_SUBQUERY_IN` |
 | `--no-m2m-fence` | `DJANGO_OVERLAY_M2M_FENCE` |
+| `--no-late-row-lookup` | `DJANGO_OVERLAY_LATE_ROW_LOOKUP` |
 
 `--no-optimisations` turns them all off. An individual flag still wins against
 it, so `--no-optimisations --force-hash-joins` prices the nested-loop ban on its

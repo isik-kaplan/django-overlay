@@ -520,6 +520,98 @@ key: **0.03ms** with the expression index in place, 4.5ms without.
 The two are equivalent here because the base primary key is never NULL, which is
 the only case where `NOT IN` and `NOT EXISTS` differ.
 
+## The ordered page is rewritten for you
+
+An ordered page is the one shape every list endpoint emits, and the expensive
+part of it is not the sorting. Measured at 1,000,000 view rows, share 0.1:
+
+| what changed | ms |
+|---|---|
+| `SELECT * … ORDER BY id LIMIT 50` | 335 |
+| the same page selecting **only the primary key** | **40** |
+| the same page with **no `ORDER BY`** | **0.018** |
+
+The sort node is a `top-N heapsort` holding 31kB — it keeps fifty rows and is
+free. What costs is that the rows arrive unordered, so all 1,000,000 must be
+produced and passed *through* it carrying their full width. One extra column
+takes the 40ms back to 234ms; the remaining seven are worth another 100ms.
+
+So the library resolves the keys first and fetches those rows by key:
+
+```sql
+SELECT * FROM person_view
+WHERE id = ANY (ARRAY(SELECT id FROM person_view ORDER BY id LIMIT 50))
+ORDER BY id
+```
+
+**335ms → 40ms, one statement, identical rows.** It is on by default
+(`DJANGO_OVERLAY_LATE_ROW_LOOKUP`) and you write plain Django:
+
+```python
+Person.objects.filter(...).order_by("id")[:50]     # rewritten
+Person.objects.filter(...).order_by("id").overlay_direct()[:50]   # not
+```
+
+Unlike the two manual levers, this one needs nothing from you, because the page
+size is in the query's shape rather than in the data. It wins across the whole
+practical range and only loses when the slice *is* the whole table:
+
+| page size | direct | rewritten | |
+|---|---|---|---|
+| 20 | 334.7ms | 37.3ms | ×9.0 |
+| 200 | 336.1ms | 39.7ms | ×8.5 |
+| 5,000 | 329.0ms | 45.1ms | ×7.3 |
+| 100,000 | 429.7ms | 128.2ms | ×3.4 |
+| 1,000,000 (the whole table) | **289.2ms** | 745.7ms | ×0.39 |
+
+There is no cap on the page size, deliberately: the array holds one id per row
+the caller already asked to receive, and an id is narrower than the row it
+stands for, so this cannot materialise more than the answer itself.
+`overlay_direct()` is for the last row of that table.
+
+It also does not need the scope to be broad to be worth having. Through the
+ORM, best of fifteen, the same 50-row page under filters of increasing breadth:
+
+| rows the filter matches | rewritten | direct | |
+|---|---|---|---|
+| 1,000 | 1.55ms | 1.48ms | neutral |
+| 10,000 | 4.08ms | 6.09ms | ×1.5 |
+| 100,000 | 18.91ms | 34.72ms | ×1.8 |
+| unscoped | 38.7ms | 367.6ms | ×9.5 |
+| unscoped, `OFFSET 100000` | 69.6ms | 502.2ms | ×7.2 |
+
+A tightly-scoped page is a wash — 0.07ms apart, which is below the run-to-run
+spread — so the rewrite costs nothing on the shape you should be writing anyway
+and removes the cliff on the shape you will write by accident.
+
+### What it declines
+
+Each of these would return different rows rather than the same rows faster:
+
+- **No ordering**, or an ordering that crosses a relation or wraps an
+  expression — the outer query is restricted by key and cannot order across a
+  join it no longer has.
+- **A join that multiplies rows**, unless `distinct()` is set. A reverse
+  foreign key or either m2m direction returns one row per match; fetching by
+  key returns it once. Forward FK and one-to-one joins are fine, both
+  directions.
+- **A reference to an enclosing query.** A correlated subquery that pages —
+  `Other.objects.filter(owner=OuterRef("pk")).order_by("id")[:1]` — would have
+  its `OuterRef` bind to the rewritten page instead of the caller, and return
+  other rows' values without raising. A page *filtered by* `Exists(...)` is not
+  this: that subquery refers to the page itself, and is rewritten as usual.
+- **`overridable = False` models.** Their view has no full anti-join, so
+  `LIMIT` already stops early — 0.4ms against 311ms for the overridable shape.
+  Nothing to fix.
+- **A key-only projection** (`values("pk")`), which is already this rewrite's
+  own inner query.
+- **`union()`/`intersection()`/`difference()`, `extra()`, an unbounded slice,
+  and a stepped slice.**
+
+`tests/test_late_row_lookup.py` compares every case above against
+`overlay_direct()` and asserts identical rows, in order, with duplicates
+preserved where the direct form has them.
+
 ## Why ordering is the expensive part
 
 The source branch has to exclude rows the base table has taken over. Postgres

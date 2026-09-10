@@ -114,6 +114,17 @@ class OverlayQuery(sql.Query):
     # __dict__ -- carries a declared one across every chain() and clone().
     _overlay_selective = False
 
+    # Set by OverlayQuerySet.overlay_direct(). A class attribute for the same
+    # reason as the one above: `Query.clone()` copies __dict__, so a declared
+    # one survives every chain(), and a query that never went through the
+    # queryset method still answers the question.
+    _overlay_direct = False
+
+    # Set by OverlayQuerySet.__getitem__() on the outer query of a late-row
+    # lookup, so `_wants_hash_joins()` can tell that the LIMIT it cannot see
+    # went into the array subquery rather than away.
+    _overlay_paged = False
+
     def _wants_hash_joins(self) -> bool:
         if not _force_hash_joins_enabled():
             return False
@@ -121,7 +132,14 @@ class OverlayQuery(sql.Query):
         # forbids is the one they want. See `_selective_declared()`.
         if _selective_declared(self):
             return False
-        limited = self.high_mark is not None or self.low_mark
+        # `_overlay_paged` counts as limited. The late-row-lookup rewrite moves
+        # the page's LIMIT off this query and onto the array subquery inside it,
+        # so `high_mark` is None on a statement that still very much carries a
+        # LIMIT -- and the lowered threshold exists for exactly that statement.
+        # Without this the rewrite silently switched the ban off for every
+        # sliced multi-view page, which is the shape the lowered threshold was
+        # added for. tests/test_force_hash_joins.py caught it.
+        limited = self.high_mark is not None or self.low_mark or self._overlay_paged
         # Through the module, not `from planning import _HASH_JOIN_THRESHOLD`.
         # The two thresholds are the only things here anyone overrides from
         # outside -- benchmark/suites/ban.py lowers one to measure what the ban
