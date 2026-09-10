@@ -398,10 +398,37 @@ def _configure_django(database_url=None):
 
 
 def _setup_django(database_url):
+    """Bring the benchmark database up to date, or say plainly why it can't.
+
+    `migrate` runs `check_consistent_history()` before it does anything, and
+    that check fails for a database whose migration records predate a migration
+    another app now depends on. The named docker volume is built to survive
+    reboots and reruns, so a benchmark database can sit for weeks while the
+    migration tree moves under it -- and then this raises
+    `InconsistentMigrationHistory` after the container is already up, deep in a
+    traceback that says nothing about the volume.
+
+    That happened, twice in a row, and the wrapper script around it reported
+    exit 0 both times because the failure was inside a subshell. Hence the
+    rewrite of the error rather than a bare re-raise: the fix is one command,
+    and the traceback does not mention it.
+    """
     _configure_django(database_url)
     from django.core.management import call_command
+    from django.db.migrations.exceptions import InconsistentMigrationHistory
 
-    call_command("migrate", verbosity=0, interactive=False)
+    try:
+        call_command("migrate", verbosity=0, interactive=False)
+    except InconsistentMigrationHistory as error:
+        raise click.ClickException(
+            f"The benchmark database's migration history is stale: {error}\n\n"
+            "Its data directory outlived the migration tree. Recreate the database "
+            "and let the graph rebuild (a cold build at scale 1.0 is a couple of minutes):\n\n"
+            "  docker exec django-overlay-bench-pg17 psql -U postgres -d postgres "
+            '-c "DROP DATABASE django_overlay_bench WITH (FORCE)"\n'
+            "  docker exec django-overlay-bench-pg17 psql -U postgres -d postgres "
+            '-c "CREATE DATABASE django_overlay_bench OWNER postgres"'
+        ) from error
 
 
 def _repository_root():
