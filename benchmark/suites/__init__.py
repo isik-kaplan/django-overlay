@@ -23,6 +23,7 @@ from benchmark import harness
 # suites rather than an arbitrary selection of them.
 SUITE_NAMES = (
     "shapes",
+    "pagination",
     "hybrid",
     "selectivity",
     "aggregation",

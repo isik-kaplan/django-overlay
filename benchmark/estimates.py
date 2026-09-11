@@ -34,6 +34,15 @@ MEASURED = {
     # 3.0 is extrapolated from the ban suite's own 1.0 -> 3.0 growth, the only
     # one measured that high.
     "shapes": {0.05: 2, 0.3: 7, 1.0: 23, 3.0: 62},
+    # NOT MEASURED. Sized by analogy with `shapes`, whose row count and shape
+    # it is closest to, then doubled because each row times three arms rather
+    # than two and the unscoped cells are hundreds of milliseconds apiece
+    # rather than tens. Deliberately over-predicted: the budget guard skips a
+    # suite it cannot afford, and skipping one that would have fit is a much
+    # cheaper mistake than overrunning a CI job. Replace with real points after
+    # the first clean run -- every other line in this table is measured, and
+    # this one should not stay the exception.
+    "pagination": {0.05: 5, 0.3: 15, 1.0: 50, 3.0: 135},
     "hybrid": {0.05: 3, 0.3: 8, 1.0: 22, 3.0: 59},
     "selectivity": {0.05: 22, 0.3: 67, 1.0: 86, 3.0: 232},
     "aggregation": {0.05: 48, 0.3: 133, 1.0: 189, 3.0: 510},
