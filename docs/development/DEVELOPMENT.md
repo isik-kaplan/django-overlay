@@ -50,6 +50,7 @@ it did. Mutation testing closes that gap: `mutmut` makes small changes to
 `django_overlay/` and expects the suite to fail for each one.
 
 ```bash
+uv run python .github/scripts/invalidate_mutation_cache.py      # before every run
 POSTGRES_USER=postgres uv run mutmut run --max-children 1      # phase one
 POSTGRES_USER=postgres uv run python .github/scripts/confirm_survivors.py
 uv run mutmut show <mutant-name>              # the diff for one mutant
@@ -89,6 +90,43 @@ that test retires the verdict; a kill nobody can attribute is never cached at
 all. A survivor is a claim about the whole suite, so the whole suite is what
 invalidates it — coarser on purpose, because there is no single test to point
 at when the finding is that none of them objected.
+
+Phase one's own cache needs help from outside mutmut. mutmut re-runs a mutant
+whose function changed, but it cannot see a *test* that changed: it hashes only
+the files it mutates, and its git change detection skips every `.py` file. Left
+alone, a kill outlives the test that produced it, and a test added to cover a
+"no tests" mutant or kill a survivor never runs against it, because mutmut
+reuses any verdict it already has. `invalidate_mutation_cache.py` runs before
+`mutmut run` and resets what a suite change could have moved:
+
+| what changed | resets |
+|---|---|
+| one test (a `test_*` function or `Test*` class) | the kills that test made, and every non-kill |
+| the rest of a test module — imports, helpers, fixtures | the kills made by any test in it, and every non-kill |
+| a `conftest.py` | the kills made by any test beneath it, and every non-kill |
+| a module in `django_overlay/` | every non-kill; kills are left to mutmut, which resets a changed function's itself |
+| anything else the suite runs on — helpers, test apps, settings, SQL templates, `benchmark/`, `[tool.pytest]` | everything |
+
+Which test made a kill comes from `tests/mutation_killers.py`, a plugin phase
+one loads to record the one test that failed under `-x`. A kill with no record
+falls back to every test traced to its function, which for a function nearly
+every test reaches means nearly any edit. Tests are compared by AST, so a
+comment or a reformat changes nothing.
+
+It also drops tests from mutmut's stats map so that mutmut traces them again:
+the changed tests, and on a source change every test that reaches the changed
+module. mutmut never re-traces for a source change, so without that a new
+function, or an old one behind a new call, runs against the traces from before
+it existed and reports "no tests". The one case still missed is a test that
+never reached the module before, and that test is nearly always new or edited
+itself.
+
+It deletes files under `mutants/` whose source is gone, since pytest runs from
+there and would otherwise still collect a deleted test. Its baseline lives in
+`mutants/.suite-hashes.json`. Two things are not watched: `.github/`, because
+the only tests that read it test the tooling and never call into
+`django_overlay/`, and `tests/probe_*.py`, which pytest does not collect and
+nothing the suite loads imports (a test fails if that changes).
 
 `--max-children 1` is mandatory, not a preference. mutmut otherwise forks one
 child per CPU, and every child talks to the same Postgres test database: they
@@ -130,6 +168,7 @@ A full pass is one CI job per subsystem, each mutating a slice of
 ```bash
 uv run python .github/scripts/mutation_shards.py --list
 uv run python .github/scripts/mutation_shards.py models   # rewrites [tool.mutmut]
+uv run python .github/scripts/invalidate_mutation_cache.py
 POSTGRES_USER=postgres uv run mutmut run --max-children 1
 POSTGRES_USER=postgres uv run python .github/scripts/confirm_survivors.py --label models
 ```
