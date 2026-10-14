@@ -156,7 +156,10 @@ also_copy = [
 # measured at ~32s locally and ~97s on a runner, which puts four of the six
 # shards past the six-hour job cap. The two-phase split pays the full suite only
 # for mutants that survive.
-pytest_add_cli_args = ["-m", "not concurrency"]
+#
+# tests/mutation_killers.py records which test killed each mutant, so a cached
+# kill is thrown out only when that test changes -- see its docstring.
+pytest_add_cli_args = ["-m", "not concurrency", "-p", "tests.mutation_killers"]
 # operations.py is invisible to mutation testing as the suite is written
 # today: everything in it runs inside pytest-django's session-scoped database
 # setup rather than inside a test, and mutmut's trampoline doesn't swap in the

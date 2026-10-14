@@ -237,6 +237,15 @@ jobs:
       - name: Select the shard
         run: uv run python .github/scripts/mutation_shards.py ${{ matrix.shard }}
 
+      # mutmut's incremental cache sees a changed function but not a changed
+      # test: it hashes only the files it mutates, and its git detection skips
+      # every .py. So a restored kill would outlive a weakened or deleted test,
+      # and a new test would never run against a cached survivor or no-tests
+      # mutant. This resets what the suite changes since the cache was written
+      # could have moved -- see the script's docstring for the rules.
+      - name: Invalidate verdicts the suite has moved since the cache
+        run: uv run python .github/scripts/invalidate_mutation_cache.py
+
       # --max-children 1 is not optional and cannot be moved into
       # [tool.mutmut]: mutmut only accepts it as a flag, and without it forks
       # one child per CPU onto the single shared Postgres test database, where
