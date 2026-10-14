@@ -26,6 +26,7 @@ import argparse
 import collections
 import glob
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -48,7 +49,7 @@ CACHE = Path("mutants/mutmut-confirmed-cache.json")
 # So the verdicts this file wrote before the change survive the change, and the
 # only thing that can throw them out is this number. Bumping it costs one phase
 # two; not bumping it keeps the wrong verdicts the change was made to stop.
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 EQUIVALENTS = Path(__file__).resolve().parent.parent / "mutation-equivalents.toml"
 # Long enough that "equivalent" or "n/a" does not pass for an explanation.
 SHORTEST_USEFUL_REASON = 40
@@ -218,6 +219,43 @@ def suite_hash(root="mutants"):
     return digest.hexdigest()[:16]
 
 
+def _invalidation():
+    path = Path(__file__).resolve().parent / "invalidate_mutation_cache.py"
+    spec = importlib.util.spec_from_file_location("invalidate_mutation_cache", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+invalidation = _invalidation()
+
+
+def support_hash(root="mutants"):
+    """One hash over everything the suite runs on that is not a test or a conftest.
+
+    The SQL templates, the test app, the settings, helpers, benchmark/ and the
+    pytest config. A verdict rests on these as much as on any test, and neither
+    the function hash nor the test pins above can see them: edit a template and
+    the rendering function is byte-for-byte the same, while the test that killed
+    its mutant may now pass. So every verdict, kill or survivor, is pinned to
+    them too.
+
+    Read from the baseline invalidate_mutation_cache.py writes before each
+    run, so the two steps agree on what "the suite" is. Without one there is
+    nothing to pin to, and None never matches a stored hash.
+    """
+    try:
+        baseline = json.loads((Path(root) / invalidation.BASELINE.name).read_text())["suite"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+    support = {
+        path: value
+        for path, value in baseline.items()
+        if not invalidation.is_test_module(path) and Path(path).name != "conftest.py"
+    }
+    return hashlib.sha256(json.dumps(support, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def read_cache(path=CACHE):
     try:
         cached = json.loads(Path(path).read_text())
@@ -231,7 +269,8 @@ def read_cache(path=CACHE):
 def reusable(entry, mutant_name, hashes, root="mutants"):
     """Whether a cached verdict still answers the question being asked.
 
-    Every verdict needs the mutated function unchanged. What else it needs
+    Every verdict needs the mutated function unchanged, and everything the suite
+    runs on besides its tests -- see support_hash(). What else it needs
     depends on what the verdict claimed, and the two are not symmetrical.
 
     A *kill* is "this test objected", so it is pinned to that one test: stored
@@ -252,6 +291,9 @@ def reusable(entry, mutant_name, hashes, root="mutants"):
     if not entry:
         return False
     if entry.get("function_hash") != function_hash_for(mutant_name, hashes):
+        return False
+    current = support_hash(root)
+    if current is None or entry.get("support_hash") != current:
         return False
     if not entry.get("killed_by"):
         return entry.get("suite_hash") == suite_hash(root)
@@ -446,6 +488,7 @@ def confirm(names, run=run_full_suite, say=print, cache=None, hashes=None, root=
                 "killed_by": None,
                 "function_hash": function_hash_for(name, hashes),
                 "suite_hash": suite_hash(root),
+                "support_hash": support_hash(root),
             }
         else:
             killed.append(name)
@@ -459,6 +502,7 @@ def confirm(names, run=run_full_suite, say=print, cache=None, hashes=None, root=
                     "function_hash": function_hash_for(name, hashes),
                     "test_file_hash": sha(Path(root) / test_file),
                     "conftest_hash": conftest_hash(test_file, root),
+                    "support_hash": support_hash(root),
                 }
         save(verdicts)
     return Outcome(confirmed, killed, hung, reused, verdicts)

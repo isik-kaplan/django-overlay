@@ -77,8 +77,11 @@ Phase two caches its verdicts, in `mutants/mutmut-confirmed-cache.json`, which
 travels between CI runs inside the same cache as phase one's. Without it a shard
 pays for every survivor again on every push, however small the change.
 
-Every verdict needs the mutated function unchanged. What else it needs depends
-on what the verdict claimed:
+Every verdict needs the mutated function unchanged, and everything the suite
+runs on that is not a test or a conftest — the SQL templates, the test apps,
+settings, helpers, `benchmark/`, `[tool.pytest]`. Edit a template and the
+function rendering it hashes the same while its tests may not. What else it
+needs depends on what the verdict claimed:
 
 | verdict | claims | reusable while |
 |---|---|---|

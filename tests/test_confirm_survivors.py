@@ -321,8 +321,17 @@ def cached(name="a", killed_by="tests/test_x.py::test_y", function_hash="fn", fi
             "function_hash": function_hash,
             "test_file_hash": file_hash,
             "conftest_hash": confirm_survivors.conftest_hash(killed_by.partition("::")[0], root),
+            "support_hash": confirm_survivors.support_hash(root),
         }
     }
+
+
+def write_baseline(root, support="SELECT 1"):
+    """What invalidate_mutation_cache.py leaves in mutants/ before a run."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    baseline = {"tests/test_x.py": "t", "tests/conftest.py": "c", "django_overlay/sql_templates/q.sql.j2": support}
+    (root / ".suite-hashes.json").write_text(json.dumps({"suite": baseline, "sources": {}}))
 
 
 @pytest.fixture
@@ -331,7 +340,13 @@ def a_test_file(tmp_path):
     path = tmp_path / "tests" / "test_x.py"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("def test_y(): pass\n")
+    write_baseline(tmp_path)
+    write_baseline(tmp_path / "mutants")  # for the tests that go through main()
     return path
+
+
+def pinned(root):
+    return {"support_hash": confirm_survivors.support_hash(str(root))}
 
 
 def run_and_count(names, cache, hashes, root, counter):
@@ -344,7 +359,14 @@ def run_and_count(names, cache, hashes, root, counter):
 
 def test_a_reused_survivor_still_counts_as_surviving(tmp_path, a_test_file):
     """The cache must not launder a survivor into a kill."""
-    entry = {"a": {"killed_by": None, "function_hash": "fn", "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
+    entry = {
+        "a": {
+            "killed_by": None,
+            "function_hash": "fn",
+            "suite_hash": confirm_survivors.suite_hash(str(tmp_path)),
+            **pinned(tmp_path),
+        }
+    }
     outcome = run_and_count(["a"], entry, {"a": "fn"}, tmp_path, [])
     assert outcome.confirmed == ["a"] and outcome.killed == []
 
@@ -443,7 +465,14 @@ def test_a_kill_with_no_conftest_hash_is_re_checked(tmp_path, a_test_file):
 def test_a_survivor_is_reused_while_no_test_has_changed(tmp_path, a_test_file):
     """ "Nothing kills it" stays true until some test changes."""
     ran = []
-    entry = {"a": {"killed_by": None, "function_hash": "fn", "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
+    entry = {
+        "a": {
+            "killed_by": None,
+            "function_hash": "fn",
+            "suite_hash": confirm_survivors.suite_hash(str(tmp_path)),
+            **pinned(tmp_path),
+        }
+    }
     outcome = run_and_count(["a"], entry, {"a": "fn"}, tmp_path, ran)
     assert ran == []
     assert outcome.reused == ["a"]
@@ -452,7 +481,14 @@ def test_a_survivor_is_reused_while_no_test_has_changed(tmp_path, a_test_file):
 def test_a_survivor_is_re_checked_when_any_test_changes(tmp_path, a_test_file):
     """It is a claim about the whole suite, so the whole suite invalidates it."""
     ran = []
-    entry = {"a": {"killed_by": None, "function_hash": "fn", "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
+    entry = {
+        "a": {
+            "killed_by": None,
+            "function_hash": "fn",
+            "suite_hash": confirm_survivors.suite_hash(str(tmp_path)),
+            **pinned(tmp_path),
+        }
+    }
     (tmp_path / "tests" / "test_new.py").write_text("def test_z(): pass\n")
     run_and_count(["a"], entry, {"a": "fn"}, tmp_path, ran)
     assert ran == ["a"]
@@ -460,7 +496,14 @@ def test_a_survivor_is_re_checked_when_any_test_changes(tmp_path, a_test_file):
 
 def test_a_survivor_is_re_checked_when_the_mutated_function_changes(tmp_path, a_test_file):
     ran = []
-    entry = {"a": {"killed_by": None, "function_hash": "fn", "suite_hash": confirm_survivors.suite_hash(str(tmp_path))}}
+    entry = {
+        "a": {
+            "killed_by": None,
+            "function_hash": "fn",
+            "suite_hash": confirm_survivors.suite_hash(str(tmp_path)),
+            **pinned(tmp_path),
+        }
+    }
     run_and_count(["a"], entry, {"a": "changed"}, tmp_path, ran)
     assert ran == ["a"]
 
@@ -583,6 +626,7 @@ def test_a_reused_verdict_is_saved_too(tmp_path, a_test_file):
             "function_hash": "fn",
             "test_file_hash": confirm_survivors.sha(a_test_file),
             "conftest_hash": confirm_survivors.conftest_hash("tests/test_x.py", str(tmp_path)),
+            **pinned(tmp_path),
         }
     }
     confirm_survivors.confirm(
@@ -870,3 +914,50 @@ def test_a_checkout_that_is_not_a_repository_still_runs(tmp_path, monkeypatch):
 
     probe.record_in_flight("module.py", "original\n")
     assert probe.restore_in_flight() is None
+
+
+# ------------------------------------------------ what the tests run on
+#
+# A SQL template is behaviour the function hash cannot see -- the function that
+# renders it is unchanged -- so a cached verdict has to be pinned to it too.
+
+
+@pytest.mark.parametrize("killed_by", ["tests/test_x.py::test_y", None])
+def test_a_template_edit_invalidates_every_kind_of_verdict(tmp_path, a_test_file, killed_by):
+    if killed_by:
+        entry = cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path))
+    else:
+        entry = {
+            "a": {
+                "killed_by": None,
+                "function_hash": "fn",
+                "suite_hash": confirm_survivors.suite_hash(str(tmp_path)),
+                **pinned(tmp_path),
+            }
+        }
+    write_baseline(tmp_path, support="SELECT 2")
+    ran = []
+    run_and_count(["a"], entry, {"a": "fn"}, tmp_path, ran)
+    assert ran == ["a"]
+
+
+def test_a_test_or_source_edit_leaves_the_support_pin(tmp_path):
+    """Tests and conftests have finer pins of their own; counting them here too
+    would throw away every kill whenever any test changed."""
+    write_baseline(tmp_path)
+    before = confirm_survivors.support_hash(str(tmp_path))
+    baseline = json.loads((tmp_path / ".suite-hashes.json").read_text())
+    baseline["suite"]["tests/test_x.py"] = "edited"
+    baseline["suite"]["tests/conftest.py"] = "edited"
+    baseline["sources"]["django_overlay/sql.py"] = "edited"
+    (tmp_path / ".suite-hashes.json").write_text(json.dumps(baseline))
+    assert confirm_survivors.support_hash(str(tmp_path)) == before
+
+
+def test_no_baseline_means_nothing_is_reused(tmp_path, a_test_file):
+    entry = cached(file_hash=confirm_survivors.sha(a_test_file), root=str(tmp_path))
+    (tmp_path / ".suite-hashes.json").unlink()
+    assert confirm_survivors.support_hash(str(tmp_path)) is None
+    ran = []
+    run_and_count(["a"], entry, {"a": "fn"}, tmp_path, ran)
+    assert ran == ["a"]
