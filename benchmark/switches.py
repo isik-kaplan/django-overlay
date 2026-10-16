@@ -1,4 +1,4 @@
-"""The six query optimisations, in one table.
+"""The seven query optimisations, in one table.
 
 Three places have to agree about them and none of them can see the others: the
 CLI turns each into a flag, `settings.py` turns each into a Django setting
@@ -62,6 +62,12 @@ LATE_ROW_LOOKUP = Switch(
     "Resolve an ordered page's primary keys first, then fetch those rows by key.",
 )
 
+ARRAY_LITERAL_IN = Switch(
+    "array-literal-in",
+    "DJANGO_OVERLAY_ARRAY_LITERAL_IN",
+    "Send a literal key list as one array parameter, `lhs = ANY (%s::uuid[])`.",
+)
+
 SWITCHES = (
     REWRITE_TRAVERSALS,
     REDIRECT_SELECT_RELATED,
@@ -69,6 +75,7 @@ SWITCHES = (
     ARRAY_SUBQUERY_IN,
     M2M_FENCE,
     LATE_ROW_LOOKUP,
+    ARRAY_LITERAL_IN,
 )
 
 # What counts as on when the value arrives as text. Anything else is off,

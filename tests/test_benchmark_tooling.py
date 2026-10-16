@@ -721,6 +721,7 @@ print("PROBE=" + json.dumps({
     "array_subquery_in": fields._array_subquery_in_enabled(),
     "m2m_fence": query._m2m_fence_enabled(),
     "late_row_lookup": queryset._late_row_lookup_enabled(),
+    "array_literal_in": fields._array_literal_in_enabled(),
 }))
 print("SETTINGS=" + settings.SETTINGS_MODULE)
 """

@@ -17,7 +17,7 @@ from django.db.models import sql
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.sql.where import AND, WhereNode
 
-from ..fields import OverlayForeignKey, OverlayManyToManyField, OverlaySelectiveIn
+from ..fields import OverlayForeignKey, OverlayManyToManyField, OverlaySelectiveIn, literal_array_in
 from . import planning
 from .planning import (
     _ban_nested_loops,
@@ -244,6 +244,8 @@ class OverlayQuery(sql.Query):
             return OverlaySelectiveIn(lhs, rhs)
         if lookups == [OverlaySelectiveIn.lookup_name]:
             return OverlaySelectiveIn(lhs, rhs)
+        if lookups == ["in"] and (literal := literal_array_in(lhs, rhs)) is not None:
+            return literal
         return super().build_lookup(lookups, lhs, rhs)
 
     def split_exclude(self, *args, **kwargs):

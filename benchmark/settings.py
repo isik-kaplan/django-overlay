@@ -62,7 +62,7 @@ USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 
-# The six query optimisations, switchable from the environment.
+# The seven query optimisations, switchable from the environment.
 #
 # A benchmark that cannot turn an optimisation off cannot say what it is worth,
 # and this module used to leave them all at their library defaults -- so the
@@ -79,3 +79,4 @@ DJANGO_OVERLAY_FORCE_HASH_JOINS = switches.read(switches.FORCE_HASH_JOINS)
 DJANGO_OVERLAY_ARRAY_SUBQUERY_IN = switches.read(switches.ARRAY_SUBQUERY_IN)
 DJANGO_OVERLAY_M2M_FENCE = switches.read(switches.M2M_FENCE)
 DJANGO_OVERLAY_LATE_ROW_LOOKUP = switches.read(switches.LATE_ROW_LOOKUP)
+DJANGO_OVERLAY_ARRAY_LITERAL_IN = switches.read(switches.ARRAY_LITERAL_IN)

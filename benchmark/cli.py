@@ -152,6 +152,11 @@ def _suite_names():
     default=None,
     help="Resolve an ordered page's primary keys first, then fetch those rows by key.",
 )
+@click.option(
+    "--array-literal-in/--no-array-literal-in",
+    default=None,
+    help="Send a literal key list as one array parameter, `lhs = ANY (%s::uuid[])`.",
+)
 @click.option("--yes", is_flag=True, help="Do not prompt before a long run.")
 def benchmark(**options):
     """Measure django-overlay against plain tables holding identical rows."""

@@ -1,8 +1,10 @@
 import copy
+import uuid
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django.db.models.expressions import Col
 from django.db.models.fields.related_lookups import RelatedIn
 from django.db.models.lookups import In
 
@@ -288,6 +290,96 @@ class OverlaySelectiveIn(In):
         if self.rhs_is_direct_value():
             return super().as_sql(compiler, connection)
         return _array_in_sql(self, compiler, connection)
+
+
+# Columns whose values can be written into a Postgres array literal as plain
+# text with no quoting: the key types the id strategies produce.
+_ARRAY_LITERAL_TYPES = {
+    "UUIDField": ("uuid", uuid.UUID),
+    "AutoField": ("integer", int),
+    "BigAutoField": ("bigint", int),
+    "SmallAutoField": ("smallint", int),
+    "IntegerField": ("integer", int),
+    "BigIntegerField": ("bigint", int),
+    "SmallIntegerField": ("smallint", int),
+}
+
+
+class OverlayLiteralArrayIn(In):
+    """`col IN (v1, v2, …)` sent as `col = ANY (%s::uuid[])` with one parameter.
+
+    The plan is the same -- Postgres turns an `IN` list into `= ANY` of a
+    constant array before planning -- so this only changes what happens on the
+    way there. Django prepares an `IN` list one value at a time: each is passed
+    through the field's prep, checked, given its own placeholder, and adapted
+    by psycopg2 on its own. For a uuid key that is several Python calls per
+    value, and the lists this library produces are long: a prefetch standing in
+    for select_related() sends every parent key, and an id list read back from a
+    fenced scope can run to millions. benchmark/suites/lists.py, reading a
+    scope's keys and fetching those rows by them at 1,000,000 people: 2,849ms
+    for 500,000 keys the usual way, 1,809ms as one array parameter, identical
+    rows -- and faster than the same IN list against a plain table.
+
+    Only built by `OverlayQuery.build_lookup()`, and only when every value is
+    already the column's Python type (`uuid.UUID`, or `int` for an integer key)
+    -- that is what makes skipping the per-value prep safe, and what lets the
+    values go into the array literal as their plain text form. Anything else --
+    model instances, strings, expressions, a subquery -- is left to Django.
+    """
+
+    def __init__(self, lhs, rhs, db_type):
+        self.db_type = db_type
+        super().__init__(lhs, rhs)
+
+    def get_prep_lookup(self):
+        # The per-value prep is exactly the cost being avoided, and every value
+        # was checked to be the column's own type before this was built.
+        return self.rhs
+
+    def as_sql(self, compiler, connection):
+        # Never empty: literal_array_in() only builds this for two or more
+        # distinct values, and leaves everything shorter to Django's own In.
+        lhs_sql, lhs_params = self.process_lhs(compiler, connection)
+        literal = "{" + ",".join(map(str, set(self.rhs))) + "}"
+        return f"{lhs_sql} = ANY (%s::{self.db_type}[])", [*lhs_params, literal]
+
+
+def _array_literal_in_enabled() -> bool:
+    """settings.DJANGO_OVERLAY_ARRAY_LITERAL_IN turns the rewrite below off.
+
+    It changes no plan -- Postgres plans `IN (a, b)` and `= ANY ('{a,b}')` the
+    same -- so the only reason to turn it off is to measure it, or to rule it
+    out while chasing something else."""
+    configured = getattr(settings, "DJANGO_OVERLAY_ARRAY_LITERAL_IN", True)
+    if not isinstance(configured, bool):
+        raise ImproperlyConfigured(f"settings.DJANGO_OVERLAY_ARRAY_LITERAL_IN must be a bool, got {configured!r}.")
+    return configured
+
+
+def literal_array_in(lhs, rhs):
+    """An OverlayLiteralArrayIn for `lhs__in=rhs`, or None to leave it to Django.
+
+    A single distinct value is left alone too: Postgres plans `IN (x)` as
+    `= x` but keeps `= ANY ('{x}')` as an array comparison. Both use the index
+    and time the same, but the rewrite's whole claim is that the plan does not
+    change, so it does not touch the one case where it would.
+    """
+    if not isinstance(rhs, (list, tuple, set, frozenset)) or not _array_literal_in_enabled():
+        return None
+    if not isinstance(lhs, Col):
+        return None
+    field = lhs.target
+    if field.is_relation:
+        field = field.target_field
+    db_type, python_type = _ARRAY_LITERAL_TYPES.get(field.get_internal_type(), (None, None))
+    if db_type is None:
+        return None
+    # `type() is`, not isinstance: a bool is an int, and True must not become 1.
+    if not all(type(value) is python_type for value in rhs):
+        return None
+    if len(set(rhs)) < 2:
+        return None
+    return OverlayLiteralArrayIn(lhs, rhs, db_type)
 
 
 class OverlayOneToOneField(OverlayForeignKey, models.OneToOneField):

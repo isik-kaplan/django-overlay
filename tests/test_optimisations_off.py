@@ -1,4 +1,4 @@
-"""Every combination of the six query optimisations, checked for correctness.
+"""Every combination of the seven query optimisations, checked for correctness.
 
 Each is a performance mechanism that must not change an answer, and
 each has an opt-out because each has a regime where it loses -- the array fence
@@ -59,6 +59,7 @@ SWITCHES = (
     "DJANGO_OVERLAY_ARRAY_SUBQUERY_IN",
     "DJANGO_OVERLAY_M2M_FENCE",
     "DJANGO_OVERLAY_LATE_ROW_LOOKUP",
+    "DJANGO_OVERLAY_ARRAY_LITERAL_IN",
 )
 
 ALL_ON = dict.fromkeys(SWITCHES, True)
@@ -216,6 +217,24 @@ def _shapes(graph):
         # array rewrite must decline -- and declining is what the crash was on.
         "literal list in": lambda: sorted(
             WideOrder.objects.filter(customer__in=both_cities).values_list("reference", flat=True)
+        ),
+        # Literal key lists, the shape the array-literal rewrite takes: on the
+        # primary key, on a foreign key's column, and negated. NEGATIVE_ID, so
+        # the source row's key is negative and has to survive the array literal.
+        "literal pk list": lambda: sorted(
+            WideCustomer.objects.filter(pk__in=[graph["vendor"].pk, graph["organic"].pk]).values_list(
+                "last_name", flat=True
+            )
+        ),
+        "literal fk column list": lambda: sorted(
+            WideOrder.objects.filter(customer_id__in=[graph["vendor"].pk, graph["elsewhere"].pk]).values_list(
+                "reference", flat=True
+            )
+        ),
+        "excluded literal pk list": lambda: sorted(
+            WideCustomer.objects.exclude(pk__in=[graph["vendor"].pk, graph["organic"].pk]).values_list(
+                "last_name", flat=True
+            )
         ),
         "select_related across the view": lambda: sorted(
             f"{order.reference}:{order.customer.city}" for order in WideOrder.objects.select_related("customer")
