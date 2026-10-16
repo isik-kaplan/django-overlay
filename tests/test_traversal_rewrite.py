@@ -24,7 +24,6 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
 from django_overlay.fields import OverlaySelectiveIn
-from django_overlay.models import query as query_module
 from tests.testapp.models import (
     Member,
     Person,
@@ -948,48 +947,14 @@ def test_the_fence_declines_a_through_model_it_cannot_read(graph):
         assert "= ANY (ARRAY(SELECT" not in sql_of(Roster.objects.filter(members__name="m"))
 
 
-def test_the_old_fenced_in_lookup_name_still_resolves_and_warns():
-    """`overlay_fenced_in` was renamed to `overlay_selective_in`.
-
-    The rename is cosmetic — same lookup class, same SQL — but a lookup name
-    that silently stopped resolving would not raise where it was written. It
-    would fall through to `Query.build_lookup()` and be reported as an
-    unknown field, which is a confusing way to find out about a rename. So the
-    old name is still accepted, and says so.
-
-    Asserting the SQL as well as the warning: a deprecation shim that warns and
-    then quietly compiles a plain `IN` would pass a warning-only test while
-    giving back the plan the lookup exists to avoid.
-    """
-    inner = Person.objects.values("pk")
-
-    with pytest.warns(DeprecationWarning, match="overlay_selective_in") as caught:
-        deprecated = str(Person.objects.filter(pk__overlay_fenced_in=inner).query)
-
-    current = str(Person.objects.filter(pk__overlay_selective_in=inner).query)
-    assert "= ANY (ARRAY" in deprecated, "the old name must still get the array form"
-    assert deprecated == current, "the two names must compile to identical SQL"
-
-    (warning,) = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-    # The reason is the useful half of a deprecation, and the line it names
-    # has to be the caller's, not one inside Django or this package, which
-    # tells a reader nothing about what to change. (Not `== __file__`: under
-    # mutation testing a trampoline frame sits between, and is the caller.)
-    assert str(warning.message).endswith(
-        "Same lookup, same SQL — renamed so that it and overlay_selective() share the claim they both make."
-    )
-    assert not warning.filename.startswith(query_module._FRAMEWORK_DIRS)
+def test_the_pre_rename_lookup_name_is_gone():
+    """`overlay_fenced_in` was renamed to `overlay_selective_in` and the old
+    spelling is not kept: on 0.x a rename is a rename. What matters is that it
+    fails loudly where it was written rather than compiling to something else."""
+    with pytest.raises(FieldError, match="overlay_fenced_in"):
+        Person.objects.filter(pk__overlay_fenced_in=Person.objects.values("pk"))
 
 
-def test_the_current_selective_in_name_does_not_warn():
-    """The other half of the shim: only the old spelling is deprecated.
-
-    Without this, a shim that warned on both names would look correct to the
-    test above while making the supported spelling noisy for everyone.
-    """
-    import warnings
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", DeprecationWarning)
-        statement = str(Person.objects.filter(pk__overlay_selective_in=Person.objects.values("pk")).query)
+def test_the_selective_in_lookup_compiles_to_the_array_form():
+    statement = str(Person.objects.filter(pk__overlay_selective_in=Person.objects.values("pk")).query)
     assert "= ANY (ARRAY" in statement

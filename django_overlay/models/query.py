@@ -6,10 +6,7 @@ many views a statement reads and decides whether to ban nested loops for it.
 """
 
 import contextvars
-import warnings
-from pathlib import Path
 
-import django
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import connections, models
@@ -26,11 +23,6 @@ from .planning import (
     _overlay_views_joined,
     _selective_declared,
 )
-
-
-# Where a warning must not be attributed: the frames between a caller's
-# queryset call and the code that notices something worth warning about.
-_FRAMEWORK_DIRS = (str(Path(django.__file__).parent), str(Path(__file__).parent.parent))
 
 
 def _m2m_fence_enabled() -> bool:
@@ -78,12 +70,6 @@ def _rewrite_traversals_enabled() -> bool:
 
 
 _fence_suppressed = contextvars.ContextVar("django_overlay_fence_suppressed", default=False)
-
-
-# The pre-rename name of OverlaySelectiveIn.lookup_name, still resolved by
-# build_lookup() with a DeprecationWarning. One place, so the warning text
-# and the check cannot disagree about the spelling.
-_DEPRECATED_SELECTIVE_IN_LOOKUP = "overlay_fenced_in"
 
 
 class OverlayQuery(sql.Query):
@@ -222,26 +208,7 @@ class OverlayQuery(sql.Query):
         leaves every field in the project untouched — including, deliberately,
         overlay models' own primary keys. See `OverlaySelectiveIn` for what it
         does and how it differs from `overlay_selective()`.
-
-        `overlay_fenced_in` is the name this had before the two manual levers
-        were given one vocabulary. Accepted here so a project that wrote it does
-        not break on upgrade, with a DeprecationWarning rather than silence —
-        a lookup name that quietly stopped resolving would not raise, it would
-        fall through to `super()` and be reported as a bad field, which is a
-        confusing way to learn about a rename.
         """
-        if lookups == [_DEPRECATED_SELECTIVE_IN_LOOKUP]:
-            warnings.warn(
-                f"pk__{_DEPRECATED_SELECTIVE_IN_LOOKUP} is deprecated; use "
-                f"pk__{OverlaySelectiveIn.lookup_name} instead. Same lookup, same SQL — "
-                "renamed so that it and overlay_selective() share the claim they both make.",
-                DeprecationWarning,
-                # The caller's .filter() is many frames up, through Django's
-                # query building and ours; a fixed stacklevel only ever named a
-                # line inside one of them.
-                skip_file_prefixes=_FRAMEWORK_DIRS,
-            )
-            return OverlaySelectiveIn(lhs, rhs)
         if lookups == [OverlaySelectiveIn.lookup_name]:
             return OverlaySelectiveIn(lhs, rhs)
         if lookups == ["in"] and (literal := literal_array_in(lhs, rhs)) is not None:
