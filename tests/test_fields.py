@@ -1,9 +1,20 @@
+from unittest import mock
+
 import pytest
 from django.db import IntegrityError, models, transaction
 
-from django_overlay.fields import OverlayForeignKey, OverlayOneToOneField
+from django_overlay.fields import OverlayForeignKey, OverlayOneToOneField, target_tables_for
 from django_overlay.models import OverlayConfigurationError
-from tests.testapp.models import Address, AddressNote, MetaTest, MetaTestNote, NullableFkTest, Person, PersonProfile
+from tests.testapp.models import (
+    Address,
+    AddressNote,
+    MetaTest,
+    MetaTestNote,
+    NullableFkTest,
+    Person,
+    PersonProfile,
+    SoftDeleteTest,
+)
 
 
 def test_overlay_foreign_key_never_creates_a_db_constraint():
@@ -204,3 +215,17 @@ def test_a_nullable_overlay_foreign_key_still_rejects_a_non_null_bogus_id(db_cur
         with transaction.atomic():
             NullableFkTest.objects.create(address_id=-999999)
             db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
+def test_the_base_entry_names_the_targets_own_key_column():
+    """A target whose key column is not `id` -- `id = UUIDField(primary_key=True,
+    db_column="address_key")` -- still has its base table keyed by that column,
+    and the FK check and the tombstone mask both look a row up there. Naming
+    `id` instead fails every write to the referencing table with an undefined
+    column."""
+    pk = SoftDeleteTest._base_model._meta.pk
+    with mock.patch.object(pk, "column", "address_key"):
+        base, source = target_tables_for(SoftDeleteTest, "public")
+
+    assert base["id_column"] == "address_key"
+    assert source["masked_by"]["id_column"] == "address_key"

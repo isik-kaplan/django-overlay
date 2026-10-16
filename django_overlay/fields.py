@@ -83,7 +83,7 @@ def target_tables_for(
     base = {
         "schema": tenant_schema,
         "table": target._base_model._meta.db_table,
-        "id_column": "id",
+        "id_column": target._base_model._meta.pk.column,
         "negate": False,
         "soft_delete": masks,
     }
