@@ -49,6 +49,10 @@ MEASURED = {
     # sweeps the same way -- measured at 1.0 only, so replace them when a
     # smaller or larger run exists.
     "reverse": {0.05: 14, 0.3: 59, 1.0: 165, 3.0: 520},
+    # 1.0 measured: 80s for two passes with no capped cell is 40s a pass.
+    # Every cell scales with the number of keys, which scales with the people,
+    # so the rest are linear from there until they are measured.
+    "lists": {0.05: 3, 0.3: 12, 1.0: 40, 3.0: 120},
     "hybrid": {0.05: 3, 0.3: 8, 1.0: 22, 3.0: 59},
     "selectivity": {0.05: 22, 0.3: 67, 1.0: 86, 3.0: 232},
     "aggregation": {0.05: 48, 0.3: 133, 1.0: 189, 3.0: 510},

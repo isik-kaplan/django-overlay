@@ -25,6 +25,7 @@ SUITE_NAMES = (
     "shapes",
     "pagination",
     "reverse",
+    "lists",
     "hybrid",
     "selectivity",
     "aggregation",

@@ -136,6 +136,20 @@ BenchPerson.objects.filter(pk__in=BenchPerson.objects
                            .filter(addresses__city="city0").values("pk"))
 ```
 
+### Keys you only need for the next query
+
+```python
+# 768ms at 500,000 keys: the set never leaves Postgres
+BenchPerson.objects.filter(pk__overlay_selective_in=scope.values("pk"))
+
+# 1,809ms: read into Python and sent back, as one array parameter
+BenchPerson.objects.filter(pk__in=list(scope.values_list("pk", flat=True)))
+```
+
+A uuid key is several Python calls a value each way. If the keys are read only
+to filter the next query by, pass the queryset instead. See
+[reference/QUERY_REWRITING.md](../reference/QUERY_REWRITING.md#4-a-literal-key-list-is-sent-as-one-parameter).
+
 ### The manual levers
 
 Two, and they exist for the same reason: the library decides by query shape

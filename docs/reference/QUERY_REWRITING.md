@@ -1,7 +1,7 @@
 # Query rewriting
 
-django-overlay rewrites four query shapes before they reach the database. All
-four are on by default, each has a setting to turn it off, and none of them
+django-overlay rewrites five query shapes before they reach the database. All
+five are on by default, each has a setting to turn it off, and none of them
 changes which rows you get back.
 
 They exist for one reason. A `UNION ALL` view is an **appendrel**, and an
@@ -22,6 +22,7 @@ not making that join, or of giving the planner something it can cost.
 | `filter(m2m__field=…)` | the same join, plus a redundant fence | `DJANGO_OVERLAY_M2M_FENCE` |
 | `select_related('fk')` | `prefetch_related('fk')` | `DJANGO_OVERLAY_REDIRECT_SELECT_RELATED` |
 | `fk__in=<queryset>` | `fk = ANY (ARRAY(<subquery>))` | `DJANGO_OVERLAY_ARRAY_SUBQUERY_IN` |
+| `pk__in=[k1, k2, …]` | `pk = ANY (%s::uuid[])`, one parameter | `DJANGO_OVERLAY_ARRAY_LITERAL_IN` |
 
 `DJANGO_OVERLAY_REWRITE_TRAVERSALS` gates the first two together — it decides
 whether a traversal is examined at all — and `DJANGO_OVERLAY_M2M_FENCE` then
@@ -133,6 +134,44 @@ from the path itself: `.values()`/`.values_list()`, `order_by('person__city')`,
 `annotate(…'person__…')`.
 
 ---
+
+## 4. A literal key list is sent as one parameter
+
+```python
+keys = list(scope.values_list("pk", flat=True))
+BenchPerson.objects.filter(pk__in=keys)
+```
+
+The plan does not change — Postgres turns `IN (a, b, …)` into `= ANY` of a
+constant array before planning — but the way there does. Django prepares an
+`IN` list one value at a time, twice, gives each its own placeholder, and
+psycopg2 adapts each on its own; on a uuid key that is several Python calls per
+value. The library makes these lists itself — a `select_related()` redirected
+to a prefetch sends every parent key — and code that reads a scope's keys and
+filters by them makes them too. So a list on a key column, whose values are
+already the column's type (`uuid.UUID`, or `int` for an integer key), compiles
+to `pk = ANY (%s::uuid[])` with the whole list as one text parameter.
+
+`django-overlay benchmark --suite lists`, 1,000,000 people, timed from reading
+the keys to having the rows, rows identical in every column:
+
+| keys | IN list | one array | kept in SQL | plain, IN list |
+|---|---|---|---|---|
+| 1,000 | 11ms | 10ms | **4ms** | 6ms |
+| 10,000 | 55ms | 36ms | **16ms** | 46ms |
+| 100,000 | 567ms | 329ms | **160ms** | 524ms |
+| 500,000 | 2,849ms | 1,809ms | **768ms** | 2,628ms |
+
+Left to Django: a single distinct value (Postgres plans `IN (x)` as `= x`, and
+this rewrite promises not to change a plan), model instances, strings, mixed
+types, a `bool` among integers, an expression on the left, and anything that is
+not a list, tuple or set.
+
+**The better fix is not to make the list.** The "kept in SQL" column is the
+same scope passed as a queryset — `filter(pk__overlay_selective_in=scope.values("pk"))`
+— which never brings the keys into Python at all, and is two to four times
+faster again. Read keys into Python when Python needs them; when the next
+query is the only thing that does, hand it the queryset.
 
 ## What is *not* rewritten: the unscoped ordered page
 

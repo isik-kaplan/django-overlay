@@ -44,13 +44,14 @@ view's fault or the query's.
 | `hops` | does the ban still hold at three and four conditions? |
 | `fence` | where materialising an m2m scope stops paying |
 | `reverse` | a reverse foreign key between two views: join, fence, or semi-join? |
+| `lists` | key lists read into Python and sent back: IN list, one array, or kept in SQL? |
 | `partitions` | what declaring a source partitioned prunes away, swept by partition count |
 
 `--smoke` runs `shapes` and `ban`, which is what CI does on every push.
 
 ## Turning the optimisations off
 
-The library carries six query optimisations, all on by default. Each one has a
+The library carries seven query optimisations, all on by default. Each one has a
 flag, so the question the benchmark answers is not only "overlay against a plain
 table" but "this rewrite against no rewrite":
 
@@ -67,6 +68,7 @@ uv run django-overlay benchmark --scale 1.0 --no-optimisations
 | `--no-array-subquery-in` | `DJANGO_OVERLAY_ARRAY_SUBQUERY_IN` |
 | `--no-m2m-fence` | `DJANGO_OVERLAY_M2M_FENCE` |
 | `--no-late-row-lookup` | `DJANGO_OVERLAY_LATE_ROW_LOOKUP` |
+| `--no-array-literal-in` | `DJANGO_OVERLAY_ARRAY_LITERAL_IN` |
 
 `--no-optimisations` turns them all off. An individual flag still wins against
 it, so `--no-optimisations --force-hash-joins` prices the nested-loop ban on its
