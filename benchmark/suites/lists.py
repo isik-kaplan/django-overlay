@@ -12,7 +12,7 @@ having the second query's rows -- because the round trip is the thing measured:
 - **IN list**: Django's own `IN`, the array-literal rewrite off.
 - **one array**: the same list sent as one array parameter,
   `pk = ANY (%s::uuid[])`. The plan is unchanged; only the per-value work goes.
-- **kept in SQL**: no round trip -- the scope passed as a queryset and fenced,
+- **kept in SQL**: no round trip -- the scope passed as a queryset through
   `pk__overlay_selective_in=scope.values("pk")`. What to write when the keys
   never needed to be in Python.
 - **plain**: the IN list against the plain mirror, whose keys are uuids too.

@@ -315,7 +315,7 @@ class OverlayLiteralArrayIn(In):
     by psycopg2 on its own. For a uuid key that is several Python calls per
     value, and the lists this library produces are long: a prefetch standing in
     for select_related() sends every parent key, and an id list read back from a
-    fenced scope can run to millions. benchmark/suites/lists.py, reading a
+    scope can run to millions. benchmark/suites/lists.py, reading a
     scope's keys and fetching those rows by them at 1,000,000 people: 2,849ms
     for 500,000 keys the usual way, 1,809ms as one array parameter, identical
     rows -- and faster than the same IN list against a plain table.
