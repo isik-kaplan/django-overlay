@@ -24,6 +24,7 @@ from benchmark import harness
 SUITE_NAMES = (
     "shapes",
     "pagination",
+    "reverse",
     "hybrid",
     "selectivity",
     "aggregation",

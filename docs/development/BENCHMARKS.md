@@ -43,6 +43,7 @@ view's fault or the query's.
 | `ban` | what `DJANGO_OVERLAY_FORCE_HASH_JOINS` is worth, and what it costs |
 | `hops` | does the ban still hold at three and four conditions? |
 | `fence` | where materialising an m2m scope stops paying |
+| `reverse` | a reverse foreign key between two views: join, fence, or semi-join? |
 | `partitions` | what declaring a source partitioned prunes away, swept by partition count |
 
 `--smoke` runs `shapes` and `ban`, which is what CI does on every push.

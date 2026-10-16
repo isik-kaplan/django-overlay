@@ -43,6 +43,12 @@ MEASURED = {
     # the first clean run -- every other line in this table is measured, and
     # this one should not stay the exception.
     "pagination": {0.05: 5, 0.3: 15, 1.0: 50, 3.0: 135},
+    # 1.0 from one measured run, converted: 571s for two passes at a 30s cap
+    # with six capped cells a pass is ~165s for one pass at the 10s cap these
+    # points assume. The other scales follow `fence`'s growth, whose scopes it
+    # sweeps the same way -- measured at 1.0 only, so replace them when a
+    # smaller or larger run exists.
+    "reverse": {0.05: 14, 0.3: 59, 1.0: 165, 3.0: 520},
     "hybrid": {0.05: 3, 0.3: 8, 1.0: 22, 3.0: 59},
     "selectivity": {0.05: 22, 0.3: 67, 1.0: 86, 3.0: 232},
     "aggregation": {0.05: 48, 0.3: 133, 1.0: 189, 3.0: 510},
