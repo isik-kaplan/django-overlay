@@ -348,6 +348,11 @@ forward and reverse FK, both M2M directions, overlay-to-overlay, multi-hop,
 a join that silently returned only the materialised half would still return rows
 and still look right.
 
+A reverse foreign key between two views (`person.filter(notes__text=…)`) is
+the one view-to-view join the library leaves as written; see
+[reference/QUERY_REWRITING.md](../reference/QUERY_REWRITING.md#what-is-not-rewritten-a-reverse-foreign-key-between-two-views)
+for why, and the lever for when duplicates do not matter.
+
 Index the join columns on the vendor tables as well as your own. Same rule as
 anywhere, easy to forget for a table you don't own.
 

@@ -140,10 +140,56 @@ from the path itself: `.values()`/`.values_list()`, `order_by('person__city')`,
 BenchPerson.objects.order_by("-score")[:20]     # no filter
 ```
 
-This is the one shape with no rewrite, and on an entity-shaped model it measured
+One of two shapes with no rewrite, and on an entity-shaped model it measured
 **97×** a plain table. See
 [operations/PERFORMANCE.md](../operations/PERFORMANCE.md#what-does-unlock-olimit-paging)
 for why, and for the two model-level flags that remove it.
 
 The short version: scope your list screens. A single equality filter on an
 indexed column took the worst case from 374ms to 3.1ms.
+
+## What is *not* rewritten: a reverse foreign key between two views
+
+```python
+BenchPerson.objects.filter(benchpersonaddress__address_id__in=ids)
+# BenchPersonAddress.person is an OverlayForeignKey, and both models are views
+```
+
+This compiles as the plain join. Neither rewrite above fits it: replacing the
+join with a semi-join would deduplicate — a person with two matching rows must
+come back twice — and the m2m fence only knows link tables. The m2m fence's
+conjunct does carry over, `pk = ANY (ARRAY(SELECT person_id FROM related WHERE
+…))`, but measured, it is not something to turn on by default.
+
+`django-overlay benchmark --suite reverse`, at 1,000,000 people, rows identical in
+every column:
+
+| scope | join | join + fence | semi-join | plain |
+|---|---|---|---|---|
+| 200 people | 107ms | 15ms | **6ms** | 18ms |
+| 5,000 | 235ms | 74ms | **36ms** | 62ms |
+| 50,000 | 635ms | 1,068ms | **425ms** | 505ms |
+| 500,000 | 839ms | 1,647ms | **702ms** | 390ms |
+| 2,267, beside two other array fences | **705ms** | 5,056ms | 5,003ms | >30s |
+| 22,667, beside two other array fences | **1,049ms** | >30s | >30s | >30s |
+
+On its own the fence has the usual crossover — seven times faster on a narrow
+scope, half as fast on a broad one. Beside other array fences it collapses: the
+planner cannot know an `ARRAY(subquery)`'s length, so each array's size is a
+default guess, and the guesses multiply until a scope of thousands is estimated
+at a handful of rows and a nested loop is chosen for it. The join is never worse
+than about a second. A default that is sometimes thirty times slower is not a
+default, so there isn't one.
+
+**The lever, when you know the shape.** If duplicates do not matter — a scope,
+a count of distinct people, a `pk__in` — write the condition as a semi-join on
+the related model and leave the join out:
+
+```python
+links = BenchPersonAddress.objects.filter(address_id__in=ids).values("person_id")
+BenchPerson.objects.filter(pk__overlay_selective_in=links)
+```
+
+That is the semi-join column: faster than the join at every scope when it stands
+alone. Do not combine it with other array fences in the same statement — the
+last two rows are what that costs.
