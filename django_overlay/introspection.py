@@ -12,6 +12,12 @@ def table_indexes(cursor, schema: str, table: str) -> list[dict]:
     return [{"name": name, "unique": unique, "shape": shape} for name, unique, shape in cursor.fetchall()]
 
 
+def view_columns(cursor, schema: str, view: str) -> list[str]:
+    """A view's column names in their order, or [] if there is no such view."""
+    cursor.execute(render("introspection/view_columns.sql.j2"), [schema, view])
+    return [name for (name,) in cursor.fetchall()]
+
+
 def compare_indexes(source_indexes: list[dict], base_indexes: list[dict]) -> tuple[list[dict], list[dict]]:
     """(missing_locally, missing_at_source) — indexes present on one side with
     no same-shape counterpart on the other.

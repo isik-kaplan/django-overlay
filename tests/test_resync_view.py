@@ -117,3 +117,28 @@ def test_sync_view_carries_the_models_pk_default_sql_into_the_insert_trigger():
     # The strategy default would otherwise supply this one, so its absence is
     # what proves the model's value won.
     assert "nextval" not in insert_triggers[0]
+
+
+def test_a_resync_keeps_the_column_order_the_view_already_has():
+    """A view built while replaying migrations can order its columns
+    differently from the live model: makemigrations moves a new model's foreign
+    keys into AddField operations after its CreateModel. CREATE OR REPLACE VIEW
+    cannot move a column, so a resync in the live order failed outright with
+    "cannot change name of view column"."""
+    from django.db import connection
+
+    from django_overlay.introspection import view_columns
+    from django_overlay.sync import resolve_schema, statement_executor, sync_view
+
+    live = [f.column for f in SwitchableSourceTest._meta.fields]
+    reordered = [*live[1:], live[0]]
+    schema = resolve_schema(connection)
+    with connection.cursor() as cursor:
+        # Postgres will not reorder an existing view either, so build it afresh.
+        cursor.execute(f'DROP VIEW "{SwitchableSourceTest._meta.db_table}"')
+        sync_view(SwitchableSourceTest, schema, statement_executor(cursor), columns=reordered)
+
+    resync_view(SwitchableSourceTest)
+
+    with connection.cursor() as cursor:
+        assert view_columns(cursor, schema, SwitchableSourceTest._meta.db_table)[1:] == reordered

@@ -6,10 +6,29 @@ from . import uniqueness
 from ._templating import render
 from .constraints import OverlayUniqueConstraint
 from .fields import OverlayForeignKey, target_tables_for
+from .introspection import view_columns
 
 
 def _columns_for(model) -> list:
     return [f.column for f in model._meta.fields]
+
+
+def columns_in_view_order(model, cursor, tenant_schema: str) -> list:
+    """The live columns, in the order the existing view already has them.
+
+    CREATE OR REPLACE VIEW keeps every existing column where it is: it can
+    append, but never move or rename one. The live field list is not always in
+    the view's order. makemigrations splits a new model's foreign keys out into
+    AddField operations after its CreateModel, so a view built while replaying
+    that migration has them last, and the live model does not. Rebuilding from
+    the live order then fails with "cannot change name of view column".
+
+    Columns the view lacks are appended. A column the model no longer has is
+    left for Postgres to refuse, as before: dropping one from a view takes a
+    DROP VIEW, which a migration's RemoveField already arranges."""
+    live = _columns_for(model)
+    existing = [column for column in view_columns(cursor, tenant_schema, model._meta.db_table) if column in live]
+    return existing + [column for column in live if column not in existing]
 
 
 def resolve_schema(connection) -> str:
@@ -231,5 +250,6 @@ def resync_view(model, using: str = "default", lock_timeout: str = "5s") -> None
         # `true` scopes it to this transaction.
         cursor.execute("SELECT set_config('lock_timeout', %s, true)", [lock_timeout])
         execute = statement_executor(cursor)
-        sync_view(model, tenant_schema, execute)
+        columns = columns_in_view_order(model, cursor, tenant_schema)
+        sync_view(model, tenant_schema, execute, columns=columns)
         sync_source_triggers(model, tenant_schema, execute)
