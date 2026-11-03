@@ -6,7 +6,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from django_overlay.constraints import OverlayUniqueConstraint
-from django_overlay.fields import OverlayForeignKey
+from django_overlay.fields import OverlayForeignKey, OverlayOneToOneField
 from django_overlay.management.commands import makemigrations
 from django_overlay.management.commands.makemigrations import (
     Command,
@@ -280,6 +280,36 @@ def test_adding_a_field_to_an_existing_model_triggers_a_constraint():
     extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
 
     only(extra_ops, AddOverlayConstraint, model_name="AddressNote", field_name="address")
+
+
+def test_a_one_to_one_primary_key_gets_its_constraint_on_the_base_model_only():
+    """An unmanaged view model's CreateModel has to keep its primary key, so
+    unlike other relations this one reaches the view half too, whose table is a
+    view and cannot carry the trigger."""
+    base_to_view = _overlay_base_to_view("testapp")
+    ops = [
+        migrations.CreateModel(
+            name=name,
+            fields=[("person", OverlayOneToOneField("Person", on_delete=models.CASCADE, primary_key=True))],
+        )
+        for name in ("PersonDetail", "PersonDetailBase")
+    ]
+
+    extra_ops = extra_ops_for_migration("testapp", ops, base_to_view, set())
+
+    assert len([o for o in extra_ops if isinstance(o, AddOverlayConstraint)]) == 1
+    only(extra_ops, AddOverlayConstraint, model_name="PersonDetailBase", field_name="person")
+
+
+def test_an_overlay_foreign_key_added_to_a_view_model_gets_no_constraint():
+    base_to_view = _overlay_base_to_view("testapp")
+    op = migrations.AddField(
+        model_name="PersonDetail", name="other", field=OverlayForeignKey("Address", on_delete=models.CASCADE)
+    )
+
+    extra_ops = extra_ops_for_migration("testapp", [op], base_to_view, set())
+
+    assert not [o for o in extra_ops if isinstance(o, AddOverlayConstraint)]
 
 
 def test_creating_a_model_with_an_overlay_foreign_key_field_triggers_a_constraint():

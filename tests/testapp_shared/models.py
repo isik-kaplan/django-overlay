@@ -666,3 +666,11 @@ class FilteredUniqueTestSource(models.Model):
     class Meta:
         app_label = "testapp_shared"
         indexes = [models.Index(fields=["ssn"], name="futs_ssn_idx")]
+
+
+class PersonDetailSource(models.Model):
+    person_id = models.IntegerField(primary_key=True)
+    bio = models.CharField(max_length=100, default="")
+
+    class Meta:
+        app_label = "testapp_shared"

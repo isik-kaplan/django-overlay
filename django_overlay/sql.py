@@ -104,9 +104,12 @@ def build_instead_of_insert_sql(
     soft_delete: bool = False,
     source=None,
     overridable: bool = True,
+    generates_pk: bool = True,
 ) -> str:
-    pk_default_expr = pk_default_sql or default_pk_sql(strategy)
-    if pk_default_expr is None:
+    """`generates_pk` False: the caller always supplies the pk (it is a link to
+    another row), so no default is rendered and no sequence is named."""
+    pk_default_expr = (pk_default_sql or default_pk_sql(strategy)) if generates_pk else None
+    if pk_default_expr is None and generates_pk:
         pk_default_expr = render(
             "pk_defaults/sequence_nextval.sql.j2", tenant_schema=tenant_schema, pk_sequence=pk_sequence
         )

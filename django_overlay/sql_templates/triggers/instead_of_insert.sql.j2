@@ -21,7 +21,9 @@ BEGIN
             HINT = 'Let the id default instead of setting it, or drop overridable = False from the model''s OverlayMeta.';
   END IF;
 {%- endif %}
+{%- if pk_default_expr %}
   NEW.{{ pk_column | qi }} := COALESCE(NEW.{{ pk_column | qi }}, {{ pk_default_expr }});
+{%- endif %}
   INSERT INTO {{ tenant_schema | qi }}.{{ base_table | qi }} (
     {%- for c in columns -%}{{ c | qi }}{% if not loop.last %}, {% endif %}{%- endfor -%}{% if soft_delete %}, _overlay_deleted{% endif %}
   ) VALUES (

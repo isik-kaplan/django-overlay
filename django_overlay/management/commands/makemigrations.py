@@ -127,6 +127,12 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
     synced_views = set()
     added_constraints = set()
     added_unique_constraints = set()
+    # The view half of an overlay model carries a copy of every field, but an
+    # OverlayForeignKey's trigger belongs on the base table. Django usually
+    # leaves relations out of an unmanaged model's CreateModel, so the view
+    # half rarely shows up here; a primary key cannot be left out, so a model
+    # keyed by an OverlayOneToOneField does.
+    view_models = {name.lower() for name in base_to_view.values()}
 
     for op in operations:
         if isinstance(op, _FIELD_SHAPE_OPS):
@@ -156,10 +162,10 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
 
         if isinstance(op, migrations.AddField) and isinstance(op.field, OverlayForeignKey):
             key = (op.model_name.lower(), op.name)
-            if key not in added_constraints:
+            if op.model_name.lower() not in view_models and key not in added_constraints:
                 added_constraints.add(key)
                 extra_ops.append(AddOverlayConstraint(app_label, op.model_name, op.name))
-        elif isinstance(op, migrations.CreateModel):
+        elif isinstance(op, migrations.CreateModel) and op.name.lower() not in view_models:
             for field_name, field in op.fields:
                 if isinstance(field, OverlayForeignKey):
                     key = (op.name.lower(), field_name)

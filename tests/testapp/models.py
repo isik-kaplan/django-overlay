@@ -1459,3 +1459,17 @@ class FilteredUniqueTest(OverlayModel):
         @staticmethod
         def get_source():
             return SourceTable(schema="public", table="testapp_shared_filtereduniquetestsource", extra_where="active")
+
+
+class PersonDetail(OverlayModel):
+    """Keyed by its person: the primary key is a link, so nothing generates it."""
+
+    person = OverlayOneToOneField(Person, on_delete=models.CASCADE, primary_key=True, related_name="detail")
+    bio = models.CharField(max_length=100, default="")
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "persondetail"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_persondetailsource", id_column="person_id")

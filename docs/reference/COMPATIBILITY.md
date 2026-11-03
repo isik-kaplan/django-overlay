@@ -226,6 +226,9 @@ Consequences worth knowing:
   attached to both models, which would trip Django's `models.E032`.
 - `OneToOneField` stays a `OneToOneField` on the view model; the base model's
   copy is retyped to a `ForeignKey` so the reverse accessor isn't claimed twice.
+  A one-to-one that is the primary key is copied as it is, and its value always
+  comes from the row it points at: the view's insert path generates nothing for
+  it, whatever the id strategy.
 
 ## Cost
 

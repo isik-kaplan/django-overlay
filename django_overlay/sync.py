@@ -69,13 +69,17 @@ def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None
     # migration — see OverlayMeta — and needs resync_overlay_views.
     overridable = model._overlay_meta.overridable
     pk_sequence = f"{base_table}_{pk_column}_seq"
+    # A primary key that is a link (an OverlayOneToOneField) takes its value
+    # from the row it points at. Nothing generates it, and there is no
+    # sequence behind it to name.
+    generates_pk = not model._base_model._meta.pk.is_relation
 
     execute(
         overlay_sql.build_view_sql(
             view_name, tenant_schema, base_table, source, columns, pk_column, strategy, soft_delete, overridable
         )
     )
-    if pk_default_sql is None and default_pk_sql(strategy) is None:
+    if generates_pk and pk_default_sql is None and default_pk_sql(strategy) is None:
         # New ids come from the base table's sequence, so its direction is part
         # of the strategy: NEGATIVE_BASE_POSITIVE_SOURCE_ID needs it counting down.
         execute(
@@ -94,6 +98,7 @@ def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None
             soft_delete,
             source,
             overridable,
+            generates_pk,
         )
     )
     execute(
