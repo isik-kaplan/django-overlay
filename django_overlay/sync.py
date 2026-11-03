@@ -1,5 +1,5 @@
 from django.apps import apps as django_apps
-from django.db import connections, transaction
+from django.db import DatabaseError, connections, transaction
 
 from . import sql as overlay_sql
 from . import uniqueness
@@ -74,11 +74,7 @@ def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None
     # sequence behind it to name.
     generates_pk = not model._base_model._meta.pk.is_relation
 
-    execute(
-        overlay_sql.build_view_sql(
-            view_name, tenant_schema, base_table, source, columns, pk_column, strategy, soft_delete, overridable
-        )
-    )
+    execute(_view_sql(model, tenant_schema, columns, soft_delete))
     if generates_pk and pk_default_sql is None and default_pk_sql(strategy) is None:
         # New ids come from the base table's sequence, so its direction is part
         # of the strategy: NEGATIVE_BASE_POSITIVE_SOURCE_ID needs it counting down.
@@ -267,5 +263,45 @@ def resync_view(model, using: str = "default", lock_timeout: str = "5s") -> None
         cursor.execute("SELECT set_config('lock_timeout', %s, true)", [lock_timeout])
         execute = statement_executor(cursor)
         columns = columns_in_view_order(model, cursor, tenant_schema)
+        _drop_view_if_its_columns_change_type(model, tenant_schema, execute, columns, using)
         sync_view(model, tenant_schema, execute, columns=columns)
         sync_source_triggers(model, tenant_schema, execute)
+
+
+def _view_sql(model, tenant_schema: str, columns, soft_delete=None) -> str:
+    """The CREATE OR REPLACE VIEW statement for `model` over `columns`."""
+    return overlay_sql.build_view_sql(
+        model._meta.db_table,
+        tenant_schema,
+        model._base_model._meta.db_table,
+        model.get_source(),
+        columns,
+        model._meta.pk.column,
+        model._overlay_meta.strategy,
+        model._overlay_meta.soft_delete if soft_delete is None else soft_delete,
+        model._overlay_meta.overridable,
+    )
+
+
+def _drop_view_if_its_columns_change_type(model, tenant_schema, execute, columns, using):
+    """CREATE OR REPLACE VIEW keeps every column's type, and a new source can
+    change one: a union with a text column where the base table has
+    varchar(100) is text, and a geometry column without a declared type turns
+    geometry(Point,4326) into plain geometry. Postgres refuses that replace
+    (42P16), so the view goes and sync_view() builds it, and its INSTEAD OF
+    triggers, again.
+
+    Tried inside a savepoint, so a view whose types hold is replaced in place
+    as before. Dropped without CASCADE: anything built on the view makes the
+    resync fail rather than silently disappear with it."""
+    try:
+        with transaction.atomic(using=using):
+            execute(_view_sql(model, tenant_schema, columns))
+    except DatabaseError as error:
+        if getattr(getattr(error, "__cause__", None), "sqlstate", None) != "42P16":
+            raise
+        execute(
+            render(
+                "ddl/drop_view_without_dependents.sql.j2", tenant_schema=tenant_schema, view_name=model._meta.db_table
+            )
+        )

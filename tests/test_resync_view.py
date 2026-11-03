@@ -3,7 +3,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 
 from django_overlay.sync import resync_view
-from tests.testapp.models import CURRENT_PROVIDER, SwitchableSourceTest
+from tests.testapp.models import _PROVIDER_TABLES, CURRENT_PROVIDER, SwitchableSourceTest
 from tests.testapp_shared.models import ProviderAPersonSource, ProviderBPersonSource
 
 
@@ -142,3 +142,50 @@ def test_a_resync_keeps_the_column_order_the_view_already_has():
 
     with connection.cursor() as cursor:
         assert view_columns(cursor, schema, SwitchableSourceTest._meta.db_table)[1:] == reordered
+
+
+@pytest.fixture
+def text_typed_source():
+    """A source whose first_name is text, where the model's column is varchar(100)."""
+    from django.db import connection
+
+    with connection.cursor() as cursor:
+        cursor.execute("CREATE TABLE public.text_typed_person_source (id serial PRIMARY KEY, first_name text)")
+    _PROVIDER_TABLES["text_typed"] = "text_typed_person_source"
+    yield
+    del _PROVIDER_TABLES["text_typed"]
+
+
+def test_a_source_with_different_column_types_replaces_the_view(text_typed_source):
+    """CREATE OR REPLACE VIEW cannot change a column's type, and a union with a
+    text column turns varchar(100) into text. The view is dropped and built
+    again instead, triggers and all."""
+    from django.db import connection
+
+    CURRENT_PROVIDER["value"] = "text_typed"
+    resync_view(SwitchableSourceTest)
+    with connection.cursor() as cursor:
+        cursor.execute("INSERT INTO public.text_typed_person_source (id, first_name) VALUES (7, 'Typed')")
+
+    assert SwitchableSourceTest.objects.get(id=-7).first_name == "Typed"
+    created = SwitchableSourceTest.objects.create(first_name="Ours")
+    assert SwitchableSourceTest.objects.get(pk=created.pk).first_name == "Ours"
+
+    CURRENT_PROVIDER["value"] = "provider_a"
+    resync_view(SwitchableSourceTest)
+    assert not SwitchableSourceTest.objects.filter(id=-7).exists()
+
+
+def test_a_view_built_on_it_stops_the_replacement_instead_of_disappearing(text_typed_source):
+    from django.db import DatabaseError, connection
+
+    with connection.cursor() as cursor:
+        cursor.execute(f"CREATE VIEW public.on_top AS SELECT id FROM public.{SwitchableSourceTest._meta.db_table}")
+    CURRENT_PROVIDER["value"] = "text_typed"
+
+    with pytest.raises(DatabaseError):
+        resync_view(SwitchableSourceTest)
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT to_regclass('public.on_top') IS NOT NULL")
+        assert cursor.fetchone()[0]

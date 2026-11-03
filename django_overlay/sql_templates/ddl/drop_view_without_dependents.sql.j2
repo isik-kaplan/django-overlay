@@ -1,0 +1,2 @@
+-- No CASCADE: a view something else depends on stays, and the statement fails.
+DROP VIEW {{ tenant_schema | qi }}.{{ view_name | qi }};
