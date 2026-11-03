@@ -414,10 +414,16 @@ def base_model_copy(field):
     Nothing observes the swap: the base model's relation is hidden
     (related_name="+"), so it installs no descriptor and appears in no reverse
     accessor either way.
+
+    A OneToOneField that is the primary key stays as it is. Its uniqueness is
+    the PRIMARY KEY itself, not a separate table constraint, so there is
+    nothing to take away -- and a ForeignKey that is also a primary key is a
+    "unique ForeignKey", which Django's system checks warn about (fields.W342)
+    on every project that keys a model on a one-to-one.
     """
     copied = copy.deepcopy(field)
     collapsed = _WITHOUT_IMPLICIT_UNIQUE.get(type(field))
-    if collapsed is not None:
+    if collapsed is not None and not field.primary_key:
         field_class, rel_class = collapsed
         # Retyped in place rather than rebuilt from deconstruct(): this runs
         # while the model class is still being created, and

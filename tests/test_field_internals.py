@@ -128,6 +128,19 @@ def test_the_collapsed_copy_shares_no_state_with_the_declared_field():
     assert declared._related_name == "occupant"
 
 
+def test_a_one_to_one_primary_key_is_copied_as_it_is():
+    """Its uniqueness is the primary key, so there is no table constraint to
+    remove, and collapsing it would leave a ForeignKey that is a primary key --
+    which Django warns about as a "unique ForeignKey" (fields.W342)."""
+    declared = models.OneToOneField(Vendor, on_delete=models.CASCADE, primary_key=True)
+
+    copied = base_model_copy(declared)
+
+    assert type(copied) is models.OneToOneField
+    assert copied.primary_key
+    assert copied is not declared
+
+
 def test_base_model_copy_leaves_other_fields_alone():
     declared = models.CharField(max_length=10)
 
