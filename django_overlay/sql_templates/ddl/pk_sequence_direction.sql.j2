@@ -1,0 +1,32 @@
+{#- Points the base table's id sequence the way the strategy needs it:
+    counting down from -1 for NEGATIVE_BASE_POSITIVE_SOURCE_ID, up from 1 for
+    every other integer strategy.
+
+    Only ever flips a sequence that points the wrong way, so running it on
+    every sync is a no-op once it is right and never rewinds a sequence that
+    has already handed ids out. When it does flip one, it restarts past
+    whatever the base table already holds in the new direction, so the next
+    id cannot collide with an existing row.
+
+    Concatenated rather than format()ed: this runs through a migration's
+    schema editor too, where a %s is a parameter placeholder. -#}
+DO $$
+DECLARE
+  seq regclass := to_regclass('{{ tenant_schema | qi }}.{{ pk_sequence | qi }}');
+BEGIN
+  IF seq IS NULL THEN
+    RETURN;
+  END IF;
+{%- if descending %}
+  IF (SELECT seqincrement FROM pg_catalog.pg_sequence WHERE seqrelid = seq) > 0 THEN
+    EXECUTE 'ALTER SEQUENCE ' || seq::text || ' INCREMENT BY -1 NO MINVALUE MAXVALUE -1 START WITH -1 RESTART WITH '
+      || (SELECT LEAST(-1, MIN({{ pk_column | qi }}) - 1) FROM {{ tenant_schema | qi }}.{{ base_table | qi }});
+  END IF;
+{%- else %}
+  IF (SELECT seqincrement FROM pg_catalog.pg_sequence WHERE seqrelid = seq) < 0 THEN
+    EXECUTE 'ALTER SEQUENCE ' || seq::text || ' INCREMENT BY 1 MINVALUE 1 NO MAXVALUE START WITH 1 RESTART WITH '
+      || (SELECT GREATEST(1, MAX({{ pk_column | qi }}) + 1) FROM {{ tenant_schema | qi }}.{{ base_table | qi }});
+  END IF;
+{%- endif %}
+END
+$$;

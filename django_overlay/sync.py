@@ -7,6 +7,7 @@ from ._templating import render
 from .constraints import OverlayUniqueConstraint
 from .fields import OverlayForeignKey, target_tables_for
 from .introspection import view_columns
+from .strategies import default_pk_sql
 
 
 def _columns_for(model) -> list:
@@ -67,12 +68,19 @@ def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None
     # the field list at all. Which is also why changing it generates no
     # migration — see OverlayMeta — and needs resync_overlay_views.
     overridable = model._overlay_meta.overridable
+    pk_sequence = f"{base_table}_{pk_column}_seq"
 
     execute(
         overlay_sql.build_view_sql(
             view_name, tenant_schema, base_table, source, columns, pk_column, strategy, soft_delete, overridable
         )
     )
+    if pk_default_sql is None and default_pk_sql(strategy) is None:
+        # New ids come from the base table's sequence, so its direction is part
+        # of the strategy: NEGATIVE_BASE_POSITIVE_SOURCE_ID needs it counting down.
+        execute(
+            overlay_sql.build_pk_sequence_direction_sql(tenant_schema, base_table, pk_column, pk_sequence, strategy)
+        )
     execute(
         overlay_sql.build_instead_of_insert_sql(
             view_name,
@@ -80,7 +88,7 @@ def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None
             base_table,
             columns,
             pk_column,
-            f"{base_table}_{pk_column}_seq",
+            pk_sequence,
             strategy,
             pk_default_sql,
             soft_delete,

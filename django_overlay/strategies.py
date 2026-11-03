@@ -13,6 +13,12 @@ class Strategy(enum.Enum):
 
     # Assumes the source table's id column is a non-negative integer.
     NEGATIVE_ID = "negative_id"
+    # Integer ids used as stored, never negated: the source already keeps
+    # negative ids and the base table's sequence hands out positive ones.
+    NEGATIVE_SOURCE_POSITIVE_BASE_ID = "negative_source_positive_base_id"
+    # Integer ids used as stored, never negated: the source keeps positive ids
+    # and the base table's sequence counts down from -1.
+    NEGATIVE_BASE_POSITIVE_SOURCE_ID = "negative_base_positive_source_id"
     UUID4 = "uuid4"
     UUID7 = "uuid7"
     UUID7_POLYFILL = "uuid7_polyfill"
@@ -44,3 +50,8 @@ def default_pk_sql(strategy: Strategy) -> str | None:
 
 def negates_source_ids(strategy: Strategy) -> bool:
     return strategy is Strategy.NEGATIVE_ID
+
+
+def descending_base_ids(strategy: Strategy) -> bool:
+    """Whether the base table's id sequence counts down rather than up."""
+    return strategy is Strategy.NEGATIVE_BASE_POSITIVE_SOURCE_ID

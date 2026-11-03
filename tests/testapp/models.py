@@ -1390,3 +1390,47 @@ class PlainPersonLabel(models.Model):
             models.Index(fields=["person"], name="ppl_person_idx"),
             models.Index(fields=["label"], name="ppl_label_idx"),
         ]
+
+
+class NegativeSourcePerson(OverlayModel):
+    """Source ids are stored negative already; the base sequence hands out positive ones."""
+
+    first_name = models.CharField(max_length=100)
+    age = models.IntegerField(null=True)
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_SOURCE_POSITIVE_BASE_ID)):
+        table_name = "negativesourceperson"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_personsource")
+
+
+class NegativeSourcePersonNote(models.Model):
+    person = OverlayForeignKey(NegativeSourcePerson, on_delete=models.CASCADE, related_name="notes")
+    text = models.CharField(max_length=100, default="")
+
+    class Meta:
+        app_label = "testapp"
+
+
+class NegativeBasePerson(OverlayModel):
+    """Source ids are stored positive; the base sequence counts down from -1."""
+
+    first_name = models.CharField(max_length=100)
+    age = models.IntegerField(null=True)
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_BASE_POSITIVE_SOURCE_ID)):
+        table_name = "negativebaseperson"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_personsource")
+
+
+class NegativeBasePersonNote(models.Model):
+    person = OverlayForeignKey(NegativeBasePerson, on_delete=models.CASCADE, related_name="notes")
+    text = models.CharField(max_length=100, default="")
+
+    class Meta:
+        app_label = "testapp"

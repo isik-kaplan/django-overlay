@@ -1,5 +1,5 @@
 from ._templating import render
-from .strategies import Strategy, default_pk_sql, negates_source_ids
+from .strategies import Strategy, default_pk_sql, descending_base_ids, negates_source_ids
 
 
 def _source_context(source, strategy: Strategy) -> dict | None:
@@ -73,6 +73,22 @@ def build_view_sql(
         origin_column=ORIGIN_COLUMN,
         origin_base=ORIGIN_BASE,
         origin_source=ORIGIN_SOURCE,
+    )
+
+
+def build_pk_sequence_direction_sql(
+    tenant_schema: str, base_table: str, pk_column: str, pk_sequence: str, strategy: Strategy
+) -> str:
+    """Points the base table's id sequence down for NEGATIVE_BASE_POSITIVE_SOURCE_ID
+    and up for every other integer strategy, flipping it only if it points the
+    wrong way."""
+    return render(
+        "ddl/pk_sequence_direction.sql.j2",
+        tenant_schema=tenant_schema,
+        base_table=base_table,
+        pk_column=pk_column,
+        pk_sequence=pk_sequence,
+        descending=descending_base_ids(strategy),
     )
 
 

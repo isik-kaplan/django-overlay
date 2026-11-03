@@ -30,6 +30,7 @@ origin_column = _overlay_origin
 origin_base = base
 origin_source = source
 pk_sequence = person_id_seq
+descending = True
 referencing_pk = id
 target_pk = id
 target_table = person
