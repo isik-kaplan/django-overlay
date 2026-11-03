@@ -1473,3 +1473,15 @@ class PersonDetail(OverlayModel):
         @staticmethod
         def get_source():
             return SourceTable(schema="public", table="testapp_shared_persondetailsource", id_column="person_id")
+
+
+class UnmanagedPersonLink(models.Model):
+    """Links to Person from a table Django does not manage: this one does not exist at all."""
+
+    person = OverlayOneToOneField(Person, on_delete=models.DO_NOTHING, primary_key=True, related_name="+")
+    note = models.CharField(max_length=100, default="")
+
+    class Meta:
+        app_label = "testapp"
+        managed = False
+        db_table = '"elsewhere"."person_links"'

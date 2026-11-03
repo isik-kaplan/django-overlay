@@ -301,6 +301,31 @@ def test_a_one_to_one_primary_key_gets_its_constraint_on_the_base_model_only():
     only(extra_ops, AddOverlayConstraint, model_name="PersonDetailBase", field_name="person")
 
 
+def test_an_unmanaged_model_gets_no_constraint():
+    """Django does not own an unmanaged model's table, so nothing goes on it."""
+    op = migrations.CreateModel(
+        name="Elsewhere",
+        fields=[("person", OverlayForeignKey("Person", on_delete=models.DO_NOTHING))],
+        options={"managed": False},
+    )
+
+    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+
+    assert not [o for o in extra_ops if isinstance(o, AddOverlayConstraint)]
+
+
+def test_a_field_added_to_an_unmanaged_model_gets_no_constraint():
+    op = migrations.AddField(
+        model_name="UnmanagedPersonLink",
+        name="other",
+        field=OverlayForeignKey("Address", on_delete=models.DO_NOTHING),
+    )
+
+    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+
+    assert not [o for o in extra_ops if isinstance(o, AddOverlayConstraint)]
+
+
 def test_an_overlay_foreign_key_added_to_a_view_model_gets_no_constraint():
     base_to_view = _overlay_base_to_view("testapp")
     op = migrations.AddField(

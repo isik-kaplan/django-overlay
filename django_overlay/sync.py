@@ -133,10 +133,13 @@ def inbound_overlay_foreign_keys(target):
 
     View models are skipped because an overlay model declares every field
     twice. The trigger belongs on the base table, and the base model is what
-    this returns -- the same model AddOverlayConstraint resolves against."""
+    this returns -- the same model AddOverlayConstraint resolves against.
+
+    Unmanaged models are skipped too: Django does not own their tables, so
+    makemigrations gives them no triggers, and a resync does not add any."""
     found = []
     for model in django_apps.get_models(include_auto_created=True):
-        if getattr(model, "_is_overlay_view_model", False):
+        if getattr(model, "_is_overlay_view_model", False) or not model._meta.managed:
             continue
         for field in model._meta.get_fields():
             # `.concrete` directly rather than through getattr: the isinstance

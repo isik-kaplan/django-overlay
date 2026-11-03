@@ -40,6 +40,15 @@ def _overlay_base_to_view(app_label):
     }
 
 
+def _unmanaged_models(app_label):
+    """{model_name (lowercase)} of this app's unmanaged models, view halves included."""
+    return {
+        model._meta.model_name
+        for model in django_apps.get_app_config(app_label).get_models(include_auto_created=True)
+        if not model._meta.managed
+    }
+
+
 def _overlay_foreign_key_fields(app_label):
     """{(model_name (lowercase), field_name)} for every OverlayForeignKey
     field declared anywhere in this app — the declaring model doesn't have
@@ -133,6 +142,14 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
     # half rarely shows up here; a primary key cannot be left out, so a model
     # keyed by an OverlayOneToOneField does.
     view_models = {name.lower() for name in base_to_view.values()}
+    # An unmanaged model's table is not Django's, so its links get no triggers;
+    # see sync.inbound_overlay_foreign_keys.
+    created_unmanaged = {
+        op.name.lower()
+        for op in operations
+        if isinstance(op, migrations.CreateModel) and op.options.get("managed") is False
+    }
+    unmanaged = created_unmanaged | _unmanaged_models(app_label)
 
     for op in operations:
         if isinstance(op, _FIELD_SHAPE_OPS):
@@ -162,10 +179,10 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
 
         if isinstance(op, migrations.AddField) and isinstance(op.field, OverlayForeignKey):
             key = (op.model_name.lower(), op.name)
-            if op.model_name.lower() not in view_models and key not in added_constraints:
+            if op.model_name.lower() not in view_models | unmanaged and key not in added_constraints:
                 added_constraints.add(key)
                 extra_ops.append(AddOverlayConstraint(app_label, op.model_name, op.name))
-        elif isinstance(op, migrations.CreateModel) and op.name.lower() not in view_models:
+        elif isinstance(op, migrations.CreateModel) and op.name.lower() not in view_models | unmanaged:
             for field_name, field in op.fields:
                 if isinstance(field, OverlayForeignKey):
                     key = (op.name.lower(), field_name)

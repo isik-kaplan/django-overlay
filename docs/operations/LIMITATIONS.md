@@ -14,6 +14,10 @@
   anywhere: an `OverlayForeignKey` cannot point at one, and an
   `OverlayUniqueConstraint` does not count its values. Changing it rewrites
   those triggers too, so it needs a resync like any other source change.
+- **Links from tables Django does not manage** — an `OverlayForeignKey` on a
+  `managed = False` model gets no triggers, from `makemigrations` or a resync:
+  the table is someone else's, possibly in another schema. The relation still
+  works for queries; nothing checks what that table holds.
 - **Delete semantics** — see [DELETION.md](../concepts/DELETION.md).
 - **Multi-tenancy** — uses `connection.schema_name` if `django_tenants` is
   installed, else Postgres's own `current_schema()`.
