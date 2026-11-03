@@ -736,6 +736,18 @@ class OverlayQuerySet(models.QuerySet):
                 .values_list(*[field.name for field in returning_fields])
             )
 
+    def materialize(self) -> None:
+        """Copy every row this queryset matches into the base table.
+
+        For code that changes rows behind the ORM's back: raw SQL that updates
+        the base table only finds the rows the base table holds, so a source
+        row it should touch has to be copied down first. update() and save()
+        already do this for themselves. A row already in the base table is left
+        exactly as it is, so calling it twice, or on rows of mixed origin, is
+        safe.
+        """
+        self._copy_matched_rows_to_the_base_table()
+
     def _copy_matched_rows_to_the_base_table(self) -> None:
         """Materialise every row this queryset matches, so the update that
         follows finds a base row for each of them. A row already materialised

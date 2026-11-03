@@ -43,3 +43,11 @@ Person.objects.create(first_name="Jane")             # goes straight into the wr
 Person.objects.filter(id=source_only_id).update(age=41)  # copies the row over, then applies the edit
 person.delete()                                      # see DELETION.md
 ```
+
+Raw SQL that updates the writable table only sees rows that table already
+holds. When it must also reach source rows the tenant hasn't touched yet, copy
+them down first:
+
+```python
+Person.objects.filter(id__in=ids).materialize()      # source rows copied over; existing ones left alone
+```
