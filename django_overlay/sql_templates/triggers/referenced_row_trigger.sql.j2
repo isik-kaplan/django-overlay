@@ -19,23 +19,40 @@ BEGIN
       -- This trigger fires on the target's own base table, so OLD is a target
       -- row and the partition key needs no declaration on the referencing
       -- side to be in scope. The predicate reaches the view's source branch
-      -- and prunes it; the base branch is not partitioned and ignores it.
+      -- and prunes it. The base branch filters on it as well, which is why
+      -- a miss here is not the last word -- see below.
       AND {{ partition_key | qi }} = OLD.{{ partition_key | qi }}
       {%- endif %}
   ) THEN
     RETURN NULL;
   END IF;
 
-  IF EXISTS (
+  IF NOT EXISTS (
     SELECT 1 FROM {{ tenant_schema | qi }}.{{ referencing_table | qi }}
     WHERE {{ column | qi }} = OLD.{{ target_pk | qi }}
   ) THEN
-    -- %% doubled so psycopg doesn't treat it as a bind placeholder.
-    RAISE EXCEPTION 'overlay FK violation: %%.%% still references %% = %%',
-      '{{ referencing_table }}', '{{ column }}', '{{ target_view }}', OLD.{{ target_pk | qi }}
-      USING ERRCODE = '23503';
+    RETURN NULL;
   END IF;
-  RETURN NULL;
+  {%- if partition_key %}
+
+  -- The key above only narrows the lookup; the row is its id. A base row can
+  -- have no key, and an update can change it, and neither removes the row
+  -- from the view. So before calling it gone, look again by id alone. Only
+  -- rows something still references get this far, and EXISTS stops at the
+  -- first row with the base branch first, so a row still in the base table
+  -- never reaches the partitions.
+  IF EXISTS (
+    SELECT 1 FROM {{ tenant_schema | qi }}.{{ target_view | qi }}
+    WHERE {{ target_pk | qi }} = OLD.{{ target_pk | qi }}
+  ) THEN
+    RETURN NULL;
+  END IF;
+  {%- endif %}
+
+  -- %% doubled so psycopg doesn't treat it as a bind placeholder.
+  RAISE EXCEPTION 'overlay FK violation: %%.%% still references %% = %%',
+    '{{ referencing_table }}', '{{ column }}', '{{ target_view }}', OLD.{{ target_pk | qi }}
+    USING ERRCODE = '23503';
 END;
 $$ LANGUAGE plpgsql;
 
