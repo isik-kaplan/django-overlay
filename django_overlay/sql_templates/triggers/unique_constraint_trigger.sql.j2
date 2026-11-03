@@ -20,6 +20,11 @@ BEGIN
          {%- endfor %}
        )
        AND src.{{ source.id_column | qi }} != {{ "-" if negate }}NEW.{{ pk_column | qi }}
+       {%- if source.extra_where %}
+       -- A source row the view leaves out is not a row of the model, so its
+       -- value reserves nothing.
+       AND ({{ source.extra_where }})
+       {%- endif %}
        {%- if soft_delete %}
        -- A source row masked by a tombstone isn't a visible row, so its value
        -- reserves nothing. Without this the partial unique index frees a

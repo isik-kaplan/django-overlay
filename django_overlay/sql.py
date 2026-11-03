@@ -248,5 +248,10 @@ def build_unique_constraint_trigger_sql(
         pk_column=pk_column,
         negate=negates_source_ids(strategy),
         soft_delete=soft_delete,
-        source={"schema": source.schema, "table": source.table, "id_column": source.id_column},
+        source={
+            "schema": source.schema,
+            "table": source.table,
+            "id_column": source.id_column,
+            "extra_where": source.extra_where,
+        },
     )

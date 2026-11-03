@@ -1434,3 +1434,28 @@ class NegativeBasePersonNote(models.Model):
 
     class Meta:
         app_label = "testapp"
+
+
+class FilteredSourceTestNote(models.Model):
+    """Links to FilteredSourceTest, whose source hides its inactive rows."""
+
+    target = OverlayForeignKey(FilteredSourceTest, on_delete=models.CASCADE, related_name="notes")
+
+    class Meta:
+        app_label = "testapp"
+
+
+class FilteredUniqueTest(OverlayModel):
+    """An OverlayUniqueConstraint over a source that hides its inactive rows."""
+
+    ssn = models.CharField(max_length=20)
+
+    class Meta:
+        constraints = [OverlayUniqueConstraint(fields=["ssn"], name="filtereduniquetest_ssn_unique")]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "filtereduniquetest"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_filtereduniquetestsource", extra_where="active")

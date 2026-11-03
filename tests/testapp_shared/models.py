@@ -657,3 +657,12 @@ class SoftDeletePlainUniqueTestSource(models.Model):
             models.Index(fields=["code"], name="sdputs_code_idx"),
             models.Index(fields=["vendor_id"], name="sdputs_vendor_idx"),
         ]
+
+
+class FilteredUniqueTestSource(models.Model):
+    ssn = models.CharField(max_length=20)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [models.Index(fields=["ssn"], name="futs_ssn_idx")]

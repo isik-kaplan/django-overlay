@@ -61,7 +61,7 @@ class OverlayForeignKey(models.ForeignKey):
 def target_tables_for(
     target, tenant_schema: str, soft_delete: bool | None = None, partition_column: str | None = None
 ) -> list[dict]:
-    """[{"schema", "table", "id_column", "negate", "soft_delete"}, ...] for
+    """[{"schema", "table", "id_column", "negate", "soft_delete", ...}, ...] for
     `target`'s base table (never negated) and its source (negated for a
     NEGATIVE_ID target). Always both: an overlay model
     without a source is refused at declaration time. Takes the target model directly, not `self`, so a
@@ -96,6 +96,9 @@ def target_tables_for(
             "id_column": source.id_column,
             "negate": negates_source_ids(target._overlay_meta.strategy),
             "soft_delete": False,
+            # The source rows the view leaves out are not rows of the model,
+            # so a reference to one is refused like a reference to nothing.
+            "extra_where": source.extra_where,
             "partition": (
                 {"column": source.partition_key, "local_column": partition_column}
                 if source.partition_key and partition_column

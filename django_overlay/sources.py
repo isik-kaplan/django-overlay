@@ -6,7 +6,9 @@ class SourceTable:
     """A model's read-only source table. `extra_where` is spliced directly
     into the view's SQL — a hardcoded literal is fine, but a data-derived
     value must be quoted yourself first (e.g. `psycopg.sql.Literal`), never
-    f-string'd in.
+    f-string'd in. It decides which source rows are rows of the model at all,
+    so the triggers apply it too: a link to a row it leaves out is refused,
+    and a value only such a row holds is free for an OverlayUniqueConstraint.
 
     `partition_key` names the column the source is declaratively partitioned
     on, when it is. Purely a declaration: this package never creates, attaches
