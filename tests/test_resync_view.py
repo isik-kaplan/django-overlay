@@ -189,3 +189,27 @@ def test_a_view_built_on_it_stops_the_replacement_instead_of_disappearing(text_t
     with connection.cursor() as cursor:
         cursor.execute("SELECT to_regclass('public.on_top') IS NOT NULL")
         assert cursor.fetchone()[0]
+
+
+def test_the_refusal_is_recognised_under_psycopg2_too(monkeypatch):
+    """psycopg2 reports the SQLSTATE as `pgcode`, psycopg 3 as `sqlstate`."""
+    from django.db import DatabaseError
+
+    from django_overlay import sync
+
+    class Psycopg2Error(Exception):
+        pgcode = "42P16"
+
+    executed = []
+
+    def execute(sql):
+        executed.append(sql)
+        if len(executed) == 1:
+            error = DatabaseError("cannot change data type of view column")
+            error.__cause__ = Psycopg2Error()
+            raise error
+
+    sync._drop_view_if_its_columns_change_type(SwitchableSourceTest, "public", execute, ["id", "first_name"], "default")
+
+    assert "DROP VIEW" in executed[-1]
+    assert "CASCADE;" not in executed[-1]

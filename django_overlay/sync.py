@@ -298,7 +298,9 @@ def _drop_view_if_its_columns_change_type(model, tenant_schema, execute, columns
         with transaction.atomic(using=using):
             execute(_view_sql(model, tenant_schema, columns))
     except DatabaseError as error:
-        if getattr(getattr(error, "__cause__", None), "sqlstate", None) != "42P16":
+        cause = error.__cause__
+        # psycopg 3 calls it sqlstate, psycopg2 pgcode.
+        if (getattr(cause, "sqlstate", None) or getattr(cause, "pgcode", None)) != "42P16":
             raise
         execute(
             render(
