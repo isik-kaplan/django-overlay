@@ -8,7 +8,7 @@ from django.db.models.expressions import Col
 from django.db.models.fields.related_lookups import RelatedIn
 from django.db.models.lookups import In
 
-from .models import OverlayConfigurationError
+from .exceptions import OverlayConfigurationError
 from .strategies import negates_source_ids
 
 
