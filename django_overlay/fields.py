@@ -18,6 +18,11 @@ class OverlayForeignKey(models.ForeignKey):
     integrity instead comes from a constraint trigger (see
     operations.AddOverlayConstraint)."""
 
+    def get_internal_type(self):
+        # Django's relation fields report their class name, which for a subclass
+        # would be this one's; code that dispatches on the type knows ForeignKey.
+        return "ForeignKey"
+
     def __init__(self, to, *args, partition_column: str | None = None, **kwargs):
         if "db_constraint" in kwargs:
             raise OverlayConfigurationError(
@@ -386,7 +391,10 @@ def literal_array_in(lhs, rhs):
 
 
 class OverlayOneToOneField(OverlayForeignKey, models.OneToOneField):
-    pass
+    def get_internal_type(self):
+        # Django's relation fields report their class name, which for a subclass
+        # would be this one's; code that dispatches on the type knows OneToOneField.
+        return "OneToOneField"
 
 
 # A OneToOneField *is* a ForeignKey plus `unique=True` — that's the whole
@@ -472,6 +480,11 @@ class OverlayManyToManyField(models.ManyToManyField):
     through= model with OverlayForeignKey fields — Django's auto-created
     through table always uses a plain ForeignKey, which can never be safe
     against a view."""
+
+    def get_internal_type(self):
+        # Django's relation fields report their class name, which for a subclass
+        # would be this one's; code that dispatches on the type knows ManyToManyField.
+        return "ManyToManyField"
 
     def __init__(self, to, *args, through, **kwargs):
         super().__init__(to, *args, through=through, **kwargs)

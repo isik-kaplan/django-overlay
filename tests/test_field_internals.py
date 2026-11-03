@@ -182,3 +182,13 @@ def test_deepcopy_of_a_declared_field_is_not_shared_with_the_view_model():
     assert view_field is not base_field
     assert isinstance(view_field, models.OneToOneField)
     assert copy.deepcopy(view_field).remote_field is not view_field.remote_field
+
+
+def test_the_fields_report_the_django_type_they_behave_as():
+    """Code that dispatches on get_internal_type() -- serializers, filter builders,
+    the database backend -- has to see the field it already knows."""
+    from django_overlay.fields import OverlayForeignKey, OverlayManyToManyField, OverlayOneToOneField
+
+    assert OverlayForeignKey("testapp.Person", on_delete=models.CASCADE).get_internal_type() == "ForeignKey"
+    assert OverlayOneToOneField("testapp.Person", on_delete=models.CASCADE).get_internal_type() == "OneToOneField"
+    assert OverlayManyToManyField("testapp.Address", through="x").get_internal_type() == "ManyToManyField"
