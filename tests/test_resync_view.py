@@ -213,3 +213,31 @@ def test_the_refusal_is_recognised_under_psycopg2_too(monkeypatch):
 
     assert "DROP VIEW" in executed[-1]
     assert "CASCADE;" not in executed[-1]
+
+
+def test_any_other_refusal_of_the_new_view_is_raised():
+    """Only a column-type change (42P16) is answered by dropping the view; any
+    other error from the new view's SQL leaves the view alone and reaches the
+    caller."""
+    from django.db import DatabaseError
+
+    from django_overlay import sync
+
+    class SyntaxErrorCause(Exception):
+        sqlstate = "42601"
+
+    executed = []
+
+    def execute(sql):
+        executed.append(sql)
+        error = DatabaseError("syntax error")
+        error.__cause__ = SyntaxErrorCause()
+        raise error
+
+    with pytest.raises(DatabaseError, match="syntax error"):
+        sync._drop_view_if_its_columns_change_type(
+            SwitchableSourceTest, "public", execute, ["id", "first_name"], "default"
+        )
+
+    assert len(executed) == 1
+    assert "DROP VIEW" not in executed[0]
