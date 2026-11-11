@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 
 from django_overlay.constraints import OverlayUniqueConstraint
@@ -1485,3 +1487,36 @@ class UnmanagedPersonLink(models.Model):
         app_label = "testapp"
         managed = False
         db_table = '"elsewhere"."person_links"'
+
+
+class Stamped(models.Model):
+    """An abstract parent from plain models.Model, mixed in beside OverlayModel:
+    `class InheritedFields(Stamped, OverlayModel)`. Its primary key, its
+    commented column and its one-to-one all reach the overlay model by
+    inheritance. Migration 0036 is what 0.2.0 generated for it, which kept
+    the one-to-one's table-level UNIQUE on the base table and injected a
+    primary key without the comment; 0037 is the upgrade."""
+
+    id = models.UUIDField(
+        primary_key=True, default=uuid.uuid4, editable=False, help_text="Row id.", db_comment="Row id."
+    )
+    created_at = models.DateTimeField(null=True, help_text="When it was made.", db_comment="When it was made.")
+    vendor = models.OneToOneField(Vendor, on_delete=models.CASCADE, null=True)
+
+    class Meta:
+        abstract = True
+
+
+class InheritedFields(Stamped, OverlayModel):
+    note = models.CharField(max_length=50, blank=True, default="")
+
+    class Meta:
+        app_label = "testapp"
+        constraints = [OverlayUniqueConstraint(fields=["vendor"], name="inheritedfields_vendor_uniq")]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.UUID4)):
+        table_name = "inheritedfields"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_inheritedfieldssource")

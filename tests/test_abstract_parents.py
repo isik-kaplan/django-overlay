@@ -199,3 +199,36 @@ def test_an_id_that_is_not_the_primary_key_is_left_for_django_to_refuse():
 def test_the_refusal_names_the_field():
     with pytest.raises(OverlayConfigurationError, match=r"^Named\.code is a CharField"):
         _declare("Named", OverlayModel, body={"code": models.CharField(primary_key=True, max_length=10)})
+
+
+@isolate_apps("tests.testapp")
+def test_a_plain_abstract_parent_mixed_in_beside_overlay_model():
+    """`class Person(BaseModel, OverlayModel)`, where BaseModel descends from
+    models.Model and never reaches OverlayModel: a project's own base class
+    stamping a commented primary key and timestamps on every model. Every
+    column of the base table has to come out commented, the library's own
+    included."""
+    stamped = type(
+        "BaseModel",
+        (models.Model,),
+        {
+            "__module__": __name__,
+            "Meta": type("Meta", (), {"abstract": True}),
+            "id": _commented_uuid_pk(),
+            "created_at": models.DateTimeField(auto_now_add=True, help_text="h", db_comment="c"),
+        },
+    )
+    attrs = {
+        "__module__": __name__,
+        "Meta": type("Meta", (), {"app_label": "testapp"}),
+        "OverlayMeta": _overlay_meta(Strategy.UUID7, table_name="mixed"),
+        "name": models.CharField(max_length=10, help_text="h", db_comment="c"),
+    }
+    model = type("Mixed", (stamped, OverlayModel), attrs)
+
+    base_fields = model.base_table()._meta.local_fields
+    assert [field.name for field in base_fields if field.primary_key] == ["id"]
+    assert model._meta.pk.default is uuid7
+    assert {field.name for field in base_fields} == {"id", "created_at", "name", "_overlay_deleted"}
+    for field in base_fields:
+        assert not field.auto_created and field.help_text and field.db_comment, field.name

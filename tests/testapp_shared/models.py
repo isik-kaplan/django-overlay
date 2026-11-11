@@ -674,3 +674,14 @@ class PersonDetailSource(models.Model):
 
     class Meta:
         app_label = "testapp_shared"
+
+
+class InheritedFieldsSource(models.Model):
+    id = models.UUIDField(primary_key=True)
+    created_at = models.DateTimeField(null=True)
+    vendor_id = models.IntegerField(null=True)
+    note = models.CharField(max_length=50, blank=True, default="")
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [models.Index(fields=["vendor_id"], name="ifs_vendor_idx")]

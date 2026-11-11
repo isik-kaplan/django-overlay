@@ -25,7 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `_overlay_deleted`. Run `makemigrations` to record the comments.
 - **A column's comment can be changed on an overlay model's base table.** Django changes a comment with an
   `ALTER COLUMN ... TYPE`, which Postgres refuses on a column the view selects; `makemigrations` now writes an
-  `AlterOverlayField` there, which runs only `COMMENT ON COLUMN` when the comment is all that changed.
+  `AlterOverlayField` there, which runs only `COMMENT ON COLUMN` when the comment is all that changed. It also puts
+  back a unique index Django drops while altering a field: turning a `ForeignKey` into a `OneToOneField`, which is what
+  rolling back the inherited one-to-one upgrade does, used to drop the base table's half of an
+  `OverlayUniqueConstraint` with it.
 
 ## [0.2.0] - 2026-11-04
 

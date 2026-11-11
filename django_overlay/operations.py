@@ -1,5 +1,5 @@
 from django.apps import apps as django_apps
-from django.db import migrations
+from django.db import migrations, models
 
 from . import sql as overlay_sql
 from . import sync as overlay_sync
@@ -345,6 +345,24 @@ class RemoveOverlayUniqueConstraint(migrations.RunPython):
         )
 
 
+def _restore_unique_indexes(schema_editor, model, field):
+    """Put back the unique indexes on `field` that AlterField dropped.
+
+    When a field gains uniqueness or loses db_index, Django drops every btree
+    index on its column except the model's Meta.indexes. A UniqueConstraint
+    with a condition is such an index, and on an overlay base table every
+    uniqueness rule has one: soft delete narrows them all to the rows that
+    aren't tombstones. Turning a ForeignKey back into a OneToOneField, which is
+    what reversing the upgrade of an inherited one-to-one does, would otherwise
+    leave the base table's half of the rule gone while the source half keeps
+    being checked."""
+    existing = set(schema_editor._constraint_names(model, [field.column]))
+    for constraint in model._meta.constraints:
+        covers_field = isinstance(constraint, models.UniqueConstraint) and field.name in constraint.fields
+        if covers_field and constraint.name not in existing:
+            schema_editor.add_constraint(model, constraint)
+
+
 class AlterOverlayField(migrations.AlterField):
     """An AlterField on an overlay model's base table that can change a
     column's comment.
@@ -369,6 +387,7 @@ class AlterOverlayField(migrations.AlterField):
         to_field = to_model._meta.get_field(self.name)
         if schema_editor._field_should_be_altered(from_field, to_field, ignore={"db_comment"}):
             super().database_forwards(app_label, schema_editor, from_state, to_state)
+            _restore_unique_indexes(schema_editor, to_model, to_field)
         elif from_field.db_comment != to_field.db_comment:
             schema_editor.execute(
                 *schema_editor._alter_column_comment_sql(to_model, to_field, None, to_field.db_comment)
