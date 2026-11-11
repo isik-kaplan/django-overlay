@@ -492,3 +492,31 @@ def _partition_column_problems(model, field) -> list:
             )
         ]
     return []
+
+
+@checks.register(checks.Tags.commands)
+def check_makemigrations_is_ours(app_configs, **kwargs):
+    """Fails when another app's makemigrations shadows django_overlay's.
+
+    Django gives a command name to the first app in INSTALLED_APPS that ships
+    it, without a word. Shadowed, migrations go on being written, with none of
+    the view, trigger or AlterOverlayField operations in them: they look right
+    and do half the work, and an AlterField that changes a comment on an
+    overlay model won't apply at all."""
+    from django.core.management import get_commands, load_command_class
+
+    from .management.commands.makemigrations import Command
+
+    app = get_commands()["makemigrations"]
+    if isinstance(load_command_class(app, "makemigrations"), Command):
+        return []
+    return [
+        checks.Error(
+            f"makemigrations is {app}'s, not django_overlay's, so migrations for overlay models are "
+            "written without their view and trigger operations.",
+            hint=f"List django_overlay before {app} in INSTALLED_APPS: Django gives a command to the "
+            "first app that ships it. A makemigrations of your own can subclass "
+            "django_overlay.management.commands.makemigrations.Command instead.",
+            id="django_overlay.E006",
+        )
+    ]

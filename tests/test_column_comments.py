@@ -143,3 +143,32 @@ def test_makemigrations_writes_an_alter_field_on_a_base_table_as_an_alter_overla
 
     assert [type(op) for op in rewritten] == [AlterOverlayField, migrations.AlterField, migrations.AddField]
     assert (rewritten[0].model_name, rewritten[0].name, rewritten[0].field) == ("PersonBase", "flag", field)
+
+
+@pytest.mark.django_db
+def test_a_unique_index_still_waiting_to_be_created_is_not_restored_twice():
+    """In a squashed migration the CreateModel and the AlterOverlayField share
+    one schema editor, and a conditional UniqueConstraint -- the shape soft
+    delete gives every uniqueness rule -- is created at its end; restoring it
+    before then would create it twice."""
+    from django_overlay.operations import _restore_unique_indexes
+
+    project = ProjectState()
+    project.add_model(
+        ModelState(
+            "probe",
+            "pending",
+            [("id", models.AutoField(primary_key=True)), ("code", models.IntegerField())],
+            options={
+                "constraints": [
+                    models.UniqueConstraint(fields=["code"], condition=models.Q(code__gt=0), name="pending_code_uniq")
+                ]
+            },
+        )
+    )
+    model = project.apps.get_model("probe", "pending")
+    with connection.schema_editor(collect_sql=True) as editor:
+        editor.create_model(model)
+        _restore_unique_indexes(editor, model, model._meta.get_field("code"))
+
+    assert sum("pending_code_uniq" in sql for sql in editor.collected_sql) == 1

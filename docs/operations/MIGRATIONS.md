@@ -2,20 +2,18 @@
 
 ## The command has to be ours
 
-`django_overlay` ships its own `makemigrations`, and Django resolves a command
-name to whichever app declares it *last* in `INSTALLED_APPS`. If another app
-overrides `makemigrations` too (`django_tenants` does, as `makemigrations` and
-`migrate_schemas`), the last one wins and the other is simply not used — with
-no warning. If that were `django_overlay`'s, the view and trigger operations
-would silently stop being generated and your migrations would look fine while
-doing half the work.
+`django_overlay` ships its own `makemigrations`, and Django gives a command
+name to the *first* app in `INSTALLED_APPS` that ships it. If another app
+overrides `makemigrations` too and is listed first, its command is used and
+`django_overlay`'s simply isn't, with no warning from Django: the view and
+trigger operations would stop being generated, and your migrations would look
+fine while doing half the work. (`django_tenants` ships `migrate`, not
+`makemigrations`, so it doesn't compete for this one.)
 
-Put `django_overlay` **after** any other app that overrides the command, and
-check with:
-
-```bash
-python manage.py makemigrations --help   # the description names django_overlay
-```
+Put `django_overlay` **before** any other app that overrides the command. The
+system check `django_overlay.E006` fails `manage.py check` when another app's
+`makemigrations` wins; a command of your own that subclasses
+`django_overlay.management.commands.makemigrations.Command` passes it.
 
 `makemigrations` is overridden: whenever a migration changes an
 OverlayModel's fields, or adds/renames/removes an `OverlayForeignKey`
@@ -43,3 +41,22 @@ If the new source is a rebuilt copy of the old one rather than a different
 vendor entirely — a blue-green load — `resync_overlay_views` is not enough on
 its own, because nothing in it asks whether the new table still means the same
 thing by an id. See [SOURCE_SWAPS.md](SOURCE_SWAPS.md).
+
+## Changing a column's comment
+
+Django changes a `db_comment` with `ALTER COLUMN ... TYPE` to the same type,
+then `COMMENT ON COLUMN`, and Postgres refuses the first on any column a view
+selects: every column of an overlay model's base table. So `makemigrations`
+writes each `AlterField` on a base table as `AlterOverlayField`, which runs only
+the `COMMENT ON COLUMN` when the comment is all that changed, and is a plain
+`AlterField` otherwise. It decides when the migration runs, from the two
+historical fields, so nothing extra is recorded in the migration file.
+
+`AlterOverlayField` also puts back a unique index Django drops while altering a
+field. When a field gains uniqueness, as a `ForeignKey` turned back into a
+`OneToOneField` does, Django drops every plain btree index on its column, the
+partial unique index behind an `OverlayUniqueConstraint` included.
+
+A change of a column's *type* on a column the view selects is still refused by
+Postgres. There is no migration path for that yet: drop the view, alter the
+column and resync the view by hand, in one transaction.

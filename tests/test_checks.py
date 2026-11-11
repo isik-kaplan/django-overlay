@@ -247,3 +247,29 @@ def test_the_boot_failure_message_is_assembled_exactly():
         "\n"
         "django_overlay.E003: second thing"
     )
+
+
+def test_makemigrations_shadowed_by_another_app_is_an_error():
+    from unittest import mock
+
+    from django_overlay.checks import check_makemigrations_is_ours
+
+    assert check_makemigrations_is_ours(None) == []
+    with mock.patch("django.core.management.get_commands", return_value={"makemigrations": "django.core"}):
+        errors = check_makemigrations_is_ours(None)
+
+    assert [error.id for error in errors] == ["django_overlay.E006"]
+    assert "List django_overlay before django.core in INSTALLED_APPS" in errors[0].hint
+
+
+def test_a_django_without_the_private_apis_relied_on_refuses_to_boot():
+    from django.core.exceptions import ImproperlyConfigured
+    from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+
+    from django_overlay.apps import _require_the_private_django_apis
+
+    _require_the_private_django_apis()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.delattr(BaseDatabaseSchemaEditor, "_alter_column_comment_sql")
+        with pytest.raises(ImproperlyConfigured, match=r"BaseDatabaseSchemaEditor\._alter_column_comment_sql"):
+            _require_the_private_django_apis()

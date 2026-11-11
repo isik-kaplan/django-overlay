@@ -357,9 +357,17 @@ def _restore_unique_indexes(schema_editor, model, field):
     leave the base table's half of the rule gone while the source half keeps
     being checked."""
     existing = set(schema_editor._constraint_names(model, [field.column]))
+    # A constraint whose CreateModel ran earlier in the same migration isn't in
+    # the database yet: Django creates it at the end of the migration. That is
+    # the shape of a squashed migration, and adding it here would collide.
+    pending = " ".join(str(statement) for statement in schema_editor.deferred_sql)
     for constraint in model._meta.constraints:
         covers_field = isinstance(constraint, models.UniqueConstraint) and field.name in constraint.fields
-        if covers_field and constraint.name not in existing:
+        if (
+            covers_field
+            and constraint.name not in existing
+            and schema_editor.quote_name(constraint.name) not in pending
+        ):
             schema_editor.add_constraint(model, constraint)
 
 

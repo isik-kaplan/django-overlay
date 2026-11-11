@@ -46,3 +46,29 @@ before the trigger sees it — the usual `default=uuid.uuid4` setup means
 Django assigns it first, so the SQL fallback is really just there for raw
 SQL/bulk paths. Override it directly with `OverlayMeta.pk_default_sql` (raw
 SQL) if you want a specific generator regardless of strategy.
+
+## The primary key has to suit the strategy
+
+A primary key you declare yourself, or inherit from an abstract parent, is used
+as it is: the strategy doesn't replace it. But the base table's column default
+still comes from the strategy, never from the field, so the two have to agree.
+A model whose primary key the strategy can't fill is refused when it is
+declared, with `OverlayConfigurationError`:
+
+| Strategy | Primary key it needs |
+|---|---|
+| `UUID4`, `UUID7`, `UUID7_POLYFILL` | a `UUIDField` |
+| `NEGATIVE_ID`, `NEGATIVE_SOURCE_POSITIVE_BASE_ID`, `NEGATIVE_BASE_POSITIVE_SOURCE_ID` | an integer field (`AutoField`, `BigAutoField`, `IntegerField`, ...) |
+
+Two kinds of primary key are left alone:
+
+- **A link**, such as an `OverlayOneToOneField(..., primary_key=True)`: its
+  value is the id of the row it points at, and nothing generates it.
+- **A model with `OverlayMeta.pk_default_sql`**: you have taken the column
+  default over, so whatever type you chose is yours to keep consistent.
+
+When you hit the refusal, do one of these: declare a primary key of the type
+the table says, pick the strategy that matches the key you have, or set
+`pk_default_sql` to the SQL that generates your key. Before 0.3.0 a mismatch
+was accepted and showed up later, as an insert through the view writing a uuid
+into an integer column, or the reverse.

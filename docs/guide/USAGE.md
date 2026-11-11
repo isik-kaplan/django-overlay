@@ -51,3 +51,43 @@ them down first:
 ```python
 Person.objects.filter(id__in=ids).materialize()      # source rows copied over; existing ones left alone
 ```
+
+## Shared fields on an abstract parent
+
+Fields an overlay model inherits from an abstract parent are handled exactly
+like fields declared on it, whether the parent derives from `OverlayModel` or
+is a plain `models.Model` mixed in beside it:
+
+```python
+class BaseModel(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False, db_comment="Row id.")
+    created_at = models.DateTimeField(auto_now_add=True, db_comment="When the row was made.")
+
+    class Meta:
+        abstract = True
+
+
+class Person(BaseModel, OverlayModel):
+    first_name = models.CharField(max_length=100)
+
+    class OverlayMeta(OverlayMeta.with_strategy(OverlayModel.Strategy.UUID7)):
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="external_source", table="people")
+```
+
+- An inherited primary key is kept, comment and all; the strategy only adds an
+  `id` when nothing declares a primary key. It has to suit the strategy; see
+  [IDS.md](../concepts/IDS.md#the-primary-key-has-to-suit-the-strategy).
+- An inherited `ForeignKey` or `OneToOneField` claims no reverse accessor from
+  the hidden base model, and a one-to-one is stored there as a plain foreign
+  key, its uniqueness coming from the `OverlayUniqueConstraint` the model
+  declares, as for one declared on the model.
+- An inherited many-to-many is on the view model only.
+- An inherited field named `_overlay_deleted` is refused, as a declared one is.
+
+Before 0.3.0 only the class body got this treatment: an inherited primary key
+was replaced by the strategy's, losing its comment, and an inherited relation
+was copied onto the base model as it was. A project upgrading with relations
+or a primary key on an abstract parent gets a migration from `makemigrations`
+that brings the base table in line.

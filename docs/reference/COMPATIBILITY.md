@@ -10,6 +10,17 @@ and nothing tells you
 
 ---
 
+## Django versions
+
+Django 6.0 and up, on Python 3.12 and up, as `pyproject.toml` declares. The
+package overrides private `QuerySet` internals, and its migration operations
+call three private schema-editor methods: `_field_should_be_altered`,
+`_alter_column_comment_sql` and `_constraint_names`. A Django release that
+renames or removes one of those three is refused at boot with
+`ImproperlyConfigured` naming it, rather than left to write a migration that
+does the wrong thing. CI runs the suite against the Django version `uv.lock`
+pins, on each supported Python.
+
 ## Summary
 
 | | count |
