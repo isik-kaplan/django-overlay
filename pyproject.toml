@@ -1,6 +1,6 @@
 [project]
 name = "django-overlay"
-version = "0.3.0"
+version = "0.4.0"
 description = "Writable Django models layered over read-only, shared source tables — one view, no coalescing at read time."
 authors = [
   { name = "Işık Kaplan", email = "isik.kaplan@outlook.com" }
