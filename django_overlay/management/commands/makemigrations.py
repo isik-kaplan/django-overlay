@@ -8,6 +8,7 @@ from ...models import OverlayModelBase
 from ...operations import (
     AddOverlayConstraint,
     AddOverlayUniqueConstraint,
+    AlterOverlayField,
     DropOverlayView,
     RemoveOverlayConstraint,
     RemoveOverlayUniqueConstraint,
@@ -123,6 +124,20 @@ def _insert_view_drops_before_destructive_ops(app_label, operations):
     return new_operations
 
 
+def _comment_aware_alter_fields(operations, base_to_view):
+    """Each AlterField on an overlay model's base table, as an AlterOverlayField.
+
+    A plain AlterField can't change a column's comment there: Django runs the
+    change as an ALTER COLUMN TYPE, which Postgres refuses on a column the
+    view selects. See AlterOverlayField."""
+    return [
+        AlterOverlayField(op.model_name, op.name, op.field, op.preserve_default)
+        if type(op) is migrations.AlterField and op.model_name.lower() in base_to_view
+        else op
+        for op in operations
+    ]
+
+
 def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
     """The extra operations one migration should get, given this app's
     OverlayModel registry (see _overlay_base_to_view/_overlay_foreign_key_fields).
@@ -212,8 +227,9 @@ class Command(BaseCommand):
     """Same as Django's makemigrations, except any operation touching an
     OverlayModel's base table gets a SyncOverlayView appended, any
     OverlayForeignKey/OverlayUniqueConstraint add/rename/remove gets its
-    matching Add/RemoveOverlay(Unique)Constraint appended, and any
-    DeleteModel gets a DropOverlayView inserted just before it."""
+    matching Add/RemoveOverlay(Unique)Constraint appended, any
+    DeleteModel gets a DropOverlayView inserted just before it, and an
+    AlterField on a base table is written as an AlterOverlayField."""
 
     def write_migration_files(self, changes, *args, **kwargs):
         for app_label, app_migrations in changes.items():
@@ -221,6 +237,7 @@ class Command(BaseCommand):
             fk_fields = _overlay_foreign_key_fields(app_label)
             for migration in app_migrations:
                 migration.operations = _insert_view_drops_before_destructive_ops(app_label, migration.operations)
+                migration.operations = _comment_aware_alter_fields(migration.operations, base_to_view)
                 migration.operations.extend(
                     extra_ops_for_migration(app_label, migration.operations, base_to_view, fk_fields)
                 )

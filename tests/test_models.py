@@ -374,6 +374,9 @@ def test_a_user_declared_id_field_is_not_overridden_by_the_strategy_default():
 
         class OverlayMeta(OverlayMeta):  # defaults to UUID4, which would inject a UUIDField
             table_name = "has_custom_id"
+            # A CharField pk is outside what UUID4 can fill, so it needs its own
+            # default; see tests/test_abstract_parents.py for the refusal.
+            pk_default_sql = "gen_random_uuid()::text"
 
             @staticmethod
             def get_source():

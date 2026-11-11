@@ -343,3 +343,33 @@ class RemoveOverlayUniqueConstraint(migrations.RunPython):
             [self.app_label, self.model_name, self.constraint_name],
             {},
         )
+
+
+class AlterOverlayField(migrations.AlterField):
+    """An AlterField on an overlay model's base table that can change a
+    column's comment.
+
+    Django runs a db_comment change as `ALTER COLUMN ... TYPE` with the
+    unchanged type, followed by `COMMENT ON COLUMN`. Postgres refuses the
+    first on any column a view selects, and the overlay view selects every
+    column of its base table. So when the comment is all that changed, this
+    runs only the `COMMENT ON COLUMN`; anything else goes to AlterField as
+    before. The check happens when the migration runs, against the two
+    historical fields, so it needs nothing recorded in the migration file.
+
+    makemigrations writes this in place of every AlterField on an overlay
+    model's base table. Backwards needs nothing of its own: AlterField's runs
+    forwards with the two states swapped."""
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        to_model = to_state.apps.get_model(app_label, self.model_name)
+        if not self.allow_migrate_model(schema_editor.connection.alias, to_model):
+            return
+        from_field = from_state.apps.get_model(app_label, self.model_name)._meta.get_field(self.name)
+        to_field = to_model._meta.get_field(self.name)
+        if schema_editor._field_should_be_altered(from_field, to_field, ignore={"db_comment"}):
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+        elif from_field.db_comment != to_field.db_comment:
+            schema_editor.execute(
+                *schema_editor._alter_column_comment_sql(to_model, to_field, None, to_field.db_comment)
+            )

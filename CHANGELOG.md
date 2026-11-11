@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Breaking
+
+- **A primary key the id strategy can't fill is refused when the model is declared.** A UUID strategy needs a
+  `UUIDField`, the integer strategies an integer field; new rows get their id from the strategy's column default, so a
+  mismatch used to surface only as a failed insert. A primary key that is a link is exempt, and so is a model that sets
+  `OverlayMeta.pk_default_sql`.
+
+### Fixed
+
+- **Fields inherited from an abstract parent are handled like fields declared on the model.** An inherited primary key
+  is no longer replaced by the strategy's, so it keeps its `help_text` and `db_comment`. An inherited relation no
+  longer claims a reverse accessor from the hidden base model, an inherited one-to-one no longer leaves a table-level
+  unique constraint on it, and an inherited many-to-many is no longer added to it. Run `makemigrations` if a model
+  inherits any of these.
+- **The columns django-overlay adds have a `help_text` and a `db_comment`:** the primary key a UUID strategy adds, and
+  `_overlay_deleted`. Run `makemigrations` to record the comments.
+- **A column's comment can be changed on an overlay model's base table.** Django changes a comment with an
+  `ALTER COLUMN ... TYPE`, which Postgres refuses on a column the view selects; `makemigrations` now writes an
+  `AlterOverlayField` there, which runs only `COMMENT ON COLUMN` when the comment is all that changed.
+
 ## [0.2.0] - 2026-11-04
 
 ### Breaking

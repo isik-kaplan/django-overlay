@@ -10,7 +10,7 @@ from .. import uniqueness
 from ..exceptions import OverlayConfigurationError
 from ..fields import base_model_copy, hide_reverse_side
 from ..source_model import build_source_model, source_pk_for
-from ..strategies import Strategy, default_id_field
+from ..strategies import Strategy, default_id_field, uses_uuid_ids
 from .meta import OverlayMeta, _split_meta_options
 from .queryset import OverlayManager
 
@@ -31,6 +31,62 @@ def _base_field_copy(field):
     if copied.remote_field is not None:
         hide_reverse_side(copied)
     return copied
+
+
+SOFT_DELETE_COMMENT = (
+    "Set by django-overlay when the row is soft-deleted; the row then hides the source row with the same id."
+)
+
+
+def _abstract_parent_fields(bases, namespace):
+    """({name: field}, {name: m2m field}) declared on the abstract model parents
+    in `bases`, copied, for the names the class body doesn't declare itself.
+
+    Django would hand these to both models on its own, as plain deep copies, so
+    the base model's copies would skip _base_field_copy: an inherited relation
+    would keep its reverse accessor and an inherited one-to-one its table-level
+    UNIQUE, and an inherited M2M would land on the base model too. Taking them
+    here gives them the same treatment as a field declared in the body.
+
+    The nearest parent wins, as in Django: an abstract parent's local fields
+    already include what it inherited, and its own declarations override those.
+    """
+    fields, m2m = {}, {}
+    for base in bases:
+        for parent in base.__mro__:
+            meta = getattr(parent, "_meta", None)
+            if meta is None or not meta.abstract:
+                continue
+            for field in [*meta.local_fields, *meta.local_many_to_many]:
+                if field.name in namespace or field.name in fields or field.name in m2m:
+                    continue
+                target = m2m if field.many_to_many else fields
+                target[field.name] = copy.deepcopy(field)
+    return fields, m2m
+
+
+def _check_pk_matches_strategy(name, pk_name, pk, overlay_meta):
+    """Refuse a declared or inherited primary key the strategy can't fill.
+
+    The base table's column default comes from the strategy alone (see
+    sync.py), never from the field, so a mismatch would only show up as an
+    insert through the view writing a uuid into an integer column, or the
+    reverse. A pk that is a link takes its value from the row it points at,
+    and a model with its own pk_default_sql has taken the default over."""
+    if pk.is_relation or overlay_meta.pk_default_sql is not None:
+        return
+    wants_uuid = uses_uuid_ids(overlay_meta.strategy)
+    if wants_uuid and not isinstance(pk, models.UUIDField):
+        expected = "a UUIDField"
+    elif not wants_uuid and not isinstance(pk, models.IntegerField):
+        expected = "an integer field"
+    else:
+        return
+    raise OverlayConfigurationError(
+        f"{name}.{pk_name} is a {type(pk).__name__}, but {overlay_meta.strategy} needs {expected} as the "
+        "primary key: new rows get their id from the strategy's column default. Declare a matching primary "
+        "key, change the strategy, or set OverlayMeta.pk_default_sql."
+    )
 
 
 class OverlayModelBase(models.base.ModelBase):
@@ -98,6 +154,9 @@ class OverlayModelBase(models.base.ModelBase):
         m2m_items = {k: v for k, v in namespace.items() if isinstance(v, models.ManyToManyField)}
         field_items = {k: v for k, v in namespace.items() if isinstance(v, models.Field) and k not in m2m_items}
         rest_items = {k: v for k, v in namespace.items() if k not in field_items and k not in m2m_items}
+        inherited_fields, inherited_m2m = _abstract_parent_fields(bases, namespace)
+        field_items = {**inherited_fields, **field_items}
+        m2m_items = {**inherited_m2m, **m2m_items}
         table_name = getattr(overlay_meta, "table_name", name.lower())
 
         if overlay_meta.soft_delete and "_overlay_deleted" in field_items:
@@ -106,7 +165,10 @@ class OverlayModelBase(models.base.ModelBase):
                 "that name for its soft_delete shadow flag."
             )
 
-        if "id" not in field_items:
+        declared_pk = next(((key, field) for key, field in field_items.items() if field.primary_key), None)
+        if declared_pk is not None:
+            _check_pk_matches_strategy(name, *declared_pk, overlay_meta)
+        elif "id" not in field_items:
             injected = default_id_field(overlay_meta.strategy)
             if injected is not None:
                 field_items["id"] = injected
@@ -118,10 +180,16 @@ class OverlayModelBase(models.base.ModelBase):
         if overlay_meta.soft_delete:
             # Base-only shadow flag — never copied to the view model, so it
             # never shows up as a queryable column there.
-            base_ns["_overlay_deleted"] = models.BooleanField(default=False, editable=False)
+            base_ns["_overlay_deleted"] = models.BooleanField(
+                default=False, editable=False, help_text=SOFT_DELETE_COMMENT, db_comment=SOFT_DELETE_COMMENT
+            )
             # Every uniqueness rule has to ignore tombstoned rows, or a
             # soft-deleted row keeps its value reserved forever.
             base_meta_options = uniqueness.narrow_for_soft_delete(base_meta_options)
+        # An M2M inherited from an abstract parent would otherwise reach the
+        # base model through Django's own inheritance. None is Django's way of
+        # removing an inherited abstract field.
+        base_ns.update(dict.fromkeys(inherited_m2m))
         base_ns["__qualname__"] = f"{name}Base"
         # No default_permissions for the base table — nobody should see
         # "Can add <name>base" in an admin permission list.
