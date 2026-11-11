@@ -80,6 +80,7 @@ SHARDS = {
     # makemigrations and the operational commands.
     "commands": [
         "django_overlay/management/commands/makemigrations.py",
+        "django_overlay/autodetector.py",
         "django_overlay/management/commands/resync_overlay_views.py",
         "django_overlay/management/commands/show_source_indexes.py",
         "django_overlay/management/commands/swap_source.py",

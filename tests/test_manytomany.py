@@ -1,7 +1,7 @@
 import pytest
 from django.db import IntegrityError, transaction
 
-from django_overlay.fields import OverlayForeignKey, OverlayManyToManyField
+from django_overlay.fields import OverlayForeignKey
 from tests.testapp.registry import STRATEGIES
 
 
@@ -10,12 +10,6 @@ pytestmark = pytest.mark.django_db
 
 def bogus_id(strategy_name):
     return -999999 if strategy_name == "negative_id" else "00000000-0000-0000-0000-000000000000"
-
-
-def test_overlay_many_to_many_field_requires_an_explicit_through_model():
-    m = STRATEGIES["negative_id"]
-    with pytest.raises(TypeError, match="through"):
-        OverlayManyToManyField(m["Address"])
 
 
 @pytest.mark.parametrize("strategy_name", STRATEGIES.keys())

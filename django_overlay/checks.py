@@ -26,7 +26,11 @@ def check_no_plain_fk_to_overlay_models(app_configs, **kwargs):
             # M2M fields are never "concrete" (even the declaring side), so
             # check the type directly instead.
             if isinstance(field, models.ManyToManyField):
-                if not field.remote_field.through._meta.auto_created:
+                through = field.remote_field.through
+                # An explicit through model is checked as a model of its own
+                # (E001 above), and one OverlayManyToManyField built has an
+                # OverlayForeignKey wherever it needs one.
+                if not through._meta.auto_created or getattr(through, "_overlay_hidden_through", False):
                     continue
                 errors.append(
                     checks.Error(
@@ -34,9 +38,9 @@ def check_no_plain_fk_to_overlay_models(app_configs, **kwargs):
                         f"{related_model.__name__}, which is a django_overlay view model. Django's "
                         "auto-created through table would use a plain ForeignKey, which can't hold "
                         "a real FK constraint against a view.",
-                        hint="Use django_overlay.fields.OverlayManyToManyField (through=... is "
-                        "required) or write your own explicit through model with OverlayForeignKey "
-                        "fields.",
+                        hint="Use django_overlay.fields.OverlayManyToManyField, which builds the through "
+                        "model with an OverlayForeignKey for each end at an overlay model, or give it a "
+                        "through= model of your own.",
                         obj=field,
                         id="django_overlay.E002",
                     )
@@ -55,7 +59,12 @@ def check_no_plain_fk_to_overlay_models(app_configs, **kwargs):
                     f"{model.__name__}.{field.name} is a plain {type(field).__name__} pointing at "
                     f"{related_model.__name__}, which is a django_overlay view model. Postgres cannot "
                     f"hold a real FK constraint against a view.",
-                    hint=f"Use django_overlay.fields.OverlayForeignKey instead of {type(field).__name__}.",
+                    hint=(
+                        f"{model.__name__} is the through table of {model._meta.auto_created.__name__}'s "
+                        "many-to-many: make that field a django_overlay.fields.OverlayManyToManyField."
+                        if model._meta.auto_created
+                        else f"Use django_overlay.fields.OverlayForeignKey instead of {type(field).__name__}."
+                    ),
                     obj=field,
                     id="django_overlay.E001",
                 )

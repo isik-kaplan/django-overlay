@@ -5,7 +5,7 @@ from . import sql as overlay_sql
 from . import sync as overlay_sync
 from . import uniqueness as overlay_uniqueness
 from ._templating import render
-from .fields import target_tables_for
+from .fields import OverlayForeignKey, target_tables_for
 
 
 def _resolve_schema(schema_editor) -> str:
@@ -154,7 +154,11 @@ class AddOverlayConstraint(migrations.RunPython):
             return model._meta.get_field(field_name)
 
         def forward(apps, schema_editor):
-            model = django_apps.get_model(app_label, model_name)
+            # The referencing side from historical state: its table name and
+            # pk column are all this needs of it, and a model deleted from the
+            # code later (a through model whose field was removed, say) has no
+            # live class left while this migration is replayed.
+            model = apps.get_model(app_label, model_name)
             field = historical_field(apps)
             tenant_schema = _resolve_schema(schema_editor)
             trigger_name = field.trigger_name(model)
@@ -205,7 +209,7 @@ class AddOverlayConstraint(migrations.RunPython):
             )
 
         def backward(apps, schema_editor):
-            model = django_apps.get_model(app_label, model_name)
+            model = apps.get_model(app_label, model_name)
             field = historical_field(apps)
             tenant_schema = _resolve_schema(schema_editor)
             _drop_trigger(schema_editor, tenant_schema, field.trigger_name(model), model._meta.db_table)
@@ -291,7 +295,16 @@ class RemoveOverlayConstraint(migrations.RunPython):
         self.column = column or f"{field_name}_id"
 
         def forward(apps, schema_editor):
-            model = django_apps.get_model(app_label, model_name)
+            # makemigrations puts this just before its RemoveField, where
+            # historical state still has the model even when the same
+            # migration goes on to delete it (Django removes a deleted model's
+            # relations first). One written by 0.3.0 or earlier sits at the
+            # end of its migration, after the field is gone, but its model
+            # still exists both ways.
+            try:
+                model = apps.get_model(app_label, model_name)
+            except LookupError:
+                model = django_apps.get_model(app_label, model_name)
             tenant_schema = _resolve_schema(schema_editor)
             trigger_name = f"overlayfk_{model._meta.db_table}_{self.column}"[:63]
             _drop_trigger(schema_editor, tenant_schema, trigger_name, model._meta.db_table)
@@ -310,6 +323,44 @@ class RemoveOverlayConstraint(migrations.RunPython):
             [self.app_label, self.model_name, self.field_name],
             kwargs,
         )
+
+
+class RemoveOverlayConstraintsOf(migrations.RunPython):
+    """Drops the triggers of every OverlayForeignKey on a model that is about
+    to be deleted. Inserted before each DeleteModel, unconditionally: a model
+    with no OverlayForeignKey has nothing to drop.
+
+    The delete-side trigger lives on the target's base table, so dropping the
+    referencing table leaves it behind, still naming that table: the next hard
+    delete of a target row would fail on a relation that no longer exists. Read
+    from historical state, since the model is usually gone from the code by
+    the time the migration runs; a through model OverlayManyToManyField built
+    is deleted this way whenever its field is removed.
+
+    Backward does nothing, like RemoveOverlayConstraint's: reversing the
+    DeleteModel brings the table back, and the triggers with it only if the
+    migration that added them is reversed and reapplied."""
+
+    def __init__(self, app_label: str, model_name: str):
+        self.app_label = app_label
+        self.model_name = model_name
+
+        def forward(apps, schema_editor):
+            historical = apps.get_model(app_label, model_name)
+            tenant_schema = _resolve_schema(schema_editor)
+            for field in historical._meta.local_fields:
+                if isinstance(field, OverlayForeignKey):
+                    table = historical._meta.db_table
+                    _drop_trigger(schema_editor, tenant_schema, field.trigger_name(historical), table)
+                    _drop_trigger_anywhere(schema_editor, tenant_schema, field.referenced_row_trigger_name(historical))
+
+        def backward(apps, schema_editor):
+            pass
+
+        super().__init__(forward, backward, elidable=False)
+
+    def deconstruct(self):
+        return (self.__class__.__qualname__, [self.app_label, self.model_name], {})
 
 
 class RemoveOverlayUniqueConstraint(migrations.RunPython):

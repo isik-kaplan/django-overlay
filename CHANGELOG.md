@@ -7,6 +7,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`OverlayManyToManyField` builds its own through model when given no `through=`.** Each end pointing at an overlay
+  model is an `OverlayForeignKey`, and each other end a plain `ForeignKey`, decided by the classes alone. Model, table
+  and column names are Django's; for an overlay model the table is named after its base table, so a plain
+  many-to-many's table carries over. The through model stays auto-created, so admin forms and DRF keep the field
+  writable, and it gets no permissions. An explicit `through=` works as before. See
+  [docs/guide/MANY_TO_MANY.md](docs/guide/MANY_TO_MANY.md).
+- **These through models are models of their own in migration state,** since an overlay model's view is unmanaged
+  and Django creates no table for it: `makemigrations` writes their `CreateModel` and `DeleteModel`, with the link
+  triggers, and they replay, squash and roll back like any other model. It refuses to write a migration that would
+  drop a table to create one of them on it, which is what switching an explicit `through=` to a built one looks
+  like.
+
+### Changed
+
+- **A removed `OverlayForeignKey`'s triggers are dropped before its `RemoveField`, not at the end of the migration,**
+  and `AddOverlayConstraint` reads the referencing model from migration state. A migration that adds a link on a model
+  a later migration deletes now replays from zero.
+- **Before deleting a model nothing else points at, `makemigrations` leaves out Django's step-by-step teardown** of its
+  `unique_together` and relation fields; the `DROP TABLE` covers it, and the `unique_together` removal broke a squash.
+
+### Fixed
+
+- **Deleting a model that holds an `OverlayForeignKey` drops the delete-side trigger on the target's base table.** It
+  was left behind, still querying the dropped table, and the next hard delete of a target row failed.
+
 ## [0.3.0] - 2026-11-11
 
 ### Breaking

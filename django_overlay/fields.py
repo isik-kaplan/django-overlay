@@ -3,8 +3,10 @@ import uuid
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models
+from django.db import connection, models
+from django.db.backends.utils import truncate_name
 from django.db.models.expressions import Col
+from django.db.models.fields.related import lazy_related_operation
 from django.db.models.fields.related_lookups import RelatedIn
 from django.db.models.lookups import In
 
@@ -475,16 +477,119 @@ def hide_reverse_side(field) -> None:
     field._related_name = "+"
 
 
+def _is_overlay_view(model) -> bool:
+    """Whether `model` is the view half of an overlay model.
+
+    Read off the metaclass's marker, which the view model carries from its
+    class body on: a through model is built the moment both ends are
+    registered, and the target can register while it is still being built."""
+    return getattr(model, "_is_overlay_view_model", False)
+
+
+def _hidden_through_table(field, klass):
+    """Django's name for the table: the field's db_table, or the declaring
+    model's table and the field's name. For an overlay model that is its base
+    table, not its view, so the name is the one the same field had when the
+    model was a plain one."""
+    if field.db_table:
+        return field.db_table
+    table = (klass._base_model if _is_overlay_view(klass) else klass)._meta.db_table
+    return truncate_name(f"{table}_{field.name}", connection.ops.max_name_length())
+
+
+def build_hidden_through(field, klass, to_model):
+    """The through model OverlayManyToManyField builds when it is given none.
+
+    Django's create_many_to_many_intermediary_model, with one difference: an
+    end that points at an overlay model is an OverlayForeignKey, since a plain
+    ForeignKey can't hold a constraint against a view. Table, column and model
+    names are the ones Django would give the same field, so a plain
+    ManyToManyField's table becomes this field's without being renamed.
+
+    It is auto_created, like Django's own, so the ORM, admin forms and DRF treat
+    the field as a plain many-to-many. Unlike Django's, it is also a model in
+    migration state (see autodetector.py): an overlay model's view is
+    unmanaged, so nothing would create its table otherwise."""
+    name = f"{klass._meta.object_name}_{field.name}"
+    to = to_model._meta.model_name
+    from_ = klass._meta.model_name
+    if to == from_:
+        to, from_ = f"to_{to}", f"from_{from_}"
+
+    def end(model):
+        link = OverlayForeignKey if _is_overlay_view(model) else models.ForeignKey
+        kwargs = {} if link is OverlayForeignKey else {"db_constraint": field.remote_field.db_constraint}
+        return link(
+            model,
+            related_name=f"{name}+",
+            db_tablespace=field.db_tablespace,
+            on_delete=models.CASCADE,
+            **kwargs,
+        )
+
+    meta = type(
+        "Meta",
+        (),
+        {
+            "db_table": _hidden_through_table(field, klass),
+            "auto_created": klass,
+            "app_label": klass._meta.app_label,
+            "db_tablespace": klass._meta.db_tablespace,
+            "unique_together": (from_, to),
+            "verbose_name": f"{from_}-{to} relationship",
+            "verbose_name_plural": f"{from_}-{to} relationships",
+            # Django gives its own through models no permissions. In migration
+            # state this one is an ordinary model, which post_migrate would
+            # otherwise give add/change/delete/view.
+            "default_permissions": (),
+            "apps": klass._meta.apps,
+        },
+    )
+    through = type(
+        name,
+        (models.Model,),
+        {"Meta": meta, "__module__": klass.__module__, from_: end(klass), to: end(to_model)},
+    )
+    through._overlay_hidden_through = True
+    return through
+
+
 class OverlayManyToManyField(models.ManyToManyField):
-    """M2M field for relating to an OverlayModel. Requires an explicit
-    through= model with OverlayForeignKey fields — Django's auto-created
-    through table always uses a plain ForeignKey, which can never be safe
-    against a view."""
+    """M2M field for relating to or from an OverlayModel.
+
+    Without through=, it builds the through model itself: each end pointing at
+    an overlay model is an OverlayForeignKey, and each other end a plain
+    ForeignKey (see build_hidden_through). With through=, the model you give is
+    used as it is, for a relation that carries columns of its own or wants its
+    links chosen by hand."""
 
     def get_internal_type(self):
         # Django's relation fields report their class name, which for a subclass
         # would be this one's; code that dispatches on the type knows ManyToManyField.
         return "ManyToManyField"
 
-    def __init__(self, to, *args, through, **kwargs):
-        super().__init__(to, *args, through=through, **kwargs)
+    def contribute_to_class(self, cls, name, **kwargs):
+        if self.remote_field.through is None and not cls._meta.abstract and not cls._meta.swapped:
+            # Named now and built once the target is registered: which kind of
+            # link its end needs depends on the target's class. Django resolves
+            # a string through= the same way, whichever registers first.
+            self.remote_field.through = f"{cls._meta.app_label}.{cls._meta.object_name}_{name}"
+            self._builds_its_through = True
+
+            def build(klass, to_model, field=self):
+                build_hidden_through(field, klass, to_model)
+
+            super().contribute_to_class(cls, name, **kwargs)
+            lazy_related_operation(build, cls, self.remote_field.model)
+            return
+        super().contribute_to_class(cls, name, **kwargs)
+
+    def deconstruct(self):
+        """Names the through model even when it was built here. In migration
+        state it is a model of its own (see autodetector.py), so the field's
+        historical copy has to point at it rather than build another."""
+        name, path, args, kwargs = super().deconstruct()
+        if getattr(self, "_builds_its_through", False):
+            through = self.remote_field.through
+            kwargs["through"] = through if isinstance(through, str) else through._meta.label
+        return name, path, args, kwargs

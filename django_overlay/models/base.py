@@ -197,6 +197,11 @@ class OverlayModelBase(models.base.ModelBase):
         base_model = super().__new__(mcs, f"{name}Base", bases, base_ns, **kwargs)
 
         view_ns = {**rest_items, **{k: copy.deepcopy(v) for k, v in field_items.items()}, **m2m_items}
+        # Set before the class is built, not only after: a through model is
+        # built as soon as both its ends are registered, which for a model
+        # pointed at from elsewhere happens inside the call below.
+        view_ns["_is_overlay_view_model"] = True
+        view_ns["_base_model"] = base_model
         wants_overlay_base_manager = False
         if not any(isinstance(v, models.Manager) for v in rest_items.values()):
             # Only when the model declares no manager of its own — overriding

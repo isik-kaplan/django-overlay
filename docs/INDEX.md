@@ -2,7 +2,7 @@
 
 **Guide**
 - [guide/USAGE.md](guide/USAGE.md) — declaring an overlay model, basic ORM behavior
-- [guide/MANY_TO_MANY.md](guide/MANY_TO_MANY.md) — why plain `ManyToManyField` is unsafe here, and the fix
+- [guide/MANY_TO_MANY.md](guide/MANY_TO_MANY.md) — why plain `ManyToManyField` is unsafe here, and `OverlayManyToManyField`, with or without `through=`
 
 **Concepts**
 - [concepts/ARCHITECTURE.md](concepts/ARCHITECTURE.md) — the base table/view split, the three triggers

@@ -21,6 +21,20 @@ renames or removes one of those three is refused at boot with
 does the wrong thing. CI runs the suite against the Django version `uv.lock`
 pins, on each supported Python.
 
+Two Django internals are wrapped, once, when the app is ready, for the through
+models `OverlayManyToManyField` builds (see
+[MANY_TO_MANY.md](../guide/MANY_TO_MANY.md)):
+
+- `ProjectState.from_apps` adds them to the current models' state, which is what
+  `makemigrations` and `migrate` both compare migrations against. Wrapping that,
+  rather than giving the commands an autodetector of the library's own, keeps
+  Django's check `commands.E001` (the two commands share an autodetector)
+  passing whichever app's `migrate` a project has; `django_tenants` ships one.
+- `BaseDatabaseIntrospection.django_table_names` lists their tables when the
+  model declaring the field is an overlay model, so `flush`, and every
+  `TransactionTestCase`, empties them. Django only finds a many-to-many's table
+  through a managed declaring model.
+
 ## Summary
 
 | | count |

@@ -685,3 +685,10 @@ class InheritedFieldsSource(models.Model):
     class Meta:
         app_label = "testapp_shared"
         indexes = [models.Index(fields=["vendor_id"], name="ifs_vendor_idx")]
+
+
+class HiddenPersonSource(models.Model):
+    name = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "testapp_shared"

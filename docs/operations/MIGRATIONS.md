@@ -23,6 +23,23 @@ view/triggers or adds/drops the constraint trigger — including cleanup:
 removing a field or constraint drops its trigger too, not just leaves it
 checking against something that no longer exists.
 
+The triggers of a removed `OverlayForeignKey` are dropped *before* its
+`RemoveField`, and those of every `OverlayForeignKey` on a deleted model before
+its `DeleteModel`, while migration state still has the model to name them
+from. The delete-side trigger lives on the target's base table, so dropping the
+referencing table alone would leave it querying a table that no longer exists,
+and the next hard delete of a target row would fail. (Before 0.4.0 these drops
+came at the end of the migration, and a deleted model's were not made at all.)
+
+Before deleting a model nothing else points at, Django's autodetector removes
+its `unique_together` and its relation fields one by one; `makemigrations`
+leaves those out, since the `DROP TABLE` does all of it. One of them can't be
+squashed: a `CreateModel`'s `unique_together` is created at the end of its
+migration, so in a squash the removal would look for a constraint that doesn't
+exist yet. Removing a many-to-many whose through model
+`OverlayManyToManyField` built is exactly this shape. Models that point at each
+other keep Django's order.
+
 Deleting an OverlayModel entirely gets the same treatment: every
 `DeleteModel` gets a view drop inserted immediately before it. Postgres
 refuses to drop a table its view still depends on, so dropping the base

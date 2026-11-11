@@ -21,6 +21,7 @@ from django_overlay.operations import (
     AddOverlayUniqueConstraint,
     DropOverlayView,
     RemoveOverlayConstraint,
+    RemoveOverlayConstraintsOf,
     RemoveOverlayUniqueConstraint,
     SyncOverlayView,
 )
@@ -230,24 +231,27 @@ def test_a_plain_unique_constraint_is_not_detected():
     assert not any(isinstance(o, AddOverlayUniqueConstraint) for o in extra_ops)
 
 
-def test_removing_a_field_appends_a_remove_overlay_constraint():
+def test_removing_a_field_gets_a_remove_overlay_constraint_just_before_it():
+    """Before, not after: a migration deleting a model removes its relations
+    first, and after the DeleteModel nothing is left to name the triggers from."""
     op = migrations.RemoveField(model_name="AddressNote", name="address")
 
-    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+    operations = _insert_view_drops_before_destructive_ops("testapp", [op])
 
-    matching = [o for o in extra_ops if isinstance(o, RemoveOverlayConstraint)]
-    assert len(matching) == 1
-    assert matching[0].model_name == "AddressNote"
-    assert matching[0].field_name == "address"
-    assert matching[0].column == "address_id"
+    matching = only(operations, RemoveOverlayConstraint, model_name="AddressNote", field_name="address")
+    assert matching.column == "address_id"
+    assert operations.index(matching) == operations.index(op) - 1
+    assert not [
+        o for o in extra_ops_for_migration("testapp", [op], {}, set()) if isinstance(o, RemoveOverlayConstraint)
+    ]
 
 
-def test_removing_a_field_appends_a_remove_overlay_constraint_regardless_of_field_type():
+def test_removing_a_field_gets_a_remove_overlay_constraint_regardless_of_field_type():
     op = migrations.RemoveField(model_name="MetaTest", name="some_plain_field")
 
-    extra_ops = extra_ops_for_migration("testapp", [op], {}, set())
+    operations = _insert_view_drops_before_destructive_ops("testapp", [op])
 
-    only(extra_ops, RemoveOverlayConstraint, model_name="MetaTest", field_name="some_plain_field")
+    only(operations, RemoveOverlayConstraint, model_name="MetaTest", field_name="some_plain_field")
 
 
 def test_removing_a_constraint_on_an_overlay_model_appends_a_remove_overlay_unique_constraint():
@@ -714,15 +718,17 @@ def test_deleting_a_model_gets_a_view_drop_inserted_immediately_before_it():
 
     operations = _insert_view_drops_before_destructive_ops("testapp", [op])
 
-    assert len(operations) == 2
+    assert len(operations) == 3
     assert isinstance(operations[0], DropOverlayView)
     assert operations[0].model_name == "SomeModel"
+    assert isinstance(operations[1], RemoveOverlayConstraintsOf)
+    assert (operations[1].app_label, operations[1].model_name) == ("testapp", "SomeModel")
     # Which app the drop belongs to was never asserted, so the argument could
     # be replaced with None on both branches of this function and nothing
     # noticed -- the same gap the `only()` helper closes for the other
     # operations.
     assert operations[0].app_label == "testapp"
-    assert operations[1] is op
+    assert operations[2] is op
 
 
 def test_deleting_two_models_gets_a_view_drop_inserted_before_each():
@@ -733,12 +739,14 @@ def test_deleting_two_models_gets_a_view_drop_inserted_before_each():
 
     assert [type(o).__name__ for o in operations] == [
         "DropOverlayView",
+        "RemoveOverlayConstraintsOf",
         "DeleteModel",
         "DropOverlayView",
+        "RemoveOverlayConstraintsOf",
         "DeleteModel",
     ]
-    assert operations[0].model_name == "First"
-    assert operations[2].model_name == "Second"
+    assert operations[0].model_name == operations[1].model_name == "First"
+    assert operations[3].model_name == operations[4].model_name == "Second"
 
 
 def test_operations_without_a_delete_model_are_left_untouched():
@@ -760,7 +768,8 @@ def test_command_write_migration_files_inserts_a_view_drop_before_delete_model()
 
     assert isinstance(migration.operations[0], DropOverlayView)
     assert migration.operations[0].model_name == "MetaTestBase"
-    assert migration.operations[1] is op
+    assert isinstance(migration.operations[1], RemoveOverlayConstraintsOf)
+    assert migration.operations[2] is op
     base_write.assert_called_once_with(changes)
 
 
@@ -780,11 +789,12 @@ def test_every_delete_model_gets_a_view_drop_immediately_before_it_for_any_op_se
 
     for i, op in enumerate(result):
         if isinstance(op, migrations.DeleteModel):
-            assert i > 0
-            assert isinstance(result[i - 1], DropOverlayView)
-            assert result[i - 1].model_name == op.name
+            assert i > 1
+            assert isinstance(result[i - 2], DropOverlayView)
+            assert isinstance(result[i - 1], RemoveOverlayConstraintsOf)
+            assert result[i - 2].model_name == result[i - 1].model_name == op.name
 
-    assert [op for op in result if not isinstance(op, DropOverlayView)] == operations
+    assert [op for op in result if not isinstance(op, (DropOverlayView, RemoveOverlayConstraintsOf))] == operations
 
 
 @given(n=st.integers(min_value=1, max_value=20))
@@ -821,7 +831,8 @@ def test_a_remove_field_also_gets_a_view_drop_first():
 
     assert isinstance(operations[0], DropOverlayView)
     assert operations[0].model_name == "PersonBase"
-    assert operations[1] is op
+    assert isinstance(operations[1], RemoveOverlayConstraint)
+    assert operations[2] is op
 
 
 def test_operations_that_do_not_destroy_anything_get_no_view_drop():
@@ -929,3 +940,62 @@ def test_the_overridden_makemigrations_is_the_one_django_resolves():
     from django.core.management import get_commands
 
     assert get_commands()["makemigrations"] == "django_overlay"
+
+
+def _state(*model_states):
+    from django.db.migrations.state import ProjectState
+
+    state = ProjectState()
+    for model_state in model_states:
+        state.add_model(model_state)
+    return state
+
+
+def _link_table(name, *relations):
+    from django.db.migrations.state import ModelState
+
+    fields = [("id", models.AutoField(primary_key=True))]
+    fields += [(target, models.ForeignKey(f"testapp.{target}", models.CASCADE)) for target in relations]
+    return ModelState("testapp", name, fields)
+
+
+def test_a_deleted_model_nothing_points_at_loses_its_teardown():
+    """Before a DeleteModel Django drops the model's unique_together and its
+    relations one by one; with nothing pointing at the model, the DROP TABLE
+    covers all of it, and the AlterUniqueTogether can't survive a squash."""
+    from django_overlay.management.commands.makemigrations import _delete_unreferenced_models_in_one_step
+
+    state = _state(_link_table("link", "a", "b"), _link_table("a"), _link_table("b"))
+    ops = [
+        migrations.AlterUniqueTogether("link", None),
+        migrations.RemoveField("link", "a"),
+        migrations.RemoveField("link", "b"),
+        migrations.DeleteModel("Link"),
+    ]
+
+    assert _delete_unreferenced_models_in_one_step("testapp", ops, state) == [ops[-1]]
+
+
+def test_a_deleted_model_another_model_points_at_keeps_its_teardown():
+    """Two deleted models pointing at each other need Django's order: fields
+    first, then the tables."""
+    from django_overlay.management.commands.makemigrations import _delete_unreferenced_models_in_one_step
+
+    state = _state(_link_table("first", "second"), _link_table("second", "first"))
+    ops = [
+        migrations.RemoveField("first", "second"),
+        migrations.RemoveField("second", "first"),
+        migrations.DeleteModel("First"),
+        migrations.DeleteModel("Second"),
+    ]
+
+    assert _delete_unreferenced_models_in_one_step("testapp", ops, state) == ops
+
+
+def test_a_model_pointing_only_at_itself_still_counts_as_unreferenced():
+    from django_overlay.management.commands.makemigrations import _delete_unreferenced_models_in_one_step
+
+    state = _state(_link_table("tree", "tree"))
+    ops = [migrations.RemoveField("tree", "tree"), migrations.DeleteModel("Tree")]
+
+    assert _delete_unreferenced_models_in_one_step("testapp", ops, state) == [ops[-1]]

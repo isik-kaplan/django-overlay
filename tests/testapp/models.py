@@ -1520,3 +1520,41 @@ class InheritedFields(Stamped, OverlayModel):
         @staticmethod
         def get_source():
             return SourceTable(schema="public", table="testapp_shared_inheritedfieldssource")
+
+
+class HiddenTag(models.Model):
+    """A plain model at the other end of HiddenPerson.tags."""
+
+    label = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "testapp"
+
+
+class HiddenPerson(OverlayModel):
+    """Many-to-manys with no through=, one for each arrangement of ends: an
+    overlay model to a plain one, to another overlay model, and to itself. The
+    plain-to-overlay arrangement is HiddenTeam.members."""
+
+    name = models.CharField(max_length=50)
+    tags = OverlayManyToManyField(HiddenTag, blank=True)
+    addresses = OverlayManyToManyField(Address, blank=True, related_name="hidden_people")
+    friends = OverlayManyToManyField("self", blank=True)
+
+    class Meta:
+        app_label = "testapp"
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "hiddenperson"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_hiddenpersonsource")
+
+
+class HiddenTeam(models.Model):
+    name = models.CharField(max_length=50)
+    members = OverlayManyToManyField(HiddenPerson, blank=True, related_name="teams")
+
+    class Meta:
+        app_label = "testapp"

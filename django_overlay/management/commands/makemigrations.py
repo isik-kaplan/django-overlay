@@ -1,7 +1,9 @@
 from django.apps import apps as django_apps
 from django.core.management.commands.makemigrations import Command as BaseCommand
 from django.db import migrations
+from django.db.migrations.loader import MigrationLoader
 
+from ...autodetector import refuse_dropping_a_through_table
 from ...constraints import OverlayUniqueConstraint
 from ...fields import OverlayForeignKey
 from ...models import OverlayModelBase
@@ -11,6 +13,7 @@ from ...operations import (
     AlterOverlayField,
     DropOverlayView,
     RemoveOverlayConstraint,
+    RemoveOverlayConstraintsOf,
     RemoveOverlayUniqueConstraint,
     SyncOverlayView,
 )
@@ -105,6 +108,40 @@ def _new_overlay_unique_constraints(op):
     return []
 
 
+def _delete_unreferenced_models_in_one_step(app_label, operations, from_state):
+    """Drop the teardown Django puts before deleting a model nothing points at.
+
+    Before a DeleteModel, Django's autodetector removes the model's
+    unique_together/index_together and its relation fields one by one, so the
+    deletions of several models that point at each other can be ordered. For a
+    model no other model points at, the DROP TABLE does all of it. And one of
+    those steps can't be squashed: a CreateModel's unique_together is created
+    at the end of its migration, so once a squash puts the CreateModel and the
+    AlterUniqueTogether removing it in one migration -- with the library's
+    trigger operations between them, which keep the optimizer from folding the
+    two -- the removal looks for a constraint that doesn't exist yet. Removing
+    a many-to-many whose through model OverlayManyToManyField built is exactly
+    this shape."""
+    referrers = {}
+    for key, model_state in from_state.models.items():
+        for field in model_state.fields.values():
+            if field.is_relation and not field.many_to_many:
+                # Migration state names a relation's target as "app_label.model".
+                referrers.setdefault(field.remote_field.model.lower(), set()).add(key)
+    standalone = {
+        op.name_lower
+        for op in operations
+        if isinstance(op, migrations.DeleteModel)
+        and not referrers.get(f"{app_label}.{op.name_lower}", set()) - {(app_label, op.name_lower)}
+    }
+    teardown = (migrations.AlterUniqueTogether, migrations.AlterIndexTogether, migrations.RemoveField)
+    return [op for op in operations if not (isinstance(op, teardown) and _model_of(op) in standalone)]
+
+
+def _model_of(op):
+    return op.model_name_lower if isinstance(op, migrations.RemoveField) else op.name_lower
+
+
 def _insert_view_drops_before_destructive_ops(app_label, operations):
     """Postgres refuses to drop a table or a column while a view depends on it,
     and an overlay model's view selects every column of its base table. So both
@@ -112,14 +149,24 @@ def _insert_view_drops_before_destructive_ops(app_label, operations):
     `SyncOverlayView` appended by extra_ops_for_migration puts it back,
     rebuilt for the new shape.
 
-    Emitted unconditionally, same reasoning as RemoveField/RemoveConstraint
-    below: `DROP VIEW IF EXISTS` is a no-op for a plain model with no view."""
+    The link triggers go first too, while historical state still has the model
+    to name them from: RemoveOverlayConstraint before a RemoveField, and
+    RemoveOverlayConstraintsOf before a DeleteModel.
+
+    Emitted unconditionally, same reasoning as RemoveConstraint below: `DROP
+    VIEW IF EXISTS` is a no-op for a plain model with no view, and `DROP
+    TRIGGER IF EXISTS` for a field that was never an OverlayForeignKey."""
     new_operations = []
     for op in operations:
         if isinstance(op, migrations.DeleteModel):
             new_operations.append(DropOverlayView(app_label, op.name))
+            new_operations.append(RemoveOverlayConstraintsOf(app_label, op.name))
         elif isinstance(op, migrations.RemoveField):
             new_operations.append(DropOverlayView(app_label, op.model_name))
+            # Before, not after: a migration that deletes a model removes its
+            # relations first, and once the DeleteModel has run there is no
+            # model left to name the triggers from.
+            new_operations.append(RemoveOverlayConstraint(app_label, op.model_name, op.name))
         new_operations.append(op)
     return new_operations
 
@@ -143,10 +190,12 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
     OverlayModel registry (see _overlay_base_to_view/_overlay_foreign_key_fields).
     Split out of Command.write_migration_files so it's directly testable.
 
-    RemoveField/RemoveConstraint are handled unconditionally, not keyed
-    against the registry: the removed field/constraint is already gone from
-    live code by the time this runs, so there's nothing to check its type
-    against. DROP TRIGGER IF EXISTS makes appending them speculatively safe."""
+    RemoveConstraint is handled unconditionally, not keyed against the
+    registry: the removed constraint is already gone from live code by the time
+    this runs, so there's nothing to check its type against. DROP TRIGGER IF
+    EXISTS makes appending it speculatively safe. RemoveField's
+    RemoveOverlayConstraint is inserted before it instead; see
+    _insert_view_drops_before_destructive_ops."""
     extra_ops = []
     synced_views = set()
     added_constraints = set()
@@ -172,9 +221,6 @@ def extra_ops_for_migration(app_label, operations, base_to_view, fk_fields):
                 if view_name not in synced_views and op.references_model(base_name, app_label):
                     synced_views.add(view_name)
                     extra_ops.append(SyncOverlayView(app_label, view_name))
-
-        if isinstance(op, migrations.RemoveField):
-            extra_ops.append(RemoveOverlayConstraint(app_label, op.model_name, op.name))
 
         if isinstance(op, (migrations.AddField, migrations.RemoveField)) and op.name == "_overlay_deleted":
             # soft_delete just changed on this model; rebuild the FK triggers
@@ -228,14 +274,23 @@ class Command(BaseCommand):
     OverlayModel's base table gets a SyncOverlayView appended, any
     OverlayForeignKey/OverlayUniqueConstraint add/rename/remove gets its
     matching Add/RemoveOverlay(Unique)Constraint appended, any
-    DeleteModel gets a DropOverlayView inserted just before it, and an
-    AlterField on a base table is written as an AlterOverlayField."""
+    DeleteModel gets a DropOverlayView and a RemoveOverlayConstraintsOf inserted
+    just before it, and an AlterField on a base table is written as an
+    AlterOverlayField. It refuses a migration that would drop a table a built
+    through model takes over; see autodetector.py."""
 
     def write_migration_files(self, changes, *args, **kwargs):
+        # Before anything is rewritten: what Django generated is what would
+        # drop a table, and the graph's current state is what it was diffed from.
+        from_state = MigrationLoader(None, ignore_no_migrations=True).project_state()
+        refuse_dropping_a_through_table(from_state, changes)
         for app_label, app_migrations in changes.items():
             base_to_view = _overlay_base_to_view(app_label)
             fk_fields = _overlay_foreign_key_fields(app_label)
             for migration in app_migrations:
+                migration.operations = _delete_unreferenced_models_in_one_step(
+                    app_label, migration.operations, from_state
+                )
                 migration.operations = _insert_view_drops_before_destructive_ops(app_label, migration.operations)
                 migration.operations = _comment_aware_alter_fields(migration.operations, base_to_view)
                 migration.operations.extend(
