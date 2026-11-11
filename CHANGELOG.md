@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-11
+
 ### Breaking
 
 - **A primary key the id strategy can't fill is refused when the model is declared.** A UUID strategy needs a
