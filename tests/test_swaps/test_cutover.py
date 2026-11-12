@@ -250,8 +250,8 @@ def test_a_rebuilt_uniqueness_trigger_carries_this_models_own_rules(monkeypatch,
     # NEGATIVE_ID, so a base row's own source origin is found by negating its
     # pk. Without it the row conflicts with itself on every write.
     assert 'src."id" != -NEW."id"' in sql[0]
-    # soft_delete, so a source row a tombstone masks reserves nothing.
-    assert "tombstone._overlay_deleted" in sql[0]
+    # Overridable, so a source row any base row shadows reserves nothing.
+    assert 'shadow."id" = -src."id"' in sql[0]
 
 
 def test_a_rebuilt_foreign_key_trigger_keeps_both_halves_pruned(monkeypatch, db_cursor):

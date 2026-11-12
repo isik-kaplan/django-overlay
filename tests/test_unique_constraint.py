@@ -154,3 +154,17 @@ def test_updating_a_row_to_null_frees_its_value():
     NullableUniqueTest.objects.create(badge="B-3", label="b")
 
     assert NullableUniqueTest.objects.filter(badge="B-3").count() == 1
+
+
+def test_an_overridden_source_rows_old_value_is_free(db_cursor):
+    source = UniqueTestSource.objects.create(ssn="555-00-0001")
+    with transaction.atomic():
+        UniqueTest.objects.filter(id=-source.id).update(ssn="555-00-0002")
+        db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+    # The view no longer shows 555-00-0001 anywhere, so it is free.
+    with transaction.atomic():
+        UniqueTest.objects.create(ssn="555-00-0001")
+        db_cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+    assert UniqueTest.objects.filter(ssn="555-00-0001").count() == 1

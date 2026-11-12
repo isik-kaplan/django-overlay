@@ -385,6 +385,31 @@ class UniqueTestComposite(OverlayModel):
             return SourceTable(schema="public", table="testapp_shared_uniquetestcompositesource")
 
 
+class Tenancy(OverlayModel):
+    """At most one open residence per household: a conditional
+    OverlayUniqueConstraint, the condition on columns both sides have."""
+
+    household = models.IntegerField()
+    kind = models.CharField(max_length=20)
+    ended_at = models.DateField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            OverlayUniqueConstraint(
+                fields=["household"],
+                condition=models.Q(kind="residence", ended_at__isnull=True),
+                name="tenancy_one_open_residence",
+            )
+        ]
+
+    class OverlayMeta(OverlayMeta.with_strategy(Strategy.NEGATIVE_ID)):
+        table_name = "tenancy"
+
+        @staticmethod
+        def get_source():
+            return SourceTable(schema="public", table="testapp_shared_tenancysource")
+
+
 class RenameFieldTest(OverlayModel):
     renamed_field = models.CharField(max_length=100)
 

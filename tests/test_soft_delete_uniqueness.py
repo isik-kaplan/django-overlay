@@ -200,11 +200,9 @@ def test_the_conditional_paragraph_is_exactly_what_it_says():
     assert hint.endswith(
         "\n"
         "\n"
-        "Conditional uniqueness isn't supported at all: the source-side trigger has no "
-        "way to apply the condition, so it would check for collisions the condition "
-        "should have excluded. If you genuinely want a condition over your own rows "
-        "only, add the partial index by hand in a RunSQL migration and leave it out of "
-        "Meta."
+        "Add each condition back to its line: OverlayUniqueConstraint takes condition= too, "
+        "and applies it on both sides, as long as it names only the model's own fields other "
+        "than the primary key."
     )
 
 
@@ -230,7 +228,7 @@ def test_a_plain_unique_constraint_is_rejected():
 
 
 @isolate_apps("tests.testapp")
-def test_a_conditional_unique_constraint_says_conditions_are_unsupported():
+def test_a_conditional_unique_constraint_says_to_keep_the_condition():
     model, problems = _uniqueness_problems(
         meta_attrs={
             "constraints": [
@@ -241,8 +239,7 @@ def test_a_conditional_unique_constraint_says_conditions_are_unsupported():
 
     message = _message(model, problems)
     assert "(with a condition)" in message
-    assert "Conditional uniqueness isn't supported at all" in message
-    assert "RunSQL migration" in message
+    assert "Add each condition back to its line" in message
 
 
 @isolate_apps("tests.testapp")
@@ -654,30 +651,20 @@ def test_a_null_still_does_not_excuse_a_collision_on_another_column():
             SoftDeletePlainUniqueTest.objects.create(code="dup", vendor=None)
 
 
-def test_a_condition_on_the_overlay_constraint_itself_is_refused():
-    """The constraint's own refusal, which nothing had ever read.
-
-    Seven mutants lived in this message. It is the one telling an author why
-    the thing they wrote cannot work, so a garbled version is worse than none.
-    """
-    from django_overlay.exceptions import OverlayConfigurationError
-
-    with pytest.raises(OverlayConfigurationError) as raised:
-        OverlayUniqueConstraint(fields=["ssn"], name="n", condition=models.Q(ssn__gt=""))
-
-    assert str(raised.value) == (
-        "OverlayUniqueConstraint doesn't support condition= — the source-vs-base trigger "
-        "has no way to apply it, so it would silently check for collisions the condition "
-        "should have excluded."
-    )
-
-
 def test_a_soft_delete_condition_is_not_mistaken_for_a_caller_supplied_one():
-    """The flag sets a condition internally, after the check above."""
+    """The flag sets a condition internally; the caller set none."""
     constraint = OverlayUniqueConstraint(fields=["ssn"], name="n", soft_delete=True)
 
     assert constraint.condition == models.Q(_overlay_deleted=False)
+    assert constraint.own_condition is None
     assert constraint.soft_delete is True
+
+
+def test_soft_delete_narrows_a_callers_condition_too():
+    constraint = OverlayUniqueConstraint(fields=["ssn"], name="n", condition=models.Q(ssn__gt=""), soft_delete=True)
+
+    assert constraint.condition == models.Q(ssn__gt="") & models.Q(_overlay_deleted=False)
+    assert constraint.own_condition == models.Q(ssn__gt="")
 
 
 def test_an_expression_constraint_keeps_its_expressions():

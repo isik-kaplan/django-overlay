@@ -19,6 +19,11 @@ function_name = person_view_instead_of_update
 pk_column = id
 pk_default_expr = nextval('"public"."person_id_seq"')
 columns = ["id", "first_name", "age"]
+# An OverlayUniqueConstraint's condition and the columns it reads, so
+# unique_constraint_trigger.sql.j2 renders its conditional branches.
+watched_columns = ["first_name", "age"]
+condition = age > 0
+anti_join = full
 trigger_name = overlayfk_note_person_id
 referencing_table = note
 column = person_id

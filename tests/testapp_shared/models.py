@@ -85,6 +85,18 @@ class ReservedWordSource(models.Model):
         app_label = "testapp_shared"
 
 
+class TenancySource(models.Model):
+    household = models.IntegerField()
+    kind = models.CharField(max_length=20)
+    ended_at = models.DateField(null=True, blank=True)
+
+    class Meta:
+        app_label = "testapp_shared"
+        indexes = [
+            models.Index(fields=["household"], name="tenancy_household_idx"),
+        ]
+
+
 class UniqueTestSource(models.Model):
     ssn = models.CharField(max_length=20)
     notes = models.CharField(max_length=100, blank=True, default="")

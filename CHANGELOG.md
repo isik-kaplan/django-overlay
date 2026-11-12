@@ -7,6 +7,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`OverlayUniqueConstraint` takes `condition=`.** The base half becomes a partial unique index, and the source-side
+  trigger applies the same condition to the new row and to the source row it compares against, so "one open residence
+  per household" holds across both. A change to a condition's columns alone is checked again. The condition may name
+  only the model's own fields other than the primary key, which the source table has under the same names; a system
+  check, `django_overlay.E007`, refuses anything else. See [docs/concepts/UNIQUENESS.md](docs/concepts/UNIQUENESS.md).
+
+### Fixed
+
+- **A source row the base table shadows no longer reserves its value.** After a source row was edited, its old value
+  stayed taken by the source table, though the view showed the new one. The trigger now leaves out source rows the
+  view leaves out, as it already did tombstoned ones. Run `manage.py resync_overlay_views` to rebuild the triggers.
+- **`makemigrations` refuses to drop a through model's table to create a built one whatever the tables are called.**
+  In 0.4.0 it caught only a built through model on the same table; a hand-written join model's table almost never
+  has that name, so switching to a built one wrote a migration that dropped the old table and its links. It now also
+  matches on the field's previous `through=`.
+- **The docs say how a library that registers triggers on every model should treat the view model:** skip it, since
+  it is unmanaged, and Postgres refuses a row trigger on a view. See
+  [docs/reference/COMPATIBILITY.md](docs/reference/COMPATIBILITY.md).
+
 ## [0.4.0] - 2026-11-11
 
 ### Added

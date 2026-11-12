@@ -1,5 +1,5 @@
 from django.apps import apps as django_apps
-from django.db import DatabaseError, connections, transaction
+from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, transaction
 
 from . import sql as overlay_sql
 from . import uniqueness
@@ -149,7 +149,7 @@ def inbound_overlay_foreign_keys(target):
     return found
 
 
-def sync_source_triggers(model, tenant_schema: str, execute) -> None:
+def sync_source_triggers(model, tenant_schema: str, execute, connection=None) -> None:
     """Rebuild every constraint trigger whose body names `model`'s source
     table, from live model state.
 
@@ -178,6 +178,8 @@ def sync_source_triggers(model, tenant_schema: str, execute) -> None:
     base_table = base_model._meta.db_table
     source = model.get_source()
 
+    # Only for quoting a unique condition's values; nothing runs through it.
+    schema_editor = (connection or connections[DEFAULT_DB_ALIAS]).schema_editor()
     for constraint in overlay_unique_constraints(model):
         execute(
             overlay_sql.build_unique_constraint_trigger_sql(
@@ -189,6 +191,9 @@ def sync_source_triggers(model, tenant_schema: str, execute) -> None:
                 model._meta.pk.column,
                 model._overlay_meta.strategy,
                 model._overlay_meta.soft_delete,
+                model._overlay_meta.overridable,
+                uniqueness.condition_sql(constraint, base_model, schema_editor),
+                uniqueness.condition_columns(constraint, base_model),
             )
         )
 
@@ -265,7 +270,7 @@ def resync_view(model, using: str = "default", lock_timeout: str = "5s") -> None
         columns = columns_in_view_order(model, cursor, tenant_schema)
         _drop_view_if_its_columns_change_type(model, tenant_schema, execute, columns, using)
         sync_view(model, tenant_schema, execute, columns=columns)
-        sync_source_triggers(model, tenant_schema, execute)
+        sync_source_triggers(model, tenant_schema, execute, connection)
 
 
 def _view_sql(model, tenant_schema: str, columns, soft_delete=None) -> str:

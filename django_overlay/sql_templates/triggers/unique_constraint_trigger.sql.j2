@@ -1,8 +1,9 @@
 CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
 BEGIN
   -- Only re-check on UPDATE if a constrained column actually changed.
+  -- A condition's columns count too: reopening a row can make it collide.
   IF (TG_OP = 'INSERT' OR (
-        {% for c in columns -%}
+        {% for c in watched_columns -%}
         NEW.{{ c | qi }} IS DISTINCT FROM OLD.{{ c | qi }}{% if not loop.last %} OR {% endif %}
         {%- endfor %}
       ))
@@ -11,6 +12,12 @@ BEGIN
        NEW.{{ c | qi }} IS NOT NULL{% if not loop.last %} AND {% endif %}
        {%- endfor %}
      )
+     {%- if condition %}
+     -- A row outside the condition reserves nothing and is never refused. The
+     -- condition names only the model's own columns, unqualified, so it reads
+     -- this one-row derived table here and the source row below.
+     AND EXISTS (SELECT 1 FROM (SELECT NEW.*) AS overlay_new WHERE {{ condition }})
+     {%- endif %}
      -- Exclude this row's own source origin, or it'd conflict with itself.
      AND EXISTS (
        SELECT 1 FROM {{ source.schema | qi }}.{{ source.table | qi }} AS src
@@ -25,14 +32,21 @@ BEGIN
        -- value reserves nothing.
        AND ({{ source.extra_where }})
        {%- endif %}
-       {%- if soft_delete %}
-       -- A source row masked by a tombstone isn't a visible row, so its value
-       -- reserves nothing. Without this the partial unique index frees a
-       -- locally-created value but a source-backed one stays taken forever.
+       {%- if condition %}
+       AND ({{ condition }})
+       {%- endif %}
+       {%- if anti_join %}
+       -- A source row the base table shadows isn't a visible row, so its value
+       -- reserves nothing: the view shows the base row instead, which the
+       -- partial unique index already covers. The same anti-join as the view's
+       -- (see sql.anti_join_kind): with overrides, any base row shadows its
+       -- source row; without them only a tombstone can.
        AND NOT EXISTS (
-         SELECT 1 FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS tombstone
-         WHERE tombstone.{{ pk_column | qi }} = {{ "-" if negate }}src.{{ source.id_column | qi }}
-           AND tombstone._overlay_deleted
+         SELECT 1 FROM {{ tenant_schema | qi }}.{{ base_table | qi }} AS shadow
+         WHERE shadow.{{ pk_column | qi }} = {{ "-" if negate }}src.{{ source.id_column | qi }}
+           {%- if anti_join == "tombstones" %}
+           AND shadow._overlay_deleted
+           {%- endif %}
        )
        {%- endif %}
      )

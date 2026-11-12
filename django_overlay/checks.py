@@ -1,12 +1,13 @@
 from django.apps import apps
 from django.core import checks
+from django.core.exceptions import FieldError
 from django.db import connections, models
 
 from .constraints import OverlayUniqueConstraint
 from .fields import OverlayForeignKey
 from .introspection import table_indexes
 from .sync import resolve_schema
-from .uniqueness import suggested_constraint
+from .uniqueness import condition_columns, suggested_constraint
 
 
 @checks.register(checks.Tags.models)
@@ -152,10 +153,9 @@ def uniqueness_error(model, problems):
     )
     if any("with a condition" in complaint for complaint, _, _ in problems):
         hint += (
-            "\n\nConditional uniqueness isn't supported at all: the source-side trigger has no "
-            "way to apply the condition, so it would check for collisions the condition should "
-            "have excluded. If you genuinely want a condition over your own rows only, add the "
-            "partial index by hand in a RunSQL migration and leave it out of Meta."
+            "\n\nAdd each condition back to its line: OverlayUniqueConstraint takes condition= too, "
+            "and applies it on both sides, as long as it names only the model's own fields other "
+            "than the primary key."
         )
     return checks.Error(
         f"{model.__name__} declares uniqueness django_overlay can't honour:\n\n{complaints}\n\n"
@@ -529,3 +529,51 @@ def check_makemigrations_is_ours(app_configs, **kwargs):
             id="django_overlay.E006",
         )
     ]
+
+
+@checks.register(checks.Tags.models)
+def check_unique_conditions(app_configs, **kwargs):
+    """Fails for an OverlayUniqueConstraint whose condition the source-side
+    trigger can't apply. See unique_condition_errors."""
+    errors = []
+    for model in apps.get_models():
+        if getattr(model, "_is_overlay_view_model", False):
+            errors.extend(unique_condition_errors(model))
+    return errors
+
+
+def unique_condition_errors(model):
+    """An error for each of `model`'s OverlayUniqueConstraints whose condition
+    names something other than the model's own fields.
+
+    The trigger evaluates the condition on the source row it compares against,
+    over the same unqualified column names as the partial index. The source
+    table has the model's own columns under those names -- the view selects
+    them from both sides -- and nothing else: not the base table's
+    `_overlay_deleted`, not a related table, and not the primary key, which
+    the view maps from the source's id column (and negates, under some
+    strategies)."""
+    errors = []
+    for constraint in model._base_model._meta.constraints:
+        if not isinstance(constraint, OverlayUniqueConstraint) or constraint.own_condition is None:
+            continue
+        try:
+            columns = condition_columns(constraint, model)
+        except FieldError as error:
+            problem = str(error)
+        else:
+            if model._meta.pk.column not in columns:
+                continue
+            problem = f"it names the primary key, {model._meta.pk.name}"
+        errors.append(
+            checks.Error(
+                f"{model.__name__}'s OverlayUniqueConstraint {constraint.name!r} has a condition the "
+                f"source-side check can't apply: {problem}.",
+                hint="A condition may name only the model's own fields, other than its primary key, and "
+                "no lookup across a relation. The trigger evaluates it on the source table's row too, "
+                "which has those columns under the same names and nothing else.",
+                obj=model,
+                id="django_overlay.E007",
+            )
+        )
+    return errors

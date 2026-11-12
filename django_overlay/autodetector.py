@@ -52,33 +52,65 @@ def with_hidden_throughs(state):
 
 
 def refuse_dropping_a_through_table(from_state, changes):
-    """Refuse migrations that would drop a table and create a hidden through
-    model on the same one.
+    """Refuse migrations that drop a model's table to create a hidden through
+    model in its place.
 
     That is what replacing an explicit through= with a built one looks like to
     Django: a model deleted and a different model created, with no field in
-    common it could call a rename. Written as generated, it would drop the
-    table and create it empty. makemigrations calls this before writing
-    anything; a migration written by hand never reaches it."""
+    common it could call a rename. Written as generated, it would drop the old
+    table, rows and all, and create the new one empty. Recognised two ways: the
+    field's through= named the deleted model before, or the two models use the
+    same table. The first is the usual case, since a hand-written join model
+    rarely has the table name Django gives a built one. makemigrations calls
+    this before writing anything; a migration written by hand never reaches it."""
     deleted = {}
-    created = {}
+    created = []
     for app_label, app_migrations in changes.items():
         for migration in app_migrations:
             for op in migration.operations:
                 if isinstance(op, migrations.DeleteModel):
                     old = from_state.models.get((app_label, op.name_lower))
                     if old is not None:
-                        deleted[_table(app_label, old)] = old.name
+                        deleted[(app_label, op.name_lower)] = old
                 elif isinstance(op, migrations.CreateModel) and _is_hidden_through(app_label, op.name):
-                    created[_table(app_label, ModelState(app_label, op.name, op.fields, op.options))] = op.name
-    for table in sorted(deleted.keys() & created.keys()):
-        raise CommandError(
-            f"{created[table]} is the through model an OverlayManyToManyField built, on table {table}, "
-            f"which {deleted[table]} uses now. The migration Django would write drops {table} and creates "
-            "it again, empty. Write that migration by hand: wrap the DeleteModel and the CreateModel in "
-            "migrations.SeparateDatabaseAndState(state_operations=[...]), with whatever the table needs to "
-            "match the new model (its unique_together, say) as database_operations."
+                    created.append((app_label, op))
+    by_table = {_table(key[0], old): old for key, old in deleted.items()}
+    for app_label, op in created:
+        table = _table(app_label, ModelState(app_label, op.name, op.fields, op.options))
+        old = deleted.get(_previous_through(from_state, django_apps.get_model(app_label, op.name))) or by_table.get(
+            table
         )
+        if old is None:
+            continue
+        old_table = _table(old.app_label, old)
+        replaced = (
+            f"drops {old_table} and creates it again, empty"
+            if old_table == table
+            else (f"drops {old_table} and creates {table}, empty")
+        )
+        raise CommandError(
+            f"{op.name} is the through model an OverlayManyToManyField built, in place of {old.name}. "
+            f"The migration Django would write {replaced}, so every link in it is lost. Write that "
+            "migration by hand: wrap the DeleteModel and the CreateModel in "
+            "migrations.SeparateDatabaseAndState(state_operations=[...]), and turn the old table into "
+            "the new one in database_operations -- its name, its columns' names and whatever else "
+            "differs, such as its unique_together."
+        )
+
+
+def _previous_through(from_state, through):
+    """(app_label, model_name) of the model the field that built `through`
+    named as its through= in `from_state`, or None."""
+    declaring = through._meta.auto_created
+    field = next(f for f in declaring._meta.local_many_to_many if f.remote_field.through is through)
+    old_model = from_state.models.get((declaring._meta.app_label, declaring._meta.model_name))
+    old_field = old_model and old_model.fields.get(field.name)
+    old_through = getattr(getattr(old_field, "remote_field", None), "through", None)
+    if old_through is None:
+        return None
+    # Always a string in migration state: a field there is a deconstructed copy.
+    app_label, _, name = old_through.rpartition(".")
+    return (app_label or declaring._meta.app_label, name.lower())
 
 
 def _table(app_label, model_state):

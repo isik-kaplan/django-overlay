@@ -18,7 +18,7 @@ from django.db.migrations.state import ModelState, ProjectState
 from django.forms import modelform_factory
 
 from django_overlay.autodetector import refuse_dropping_a_through_table, with_hidden_throughs
-from django_overlay.fields import OverlayForeignKey
+from django_overlay.fields import OverlayForeignKey, OverlayManyToManyField
 from django_overlay.models import OverlayMeta, OverlayModel
 from django_overlay.operations import AddOverlayConstraint, RemoveOverlayConstraint, RemoveOverlayConstraintsOf
 from django_overlay.sources import SourceTable
@@ -359,12 +359,17 @@ def test_makemigrations_and_migrate_see_no_missing_migration():
     assert not [error for error in checks.run_checks(tags=["commands"]) if error.id == "commands.E001"]
 
 
-def _changes_replacing_an_explicit_through():
-    """Migration state as if HiddenPerson.tags had an explicit through model on
-    the same table, and what Django generates for switching to the built one."""
+def _changes_replacing_an_explicit_through(db_table="hiddenperson_tags", through="testapp.PersonTagLink"):
+    """Migration state as if HiddenPerson.tags had an explicit through model,
+    and what Django generates for switching to the built one. `through` is what
+    the field named; None leaves the field as it is now."""
     after = ProjectState.from_apps(apps)
     before = ProjectState.from_apps(apps)
     before.remove_model("testapp", "hiddenperson_tags")
+    if through is not None:
+        before.models["testapp", "hiddenperson"].fields["tags"] = OverlayManyToManyField(
+            "testapp.HiddenTag", blank=True, through=through
+        )
     before.add_model(
         ModelState(
             "testapp",
@@ -374,7 +379,7 @@ def _changes_replacing_an_explicit_through():
                 ("hiddenperson", OverlayForeignKey("testapp.HiddenPerson", models.CASCADE)),
                 ("hiddentag", models.ForeignKey("testapp.HiddenTag", models.CASCADE)),
             ],
-            options={"db_table": "hiddenperson_tags"},
+            options={"db_table": db_table},
         )
     )
     return before, MigrationAutodetector(before, after).changes(graph=_graph())
@@ -385,6 +390,47 @@ def test_makemigrations_refuses_to_drop_a_table_a_built_through_model_takes_over
 
     with pytest.raises(CommandError, match="drops hiddenperson_tags and creates it again, empty"):
         refuse_dropping_a_through_table(before, changes)
+
+
+def test_the_refusal_fires_when_the_tables_have_different_names():
+    """The usual case: a hand-written join model's table is rarely the name
+    Django gives the built one. The field's old through= is what gives it away."""
+    before, changes = _changes_replacing_an_explicit_through(db_table="persontaglink")
+
+    with pytest.raises(CommandError) as raised:
+        refuse_dropping_a_through_table(before, changes)
+
+    assert str(raised.value) == (
+        "HiddenPerson_tags is the through model an OverlayManyToManyField built, in place of PersonTagLink. "
+        "The migration Django would write drops persontaglink and creates hiddenperson_tags, empty, so every "
+        "link in it is lost. Write that migration by hand: wrap the DeleteModel and the CreateModel in "
+        "migrations.SeparateDatabaseAndState(state_operations=[...]), and turn the old table into the new "
+        "one in database_operations -- its name, its columns' names and whatever else differs, such as its "
+        "unique_together."
+    )
+
+
+def test_an_old_through_given_as_a_bare_name_is_read_in_the_fields_app():
+    before, changes = _changes_replacing_an_explicit_through(db_table="persontaglink", through="PersonTagLink")
+
+    with pytest.raises(CommandError, match="drops persontaglink and creates hiddenperson_tags"):
+        refuse_dropping_a_through_table(before, changes)
+
+
+def test_a_new_many_to_many_beside_a_deleted_model_is_left_alone():
+    """The field didn't exist before, so it named no through model."""
+    before, changes = _changes_replacing_an_explicit_through(db_table="persontaglink", through=None)
+    del before.models["testapp", "hiddenperson"].fields["tags"]
+
+    refuse_dropping_a_through_table(before, changes)
+
+
+def test_an_unrelated_model_deleted_beside_a_new_through_is_left_alone():
+    """A model deleted in the same run that the field never named, on a table
+    of its own: nothing of the new through model's is lost."""
+    before, changes = _changes_replacing_an_explicit_through(db_table="persontaglink", through=None)
+
+    refuse_dropping_a_through_table(before, changes)
 
 
 def test_the_refusal_is_what_makemigrations_runs_before_writing():

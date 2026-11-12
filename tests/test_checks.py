@@ -186,14 +186,13 @@ def test_the_uniqueness_hint_is_pasteable(uniqueness_message):
 
 
 def test_the_uniqueness_hint_warns_about_conditions_only_when_relevant(uniqueness_message):
-    assert "Conditional uniqueness isn't supported at all" in uniqueness_message.hint
-    assert "RunSQL migration and leave it out of Meta." in uniqueness_message.hint
+    assert "Add each condition back to its line" in uniqueness_message.hint
 
     from django_overlay.checks import uniqueness_error
     from tests.testapp.models import SoftDeleteUniqueTest
 
     without = uniqueness_error(SoftDeleteUniqueTest, [("email declares unique=True", ("email",), None)])
-    assert "Conditional uniqueness" not in without.hint
+    assert "condition" not in without.hint
 
 
 def test_the_uniqueness_error_carries_an_id_and_the_offending_model(uniqueness_message):

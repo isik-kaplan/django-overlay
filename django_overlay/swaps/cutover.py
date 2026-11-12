@@ -170,5 +170,5 @@ def swap_source(
             raise OverlaySwapRefused(recheck)
         execute = statement_executor(cursor)
         sync_view(model, tenant_schema, execute)
-        sync_source_triggers(model, tenant_schema, execute)
+        sync_source_triggers(model, tenant_schema, execute, connection)
     return report

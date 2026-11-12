@@ -238,16 +238,13 @@ class AddOverlayUniqueConstraint(migrations.RunPython):
         def trigger_name(base_model) -> str:
             return overlay_uniqueness.trigger_name(base_model._meta.db_table, constraint_name)
 
-        def historical_columns(apps, base_model):
-            # Same reasoning as AddOverlayConstraint.historical_field.
-            historical_base = apps.get_model(app_label, base_model._meta.model_name)
-            constraint = next(c for c in historical_base._meta.constraints if c.name == constraint_name)
-            return [historical_base._meta.get_field(f).column for f in constraint.fields]
-
         def forward(apps, schema_editor):
             model = django_apps.get_model(app_label, model_name)
             base_model = model._base_model
-            columns = historical_columns(apps, base_model)
+            # Same reasoning as AddOverlayConstraint.historical_field.
+            historical_base = apps.get_model(app_label, base_model._meta.model_name)
+            constraint = next(c for c in historical_base._meta.constraints if c.name == constraint_name)
+            columns = [historical_base._meta.get_field(f).column for f in constraint.fields]
             tenant_schema = _resolve_schema(schema_editor)
             sql = overlay_sql.build_unique_constraint_trigger_sql(
                 trigger_name(base_model),
@@ -258,6 +255,9 @@ class AddOverlayUniqueConstraint(migrations.RunPython):
                 model._meta.pk.column,
                 model._overlay_meta.strategy,
                 model._overlay_meta.soft_delete,
+                model._overlay_meta.overridable,
+                overlay_uniqueness.condition_sql(constraint, historical_base, schema_editor),
+                overlay_uniqueness.condition_columns(constraint, historical_base),
             )
             schema_editor.execute(sql)
 

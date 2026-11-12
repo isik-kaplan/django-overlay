@@ -92,12 +92,14 @@ Works with the ORM as usual — `.add(org, through_defaults={"role": "member"})`
 
 ### Switching an explicit `through=` to a built one
 
-To Django this is one model deleted and another created on the same table,
-and the migration it would write drops the table and creates it again, empty.
-`makemigrations` refuses to write it and says so. Write that migration by
-hand instead: wrap the `DeleteModel` of your through model and the
-`CreateModel` of the built one in
-`migrations.SeparateDatabaseAndState(state_operations=[...])`, and add as
-`database_operations` whatever the table needs to match the built model, such
-as the unique constraint on the pair, which a hand-written through model may
-not have had.
+To Django this is one model deleted and another created, and the migration it
+would write drops your through model's table, every link in it, and creates
+the built one's empty. `makemigrations` refuses to write it and says so,
+whether or not the two tables have the same name. Write that migration by hand
+instead: wrap the `DeleteModel` of your through model and the `CreateModel` of
+the built one in `migrations.SeparateDatabaseAndState(state_operations=[...])`,
+and turn the old table into the new one in `database_operations`: rename the
+table and its columns to the built model's names (`Team_members` on
+`team_members`, with `team_id` and `person_id`, say), and add whatever else it
+lacks, such as the unique constraint on the pair, which a hand-written through
+model may not have had.

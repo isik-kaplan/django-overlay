@@ -31,11 +31,42 @@ queries a table this package doesn't own the DDL for. Benchmarked on a
 table's native `UniqueConstraint` (~0.07ms vs ~0.06ms). Without one: **~150x**
 slower (~10ms) — the `EXISTS` check degrades to a sequential scan.
 
-`condition=` isn't supported — declaring one raises `OverlayConfigurationError`
-at class-definition time. A partial constraint's condition would apply
-correctly to the native base-table index but the source-vs-base trigger has
-no way to honor it, so it would silently check for collisions the condition
-should have excluded.
+A source row the base table shadows reserves nothing: once a source row has
+been edited, the view shows the base row instead, so its old value is free,
+and a soft-deleted source row's value is free too.
+
+### Conditional uniqueness
+
+`condition=` works as on a plain `UniqueConstraint`. At most one open residence
+per household:
+
+```python
+class Tenancy(OverlayModel):
+    household = models.IntegerField()
+    kind = models.CharField(max_length=20)
+    ended_at = models.DateField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            OverlayUniqueConstraint(
+                fields=["household"],
+                condition=models.Q(kind="residence", ended_at__isnull=True),
+                name="tenancy_one_open_residence",
+            )
+        ]
+```
+
+The base half becomes a partial unique index with that `WHERE`, so two open
+residences of your own collide atomically, like any unique index. The trigger
+applies the same condition to the new row and to the source row it compares
+against: a closed residence in the source reserves nothing, and a closed row of
+your own is never refused. Reopening a row, which changes only `ended_at`, is
+checked again.
+
+The trigger evaluates the condition on the source row under the same column
+names, so it may name only the model's own fields, other than the primary key,
+and no lookup across a relation. `manage.py check` refuses anything else
+(`django_overlay.E007`).
 
 ## `OverlayUniqueConstraint` is the only form allowed
 
@@ -50,7 +81,7 @@ So they're all rejected at import time, with the replacement line in the error:
 | `Meta.unique_together` | table constraint: your table only, and takes no predicate |
 | `Field(unique=True)` | same |
 | plain `UniqueConstraint` | covers your table only |
-| `UniqueConstraint(condition=...)` | as above, and the source-side trigger can't apply a condition |
+| `UniqueConstraint(condition=...)` | as above; `OverlayUniqueConstraint` takes the same condition |
 | `CheckConstraint` | fine, not a uniqueness rule |
 
 ```

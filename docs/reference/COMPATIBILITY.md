@@ -165,6 +165,7 @@ tombstone buys nothing and holds an index entry forever.
 | `OverlayUniqueConstraint`, local collision | OK | rejected by the database |
 | `OverlayUniqueConstraint`, source collision | OK | rejected by the database |
 | Same, via `full_clean()` | OK | validation agrees with the database |
+| `OverlayUniqueConstraint(condition=…)` | OK | partial index, and the same condition on the source row |
 | `validate_constraints()` | OK | |
 | `Meta.constraints` visible from the queried model | OK | via `get_constraints()` |
 | Source rows visible to ORM uniqueness lookups | OK | |
@@ -185,7 +186,8 @@ tombstone buys nothing and holds an index entry forever.
 | `Field(unique=True)` | **RAISES** `E003` | `OverlayUniqueConstraint` |
 | `Meta.unique_together` | **RAISES** `E003` | `OverlayUniqueConstraint` |
 | Plain `UniqueConstraint` | **RAISES** `E003` | `OverlayUniqueConstraint` |
-| `UniqueConstraint(condition=…)` | **RAISES** `E003` | hand-written `RunSQL` index |
+| `UniqueConstraint(condition=…)` | **RAISES** `E003` | `OverlayUniqueConstraint(condition=…)` |
+| `OverlayUniqueConstraint(condition=…)` naming the pk, a relation's fields or `_overlay_deleted` | **RAISES** `E007` | the model's own fields |
 | `Meta.db_table` / `Meta.managed` | **RAISES** | `OverlayMeta.table_name` |
 | `Meta.permissions` / `default_permissions` | **RAISES** | neither model is a sound home |
 | `OverlayForeignKey(db_constraint=…)` | **RAISES** | always `False`; can't FK a view |
@@ -194,7 +196,7 @@ tombstone buys nothing and holds an index entry forever.
 | Multi-table inheritance from a concrete overlay model | **RAISES** | not supported |
 
 All of these are hard stops. The rest raise at class-definition time;
-`E001`–`E003` are system checks that also run from `AppConfig.ready()`, which
+`E001`–`E003` and `E007` are system checks that also run from `AppConfig.ready()`, which
 is part of `django.setup()` — so `--skip-checks` can't get a misconfigured model
 as far as emitting DDL or serving a request.
 
@@ -254,6 +256,20 @@ Consequences worth knowing:
   A one-to-one that is the primary key is copied as it is, and its value always
   comes from the row it points at: the view's insert path generates nothing for
   it, whatever the id strategy.
+
+### Libraries that act on every model
+
+The view model is an unmanaged model bound to a view, and Django counts an
+unmanaged model as concrete: `_meta.proxy` and `_meta.abstract` are both
+false. A library that does something to every concrete model, from
+`class_prepared` or by walking the app registry, reaches the view model too.
+Row-level triggers are where this breaks: Postgres refuses a `BEFORE` or
+`AFTER` row trigger on a view, so registering one (a timestamp trigger, an
+audit trigger) fails when the migration runs.
+
+Such a library should skip a model whose `_meta.managed` is false, since
+Django doesn't own its table either. The base model is managed and holds every
+row, so a trigger there sees every write, through the view or not.
 
 ## Cost
 

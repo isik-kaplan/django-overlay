@@ -234,12 +234,19 @@ def build_unique_constraint_trigger_sql(
     pk_column: str,
     strategy: Strategy = Strategy.NEGATIVE_ID,
     soft_delete: bool = False,
+    overridable: bool = True,
+    condition: str | None = None,
+    condition_columns=(),
 ) -> str:
     """The source-side half of an OverlayUniqueConstraint.
 
     Postgres's own UNIQUE on the base table already covers base-vs-base; this
     is what makes the constraint hold across the view. There is always a source
     to guard against, since a sourceless overlay model is refused outright.
+
+    `condition` is the constraint's own condition as SQL over unqualified
+    columns (see uniqueness.condition_sql), applied to the new row and to the
+    source row alike; `condition_columns` are the columns it reads.
     """
     return render(
         "triggers/unique_constraint_trigger.sql.j2",
@@ -248,9 +255,11 @@ def build_unique_constraint_trigger_sql(
         function_name=f"check_{trigger_name}",
         trigger_name=trigger_name,
         columns=columns,
+        watched_columns=list(dict.fromkeys([*columns, *condition_columns])),
+        condition=condition,
         pk_column=pk_column,
         negate=negates_source_ids(strategy),
-        soft_delete=soft_delete,
+        anti_join=anti_join_kind(overridable, soft_delete),
         source={
             "schema": source.schema,
             "table": source.table,

@@ -37,6 +37,9 @@ keep the identity they had, so neither reuses one.
 
 import hashlib
 
+from django.db.models.expressions import Col
+from django.db.models.sql import Query
+
 from .constraints import OverlayUniqueConstraint
 
 
@@ -105,3 +108,45 @@ def for_validation(constraints):
         constraint.without_soft_delete_narrowing() if isinstance(constraint, OverlayUniqueConstraint) else constraint
         for constraint in constraints
     ]
+
+
+def condition_columns(constraint, model):
+    """The columns `constraint`'s own condition reads, first-seen order.
+
+    Built against `model` the way Django builds an index's predicate, with
+    joins refused, so a lookup across a relation raises FieldError here, as
+    does a field `model` lacks."""
+    if constraint.own_condition is None:
+        return []
+    where = Query(model=model, alias_cols=False).build_where(constraint.own_condition)
+    return list(dict.fromkeys(col.target.column for col in _cols(where)))
+
+
+def _cols(node):
+    if isinstance(node, Col):
+        yield node
+        return
+    # filter: an expression may have an empty slot, a Case without a default.
+    for child in filter(None, node.get_source_expressions()):
+        yield from _cols(child)
+
+
+def condition_sql(constraint, model, schema_editor):
+    """`constraint`'s own condition as SQL over unqualified column names, its
+    values inlined, ready for a trigger template: what Django writes in the
+    partial index's WHERE, minus the tombstone half.
+
+    Unqualified on purpose. The trigger evaluates it twice, once over the new
+    row and once inside the probe of the source table, and the bare names
+    resolve to whichever row is in scope. That holds because E007 keeps it to
+    the model's own columns, which both have.
+
+    Percent signs come back doubled: trigger SQL is run with empty params, so
+    psycopg reads one as a placeholder (see sync.statement_executor)."""
+    if constraint.own_condition is None:
+        return None
+    connection = schema_editor.connection
+    query = Query(model=model, alias_cols=False)
+    where = query.build_where(constraint.own_condition)
+    sql, params = where.as_sql(query.get_compiler(connection=connection), connection)
+    return (sql % tuple(schema_editor.quote_value(p) for p in params)).replace("%", "%%")
