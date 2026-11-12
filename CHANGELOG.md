@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
 ### Added
 
 - **`OverlayUniqueConstraint` takes `condition=`.** The base half becomes a partial unique index, and the source-side
