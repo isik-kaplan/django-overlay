@@ -4,14 +4,39 @@
 {%- if not loop.last %}, {% endif -%}
 {%- endfor -%}
 {%- endmacro -%}
+{#- What an update that changes nothing does instead of writing. See
+    models.meta.RedundantUpdatePolicy. "skip" returns NEW, not NULL: NULL tells
+    Postgres the row was not updated, and Django's save() answers a zero-row
+    UPDATE by trying an INSERT. -#}
+{% macro redundant_update() -%}
+    IF NOT ({%- for c in compared -%}NEW.{{ c | qi }} IS DISTINCT FROM OLD.{{ c | qi }}{% if not loop.last %} OR {% endif %}{%- endfor -%}{%- if not compared -%}FALSE{%- endif -%}) THEN
+{%- if redundant.mode == "raise" %}
+      RAISE EXCEPTION 'overlay redundant update: an update of {{ view_name }} row %% changes nothing', OLD.{{ pk_column | qi }}
+        USING ERRCODE = 'P0001',
+              HINT = 'redundant_updates = "raise" refuses it. Leave the row alone, or change the policy.';
+{%- elif redundant.mode == "warn" %}
+      RAISE WARNING 'overlay redundant update: an update of {{ view_name }} row %% changes nothing, skipped', OLD.{{ pk_column | qi }};
+{%- endif %}
+      RETURN NEW;
+    END IF;
+{%- endmacro -%}
 CREATE OR REPLACE FUNCTION {{ tenant_schema | qi }}.{{ function_name | qi }}() RETURNS TRIGGER AS $$
 BEGIN
+{%- if redundant.guarded and redundant.scope == "all" %}
+  -- Before any write: under scope "all" a redundant update of a row already
+  -- in the base table is skipped too.
+{{ redundant_update() }}
+{%- endif %}
   -- Only overwrite a column if this UPDATE actually changed it, so a
   -- concurrent write to a different column doesn't get clobbered. The
   -- base_table qualifier is required: bare `col` is ambiguous once
   -- EXCLUDED is in scope below.
   UPDATE {{ tenant_schema | qi }}.{{ base_table | qi }} SET {{ merge("NEW") }} WHERE {{ pk_column | qi }} = OLD.{{ pk_column | qi }};
   IF NOT FOUND THEN
+{%- if redundant.guarded and redundant.scope == "source_only" %}
+    -- No base row, so writing this would copy the source row in for good.
+{{ redundant_update() }}
+{%- endif %}
 {%- if overridable %}
     -- Copy-up in two statements, not one: materialise the row exactly as the
     -- view presented it, then apply the edit on top. OLD is that row -- the

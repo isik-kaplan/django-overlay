@@ -6,6 +6,7 @@ columns routed around the view so Postgres can lock the row.
 """
 
 import contextvars
+import warnings
 
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
@@ -18,8 +19,9 @@ from django.db.models.sql import Query
 
 from .. import sql as overlay_sql
 from .._templating import _qi
-from ..exceptions import OverlayConfigurationError
+from ..exceptions import OverlayConfigurationError, OverlayRedundantUpdate
 from ..fields import OverlaySelectiveIn
+from ..redundant_updates import redundant_update_policy
 from ..strategies import negates_source_ids
 from .query import OverlayQuery
 
@@ -46,6 +48,25 @@ def _reads_own_columns(value, model) -> bool:
     if source_expressions is None:
         return False
     return any(_reads_own_columns(expression, model) for expression in source_expressions())
+
+
+class _IsDistinctFrom(models.Func):
+    """`a IS DISTINCT FROM b`, which unlike `<>` is never NULL."""
+
+    arg_joiner = " IS DISTINCT FROM "
+    template = "(%(expressions)s)"
+    output_field = models.BooleanField()
+
+
+def _as_expression(value, field):
+    """An update's value as something a query can compare, the way update()
+    itself would write it: an expression as it is, a model instance as its
+    key, anything else as a parameter of the field's type."""
+    if hasattr(value, "resolve_expression"):
+        return value
+    if isinstance(value, models.Model):
+        value = value.pk
+    return models.Value(value, output_field=field)
 
 
 def _late_row_lookup_enabled() -> bool:
@@ -698,8 +719,9 @@ class OverlayQuerySet(models.QuerySet):
 
         base_manager = self.model._base_model._default_manager
         with transaction.atomic(using=self.db):
-            self._copy_matched_rows_to_the_base_table()
-            return base_manager.using(self.db).filter(pk__in=self.values("pk")).update(**kwargs)
+            changing, skipped = self._apply_redundant_update_policy(kwargs)
+            changing._copy_matched_rows_to_the_base_table()
+            return base_manager.using(self.db).filter(pk__in=changing.values("pk")).update(**kwargs) + skipped
 
     def _update(self, values, returning_fields=None):
         """The same routing for `instance.save()`.
@@ -721,20 +743,65 @@ class OverlayQuerySet(models.QuerySet):
             return super()._update(values, returning_fields)
 
         base_manager = self.model._base_model._default_manager
+        assignments = {field.name: value for field, _, value in values}
         with transaction.atomic(using=self.db):
-            self._copy_matched_rows_to_the_base_table()
-            matched = base_manager.using(self.db).filter(pk__in=self.values("pk"))
-            updated = matched.update(**{field.name: value for field, _, value in values})
+            changing, skipped = self._apply_redundant_update_policy(assignments)
+            changing._copy_matched_rows_to_the_base_table()
+            matched = base_manager.using(self.db).filter(pk__in=changing.values("pk"))
+            updated = matched.update(**assignments) + skipped
             if not returning_fields:
                 return updated
             # Read the values back afterwards rather than with RETURNING, which
-            # the copy-then-update pair can't carry across. Matching nothing
+            # the copy-then-update pair can't carry across. Read through the
+            # view, which shows a skipped row as it is, so save() still gets a
+            # row back and doesn't fall through to an INSERT. Matching nothing
             # yields no rows, which is the falsy result save() expects.
-            return list(
-                base_manager.using(self.db)
-                .filter(pk__in=self.values("pk"))
-                .values_list(*[field.name for field in returning_fields])
+            return list(self.values_list(*[field.name for field in returning_fields]))
+
+    def _apply_redundant_update_policy(self, assignments):
+        """(the rows to write, how many were skipped) for an update routed
+        around the view, under the model's RedundantUpdatePolicy -- the same
+        policy the INSTEAD OF UPDATE trigger applies to the other path.
+
+        A row is redundant when no assigned column outside the ignored ones
+        would change. "materialize" writes every matched row, as before.
+        Otherwise a redundant row in scope is left out of both the copy and
+        the update, after "raise" has refused or "warn" has said so. Decided
+        before the rows are locked; a row a concurrent write changes in between
+        is judged by what this statement read."""
+        policy = redundant_update_policy(self.model)
+        if not policy.guarded:
+            return self, 0
+        fields = {}
+        for field in self.model._meta.concrete_fields:
+            fields[field.name] = fields[field.attname] = field
+        compared = [name for name in assignments if fields[name].column not in policy.ignored_columns]
+        changes = models.Q(
+            *[
+                _IsDistinctFrom(_as_expression(assignments[name], fields[name]), models.F(fields[name].attname))
+                for name in compared
+            ],
+            _connector=models.Q.OR,
+        )
+        redundant = self.exclude(changes) if compared else self.all()
+        if policy.scope == "source_only":
+            in_base = models.Exists(self.model._base_model._default_manager.filter(pk=models.OuterRef("pk")))
+            redundant = redundant.exclude(in_base)
+        skipped = redundant.count()
+        if skipped and policy.mode == "raise":
+            raise OverlayRedundantUpdate(
+                f"overlay redundant update: an update of {skipped} {self.model.__name__} row(s) changes nothing. "
+                'redundant_updates = "raise" refuses it.'
             )
+        if skipped and policy.mode == "warn":
+            warnings.warn(
+                f"overlay redundant update: an update of {skipped} {self.model.__name__} row(s) changes nothing, "
+                "skipped",
+                stacklevel=4,
+            )
+        if not skipped:
+            return self, 0
+        return self.exclude(pk__in=redundant.values("pk")), skipped
 
     def materialize(self) -> None:
         """Copy every row this queryset matches into the base table.
@@ -803,8 +870,11 @@ class OverlayQuerySet(models.QuerySet):
             "and protect nothing.\n\n"
             "For a read-modify-write, do it in one statement: "
             "`.update(field=F('field') + 1)` is atomic here, because an expression that reads "
-            "its own row is routed around the view and applied to the base table directly. For "
-            "a longer critical section, take an advisory lock on the row's id:\n\n"
+            "its own row is routed around the view and applied to the base table directly. "
+            "It copies every matched row into the base table first, unless redundant_updates "
+            "leaves the rows it doesn't change alone (bulk_update(), which goes through the "
+            "view, copies a row only when its trigger writes it). For a longer critical "
+            "section, take an advisory lock on the row's id:\n\n"
             "    with transaction.atomic(), connection.cursor() as cursor:\n"
             "        cursor.execute('SELECT pg_advisory_xact_lock(%s, %s)', [TABLE_KEY, row_id])\n"
             "        ...  # read, modify, write\n\n"

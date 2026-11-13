@@ -577,3 +577,30 @@ def unique_condition_errors(model):
             )
         )
     return errors
+
+
+@checks.register(checks.Tags.models)
+def check_redundant_update_ignore(app_configs, **kwargs):
+    """Fails for an OverlayMeta.redundant_update_ignore naming a field the
+    model doesn't have. A project-wide name is skipped on a model that lacks
+    it, since it is meant for many models; one named on a model is a typo, and
+    a typo here quietly turns the guard off for every update, as the misspelt
+    column keeps changing."""
+    errors = []
+    for model in apps.get_models():
+        if not getattr(model, "_is_overlay_view_model", False):
+            continue
+        names = model._overlay_meta.redundant_update_ignore or ()
+        known = {field.name for field in model._meta.concrete_fields}
+        missing = [name for name in names if name not in known]
+        if missing:
+            errors.append(
+                checks.Error(
+                    f"{model.__name__}.OverlayMeta.redundant_update_ignore names {', '.join(map(repr, missing))}, "
+                    f"which {model.__name__} has no field for.",
+                    hint="Name the model's own fields, as declared.",
+                    obj=model,
+                    id="django_overlay.E008",
+                )
+            )
+    return errors

@@ -1,4 +1,5 @@
 from ._templating import render
+from .redundant_updates import RedundantUpdatePolicy
 from .strategies import Strategy, default_pk_sql, descending_base_ids, negates_source_ids
 
 
@@ -136,7 +137,11 @@ def build_instead_of_update_sql(
     pk_column: str = "id",
     soft_delete: bool = False,
     overridable: bool = True,
+    redundant=None,
 ) -> str:
+    """`redundant` is the model's RedundantUpdatePolicy; None renders the
+    trigger with no guard, as "materialize" does."""
+    redundant = redundant or RedundantUpdatePolicy("materialize", "source_only", ())
     return render(
         "triggers/instead_of_update.sql.j2",
         tenant_schema=tenant_schema,
@@ -147,6 +152,8 @@ def build_instead_of_update_sql(
         columns=columns,
         soft_delete=soft_delete,
         overridable=overridable,
+        redundant=redundant,
+        compared=[c for c in columns if c not in redundant.ignored_columns],
     )
 
 

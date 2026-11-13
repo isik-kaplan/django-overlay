@@ -9,6 +9,7 @@
 - [concepts/IDS.md](concepts/IDS.md) — pk strategies, keeping organic and source ids from colliding
 - [concepts/UNIQUENESS.md](concepts/UNIQUENESS.md) — `OverlayUniqueConstraint`, indexing, benchmarks
 - [concepts/DELETION.md](concepts/DELETION.md) — delete semantics, `soft_delete`, `reset_to_source()`
+- [concepts/REDUNDANT_UPDATES.md](concepts/REDUNDANT_UPDATES.md) — what an update that changes nothing does to a source row, and the settings that decide it
 
 **Reference**
 - [reference/COMPATIBILITY.md](reference/COMPATIBILITY.md) — measured tables of what matches a plain Django model and what doesn't

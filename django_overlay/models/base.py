@@ -9,6 +9,7 @@ from django.db import models
 from .. import uniqueness
 from ..exceptions import OverlayConfigurationError
 from ..fields import base_model_copy, hide_reverse_side
+from ..redundant_updates import REDUNDANT_UPDATE_MODES, REDUNDANT_UPDATE_SCOPES
 from ..source_model import build_source_model, source_pk_for
 from ..strategies import Strategy, default_id_field, uses_uuid_ids
 from .meta import OverlayMeta, _split_meta_options
@@ -147,6 +148,22 @@ class OverlayModelBase(models.base.ModelBase):
         if not isinstance(overlay_meta.overridable, bool):
             raise OverlayConfigurationError(
                 f"{name}.OverlayMeta.overridable must be a bool, got {overlay_meta.overridable!r}."
+            )
+        for option, choices in (
+            ("redundant_updates", REDUNDANT_UPDATE_MODES),
+            ("redundant_update_scope", REDUNDANT_UPDATE_SCOPES),
+        ):
+            value = getattr(overlay_meta, option)
+            if value is not None and value not in choices:
+                raise OverlayConfigurationError(
+                    f"{name}.OverlayMeta.{option} must be None or one of {', '.join(map(repr, choices))}, "
+                    f"got {value!r}."
+                )
+        ignore = overlay_meta.redundant_update_ignore
+        if ignore is not None and (isinstance(ignore, str) or not all(isinstance(n, str) for n in ignore)):
+            raise OverlayConfigurationError(
+                f"{name}.OverlayMeta.redundant_update_ignore must be None or a list or tuple of field names, "
+                f"got {ignore!r}."
             )
 
         # M2M fields go on the view model only — copying one to both models

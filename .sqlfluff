@@ -24,6 +24,9 @@ columns = ["id", "first_name", "age"]
 watched_columns = ["first_name", "age"]
 condition = age > 0
 anti_join = full
+# A redundant-update policy that renders the guard, for instead_of_update.sql.j2.
+redundant = {"guarded": True, "mode": "warn", "scope": "source_only", "ignored_columns": ["age"]}
+compared = ["id", "first_name"]
 trigger_name = overlayfk_note_person_id
 referencing_table = note
 column = person_id

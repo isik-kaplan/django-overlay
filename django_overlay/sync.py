@@ -7,6 +7,7 @@ from ._templating import render
 from .constraints import OverlayUniqueConstraint
 from .fields import OverlayForeignKey, target_tables_for
 from .introspection import view_columns
+from .redundant_updates import redundant_update_policy
 from .strategies import default_pk_sql
 
 
@@ -99,7 +100,17 @@ def sync_view(model, tenant_schema: str, execute, columns=None, soft_delete=None
     )
     execute(
         overlay_sql.build_instead_of_update_sql(
-            view_name, tenant_schema, base_table, columns, pk_column, soft_delete, overridable
+            view_name,
+            tenant_schema,
+            base_table,
+            columns,
+            pk_column,
+            soft_delete,
+            overridable,
+            # Live, like overridable, and for the same reason: it leaves nothing
+            # in the field list. A column it names that this point in history
+            # lacks is left out, as the comparison only covers `columns`.
+            redundant_update_policy(model),
         )
     )
     execute(

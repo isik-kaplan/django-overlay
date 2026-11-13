@@ -118,6 +118,10 @@ class OverlayMeta:
     soft_delete = _default_soft_delete()
     overridable = True
     pk_default_sql = None
+    # None: the project's setting. See RedundantUpdatePolicy.
+    redundant_updates = None
+    redundant_update_scope = None
+    redundant_update_ignore = None
 
     @classmethod
     def with_strategy(cls, strategy: Strategy):

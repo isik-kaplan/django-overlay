@@ -7,6 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **What an update that changes nothing does is now configurable.** An UPDATE writes every column it is given, so a
+  `save()` after only reading a source row copied it into the base table for good, and `update()` did it to every row
+  it matched. `DJANGO_OVERLAY_REDUNDANT_UPDATES` (or `OverlayMeta.redundant_updates`) chooses between writing it as
+  before (`"materialize"`, the default), `"skip"`, `"warn"` and `"raise"`; `..._SCOPE` between doing that only where the
+  row would be copied in (`"source_only"`) or everywhere (`"all"`); and `..._IGNORE` names fields, such as an
+  `auto_now` timestamp, that don't count as a change. A skipped update still reports its row, so `save()` doesn't turn
+  into an INSERT. It applies to updates through the view and to those routed around it for atomicity. Run
+  `manage.py resync_overlay_views` after changing it. See
+  [docs/concepts/REDUNDANT_UPDATES.md](docs/concepts/REDUNDANT_UPDATES.md).
+- **A system check, `django_overlay.E008`,** for an `OverlayMeta.redundant_update_ignore` naming a field the model
+  doesn't have.
+
+### Changed
+
+- **The `select_for_update()` refusal says what its suggested `update(field=F('field') + 1)` costs:** it copies every
+  matched row into the base table first.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added
