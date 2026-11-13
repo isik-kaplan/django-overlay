@@ -12,7 +12,7 @@
     IF NOT ({%- for c in compared -%}NEW.{{ c | qi }} IS DISTINCT FROM OLD.{{ c | qi }}{% if not loop.last %} OR {% endif %}{%- endfor -%}{%- if not compared -%}FALSE{%- endif -%}) THEN
 {%- if redundant.mode == "raise" %}
       RAISE EXCEPTION 'overlay redundant update: an update of {{ view_name }} row %% changes nothing', OLD.{{ pk_column | qi }}
-        USING ERRCODE = 'P0001',
+        USING ERRCODE = 'OV001',
               HINT = 'redundant_updates = "raise" refuses it. Leave the row alone, or change the policy.';
 {%- elif redundant.mode == "warn" %}
       RAISE WARNING 'overlay redundant update: an update of {{ view_name }} row %% changes nothing, skipped', OLD.{{ pk_column | qi }};

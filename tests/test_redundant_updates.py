@@ -9,8 +9,9 @@ import warnings
 import pytest
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
-from django.db import ProgrammingError, connection, transaction
+from django.db import DatabaseError, ProgrammingError, connection, transaction
 from django.db.models import F, Value
+from django.db.models.expressions import RawSQL
 from django.db.models.functions import Concat
 from django.test import override_settings
 
@@ -207,9 +208,15 @@ def test_raise_refuses_through_the_trigger(policy):
     policy("raise")
     pk = source_row()
 
-    with pytest.raises(ProgrammingError, match=f"overlay redundant update: an update of uniquetest_view row {pk}"):
+    with pytest.raises(OverlayRedundantUpdate) as refused:
         with transaction.atomic():
             UniqueTest.objects.filter(pk=pk).update(ssn="100-00-0001")
+
+    # The prefix is how an except clause tells it from any other trigger's error.
+    assert str(refused.value).startswith(
+        f"overlay redundant update: an update of uniquetest_view row {pk} changes nothing\n"
+    )
+    assert refused.value.__cause__.__cause__.sqlstate == "OV001"
 
     assert not in_base(pk)
 
@@ -442,3 +449,44 @@ def test_a_policy_says_what_it_is():
     assert repr(RedundantUpdatePolicy("skip", "all", ("updated_at",))) == (
         "RedundantUpdatePolicy('skip', 'all', ('updated_at',))"
     )
+
+
+def test_save_and_bulk_update_raise_the_same_class(policy):
+    policy("raise")
+    pk = source_row()
+    row = UniqueTest.objects.get(pk=pk)
+
+    with pytest.raises(OverlayRedundantUpdate), transaction.atomic():
+        row.save()
+    with pytest.raises(OverlayRedundantUpdate), transaction.atomic():
+        UniqueTest.objects.bulk_update([row], ["ssn"])
+
+
+def test_raw_sql_through_the_view_gets_the_triggers_own_error(policy):
+    policy("raise")
+    pk = source_row()
+
+    with pytest.raises(DatabaseError) as refused, transaction.atomic(), connection.cursor() as cursor:
+        cursor.execute("UPDATE uniquetest_view SET ssn = ssn WHERE id = %s", [pk])
+
+    assert not isinstance(refused.value, OverlayRedundantUpdate)
+    assert refused.value.__cause__.sqlstate == "OV001"
+    assert str(refused.value).startswith("overlay redundant update: ")
+
+
+def test_another_database_error_is_left_alone():
+    with pytest.raises(ProgrammingError) as raised:
+        with transaction.atomic():
+            UniqueTest.objects.filter(pk=1).update(ssn=RawSQL("no_such_column", ()))
+
+    assert not isinstance(raised.value, OverlayRedundantUpdate)
+
+
+def test_the_expression_refusal_starts_with_the_prefix(policy):
+    policy("raise")
+    pk = source_row()
+
+    with pytest.raises(OverlayRedundantUpdate) as refused:
+        UniqueTest.objects.filter(pk=pk).update(notes=F("notes"))
+
+    assert str(refused.value).startswith("overlay redundant update: ")

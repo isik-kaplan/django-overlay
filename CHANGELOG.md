@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **A refused redundant update raises `OverlayRedundantUpdate` from `save()`, `update()` and `bulk_update()` too,** not
+  only from the expression path; they raised the trigger's `ProgrammingError`.
+- **The trigger refuses with SQLSTATE `OV001`, not `P0001`,** so raw SQL through the view can tell it from any other
+  trigger's `RAISE EXCEPTION`. Django surfaces it as a `DatabaseError`. Rebuild the triggers with
+  `manage.py resync_overlay_views` if `"raise"` is in use.
+- **The expression path reads the rows it leaves out once,** so the count a warning or a refusal reports is the set it
+  left out, and the matched rows are scanned once less.
+
+### Fixed
+
+- **The redundant-update docs say what 0.6.0 left unsaid:** a policy change applies only after
+  `manage.py resync_overlay_views`, and nothing warns when it hasn't been run; and on the expression path the
+  comparison is made before the rows are locked, so under `READ COMMITTED` a row another transaction changes in between
+  can be left out. See [docs/concepts/REDUNDANT_UPDATES.md](docs/concepts/REDUNDANT_UPDATES.md).
+
 ## [0.6.0] - 2026-11-13
 
 ### Added

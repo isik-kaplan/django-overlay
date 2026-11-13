@@ -20,7 +20,8 @@ class OverlaySwapRefused(Exception):
 class OverlayRedundantUpdate(ProgrammingError):
     """An update that changes nothing, refused under redundant_updates = "raise".
 
-    Raised by the expression path in Python. The trigger refuses the same
-    update with SQLSTATE P0001 (raise_exception), which Django surfaces as
-    ProgrammingError, so `except ProgrammingError` catches both; both messages
-    start with "overlay redundant update"."""
+    Every ORM write raises it: save(), update() and bulk_update() through the
+    view's trigger, and the expression path in Python. Raw SQL through the view
+    gets the trigger's own error, which carries SQLSTATE OV001, a code of
+    django-overlay's that no other trigger raises; Django surfaces it as a
+    DatabaseError. Both messages start with "overlay redundant update"."""

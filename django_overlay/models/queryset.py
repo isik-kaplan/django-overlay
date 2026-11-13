@@ -5,12 +5,13 @@ select_related() routed to prefetch_related(), and an update that reads its own
 columns routed around the view so Postgres can lock the row.
 """
 
+import contextlib
 import contextvars
 import warnings
 
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import connections, models, transaction
+from django.db import DatabaseError, connections, models, transaction
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.expressions import OuterRef, ResolvedOuterRef
 from django.db.models.fields.reverse_related import ManyToManyRel, ManyToOneRel, OneToOneRel
@@ -67,6 +68,26 @@ def _as_expression(value, field):
     if isinstance(value, models.Model):
         value = value.pk
     return models.Value(value, output_field=field)
+
+
+REDUNDANT_UPDATE_PREFIX = "overlay redundant update"
+# The SQLSTATE the trigger refuses a redundant update with. Its own, so raw SQL
+# can tell it from any other trigger's RAISE EXCEPTION, which is P0001.
+REDUNDANT_UPDATE_SQLSTATE = "OV001"
+
+
+@contextlib.contextmanager
+def _redundant_update_refusals():
+    """Turn the trigger's refusal of a redundant update into
+    OverlayRedundantUpdate, the class the expression path raises, so every
+    ORM write raises the same one. Recognised by its SQLSTATE; raw SQL
+    through the view gets the DatabaseError Django makes of it."""
+    try:
+        yield
+    except DatabaseError as error:
+        if getattr(error.__cause__, "sqlstate", None) != REDUNDANT_UPDATE_SQLSTATE:
+            raise
+        raise OverlayRedundantUpdate(str(error)) from error
 
 
 def _late_row_lookup_enabled() -> bool:
@@ -715,7 +736,8 @@ class OverlayQuerySet(models.QuerySet):
 
         Everything else keeps the single-statement path through the view."""
         if not any(_reads_own_columns(value, self.model) for value in kwargs.values()):
-            return super().update(**kwargs)
+            with _redundant_update_refusals():
+                return super().update(**kwargs)
 
         base_manager = self.model._base_model._default_manager
         with transaction.atomic(using=self.db):
@@ -740,7 +762,8 @@ class OverlayQuerySet(models.QuerySet):
         the count-returning form is part of the QuerySet contract, so it is
         honoured rather than assumed away."""
         if not any(_reads_own_columns(value, self.model) for _, _, value in values):
-            return super()._update(values, returning_fields)
+            with _redundant_update_refusals():
+                return super()._update(values, returning_fields)
 
         base_manager = self.model._base_model._default_manager
         assignments = {field.name: value for field, _, value in values}
@@ -787,21 +810,25 @@ class OverlayQuerySet(models.QuerySet):
         if policy.scope == "source_only":
             in_base = models.Exists(self.model._base_model._default_manager.filter(pk=models.OuterRef("pk")))
             redundant = redundant.exclude(in_base)
-        skipped = redundant.count()
+        # Read once: the count reported and the rows left out are the same set,
+        # which two evaluations under READ COMMITTED need not be. A key list
+        # goes to Postgres as one array parameter, however long.
+        left_out = list(redundant.values_list("pk", flat=True))
+        skipped = len(left_out)
         if skipped and policy.mode == "raise":
             raise OverlayRedundantUpdate(
-                f"overlay redundant update: an update of {skipped} {self.model.__name__} row(s) changes nothing. "
+                f"{REDUNDANT_UPDATE_PREFIX}: an update of {skipped} {self.model.__name__} row(s) changes nothing. "
                 'redundant_updates = "raise" refuses it.'
             )
         if skipped and policy.mode == "warn":
             warnings.warn(
-                f"overlay redundant update: an update of {skipped} {self.model.__name__} row(s) changes nothing, "
+                f"{REDUNDANT_UPDATE_PREFIX}: an update of {skipped} {self.model.__name__} row(s) changes nothing, "
                 "skipped",
                 stacklevel=4,
             )
         if not skipped:
             return self, 0
-        return self.exclude(pk__in=redundant.values("pk")), skipped
+        return self.exclude(pk__in=left_out), skipped
 
     def materialize(self) -> None:
         """Copy every row this queryset matches into the base table.
