@@ -32,7 +32,10 @@ override them per model. A model's own value wins, including an empty one.
   source row into the base table. `"all"` also applies it to rows already there,
   where a redundant update would only have been a wasted write. The difference
   shows in a column like `updated_at`: under `"source_only"` a redundant save
-  still moves it on your own rows and not on vendor rows.
+  still moves it on your own rows and not on vendor rows. A project that audits
+  every write (django-pghistory, django-simple-history, a trigger of its own)
+  may want `"all"` for a second reason: a redundant update to a row already in
+  the base table otherwise records an event in which nothing changed.
 - **Ignored fields.** Left out of the comparison: an update that changes only
   these changes nothing. A project-wide name a model doesn't have is skipped;
   one named on a model that doesn't have it fails `manage.py check`

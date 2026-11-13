@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-13
+
 ### Changed
 
 - **A refused redundant update raises `OverlayRedundantUpdate` from `save()`, `update()` and `bulk_update()` too,** not
